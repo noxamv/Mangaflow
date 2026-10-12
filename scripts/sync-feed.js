@@ -13,43 +13,44 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const api = axios.create({
   baseURL: 'https://api.mangadex.org',
-  timeout: 10000,
-  headers: { 'User-Agent': 'MangaFlowHybrid/1.0' }
+  timeout: 15000,
+  headers: { 'User-Agent': 'MangaFlow/2.0' }
 });
 
-async function syncHybridCatalog() {
-  console.log('⚡ Running Lightweight Hybrid Sync...');
+async function syncCatalog() {
+  console.log('⚡ Syncing Top Korean Manhwa & Chinese Manhua...');
 
   try {
-    // 1. Fetch top 12 trending manga/manhwa
+    // 1. Fetch top Manhwa (Korean 'ko') and Manhua (Chinese 'zh')
     const { data: res } = await api.get('/manga', {
       params: {
-        limit: 12,
+        limit: 15,
+        'originalLanguage[]': ['ko', 'zh'], // Manhwa & Manhua
         'order[followedCount]': 'desc',
         'includes[]': ['cover_art'],
         'contentRating[]': ['safe', 'suggestive'],
-        hasAvailableChapters: 'true',
+        hasAvailableChapters: 'true'
       }
     });
 
     for (const item of res.data) {
       const mangaId = item.id;
       const title = item.attributes.title.en || Object.values(item.attributes.title)[0] || 'Untitled';
-      const synopsis = item.attributes.description.en || 'Read online on Manga Flow.';
+      const synopsis = item.attributes.description.en || 'Read manhwa online on Manga Flow.';
       const slug = (item.attributes.title.en || mangaId)
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '')
         .slice(0, 60);
 
-      // Extract Cover
+      // Cover Art
       let coverUrl = '';
       const coverRel = item.relationships.find((r) => r.type === 'cover_art');
       if (coverRel && coverRel.attributes && coverRel.attributes.fileName) {
         coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${coverRel.attributes.fileName}.512.jpg`;
       }
 
-      // Upsert series with source_url saving the MangaDex ID
+      // Upsert Series as 'webtoon'
       const { data: seriesRow, error: sErr } = await supabase
         .from('series')
         .upsert(
@@ -58,26 +59,22 @@ async function syncHybridCatalog() {
             title,
             synopsis: synopsis.slice(0, 350),
             cover_image_url: coverUrl,
-            reading_mode: 'manga',
+            reading_mode: 'webtoon',
             source: 'mangadex',
-            source_url: mangaId // Storing the MangaDex UUID for live chapter lookups
+            source_url: mangaId
           },
           { onConflict: 'slug' }
         )
         .select()
         .single();
 
-      if (sErr || !seriesRow) {
-        console.warn(`Failed series ${title}:`, sErr?.message);
-        continue;
-      }
+      if (sErr || !seriesRow) continue;
+      console.log(`\n📚 Synced Manhwa: ${title}`);
 
-      console.log(`\n📚 Synced Series: ${title}`);
-
-      // 2. Fetch up to 50 English chapters metadata (Instant: 1 single API call)
+      // 2. Fetch up to 100 English chapters
       const { data: feed } = await api.get(`/manga/${mangaId}/feed`, {
         params: {
-          limit: 50,
+          limit: 100,
           'translatedLanguage[]': ['en'],
           'order[chapter]': 'asc'
         }
@@ -94,12 +91,11 @@ async function syncHybridCatalog() {
           series_id: seriesRow.id,
           chapter_number: chNumber,
           title: ch.attributes.title || `Chapter ${chNumber}`,
-          source: ch.id, // Store MangaDex chapter UUID here for instant on-demand fetching
-          panel_urls: [] // Empty array: Saves 99.9% database disk space!
+          source: ch.id, // MangaDex chapter UUID
+          panel_urls: [] // Hybrid model: 0 panels stored in database
         });
       }
 
-      // 3. Fast bulk insert of chapter index
       if (chapterRows.length > 0) {
         await supabase.from('chapters').upsert(chapterRows, {
           onConflict: 'series_id, chapter_number'
@@ -111,7 +107,7 @@ async function syncHybridCatalog() {
     console.error('Sync failed:', err.message);
   }
 
-  console.log('\n🚀 Hybrid index sync complete.');
+  console.log('\n🚀 Catalog update complete.');
 }
 
-syncHybridCatalog();
+syncCatalog();
