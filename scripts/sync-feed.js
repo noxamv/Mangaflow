@@ -1,6 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
-const cheerio = require('cheerio');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -12,48 +11,48 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const headers = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept-Language': 'en-US,en;q=0.9',
-};
-
-async function syncAsuraManhwa() {
-  console.log('--- Scraping Asura Manhwa ---');
+async function syncMangaDexTrending() {
+  console.log('--- Fetching Top Trending Manga/Manhwa from MangaDex API ---');
   try {
-    const targetUrl = 'https://asuracomic.net/';
-    const response = await axios.get(targetUrl, { headers: headers, timeout: 10000 });
-    const $ = cheerio.load(response.data);
+    // 1. Fetch top 8 popular/trending titles
+    const res = await axios.get('https://api.mangadex.org/manga', {
+      params: {
+        limit: 8,
+        'order[followedCount]': 'desc',
+        'includes[]': ['cover_art'],
+        'contentRating[]': ['safe', 'suggestive'],
+        hasAvailableChapters: 'true',
+      },
+      headers: { 'User-Agent': 'MangaFlow/1.0' }
+    });
 
-    const seriesElements = $('div.grid a[href*="/series/"]').slice(0, 3).toArray();
+    const mangaList = res.data.data;
 
-    for (const el of seriesElements) {
-      let link = $(el).attr('href');
-      if (!link) continue;
+    for (const item of mangaList) {
+      const mangaId = item.id;
+      const title = item.attributes.title.en || Object.values(item.attributes.title)[0] || 'Unknown Title';
+      const synopsis = item.attributes.description.en || 'Read online on Manga Flow.';
+      const slug = (item.attributes.title.en || mangaId).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 50);
 
-      let seriesPageUrl = link;
-      if (!seriesPageUrl.startsWith('http')) {
-        seriesPageUrl = 'https://asuracomic.net' + link;
+      // Extract Cover Art
+      let coverUrl = '';
+      const coverRel = item.relationships.find((r) => r.type === 'cover_art');
+      if (coverRel && coverRel.attributes && coverRel.attributes.fileName) {
+        coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${coverRel.attributes.fileName}.512.jpg`;
       }
 
-      let title = $(el).find('span, h3, h2').first().text().trim();
-      if (!title) title = 'Trending Manhwa';
-
-      let coverUrl = $(el).find('img').attr('src');
-      if (!coverUrl) coverUrl = '';
-
-      const slugParts = seriesPageUrl.split('/').filter(Boolean);
-      const rawSlug = slugParts[slugParts.length - 1];
-      const slug = rawSlug.replace(/[^a-z0-9]+/g, '-');
-
+      // Upsert into Supabase series table
       const { data: seriesRow, error: sErr } = await supabase
         .from('series')
         .upsert(
           {
-            slug: slug,
-            title: title,
-            synopsis: 'Read ' + title + ' online on Manga Flow.',
+            slug,
+            title,
+            synopsis: synopsis.slice(0, 300),
             cover_image_url: coverUrl,
-            reading_mode: 'webtoon',
+            reading_mode: 'manga',
+            source: 'mangadex',
+            source_url: `https://mangadex.org/title/${mangaId}`
           },
           { onConflict: 'slug' }
         )
@@ -61,69 +60,57 @@ async function syncAsuraManhwa() {
         .single();
 
       if (sErr || !seriesRow) {
-        console.error('Failed to insert ' + title + ':', sErr ? sErr.message : 'Unknown error');
+        console.warn(`Failed series ${title}:`, sErr?.message);
         continue;
       }
 
-      console.log('Synced Series: ' + title);
+      console.log(`Synced Series: ${title}`);
 
-      const seriesPageRes = await axios.get(seriesPageUrl, { headers: headers, timeout: 10000 });
-      const $s = cheerio.load(seriesPageRes.data);
-      let chapterLink = $s('a[href*="/chapter/"]').first().attr('href');
-
-      if (!chapterLink) continue;
-
-      let chapterUrl = chapterLink;
-      if (!chapterUrl.startsWith('http')) {
-        chapterUrl = 'https://asuracomic.net' + chapterLink;
-      }
-
-      const chPageRes = await axios.get(chapterUrl, { headers: headers, timeout: 10000 });
-      const $c = cheerio.load(chPageRes.data);
-
-      const panelUrls = [];
-      $c('img').each(function (_, img) {
-        let src = $c(img).attr('src');
-        if (!src) {
-          src = $c(img).attr('data-src');
-        }
-
-        if (src) {
-          const isTargetImg = src.includes('asura') || src.includes('ggpht') || src.includes('.jpg') || src.includes('.webp');
-          if (isTargetImg && !panelUrls.includes(src)) {
-            panelUrls.push(src);
-          }
-        }
+      // 2. Fetch latest 3 English chapters
+      const chRes = await axios.get(`https://api.mangadex.org/manga/${mangaId}/feed`, {
+        params: {
+          limit: 3,
+          'translatedLanguage[]': ['en'],
+          'order[chapter]': 'desc'
+        },
+        headers: { 'User-Agent': 'MangaFlow/1.0' }
       });
 
-      if (panelUrls.length > 0) {
-        const match = chapterUrl.match(/chapter-(\d+(\.\d+)?)/i);
-        let chapterNumber = 1;
-        if (match && match[1]) {
-          chapterNumber = parseFloat(match[1]);
-        }
+      const chapters = chRes.data.data;
 
-        await supabase.from('chapters').upsert(
-          {
-            series_id: seriesRow.id,
-            chapter_number: chapterNumber,
-            title: 'Chapter ' + chapterNumber,
-            panel_urls: panelUrls,
-          },
-          { onConflict: 'series_id, chapter_number' }
+      for (const ch of chapters) {
+        const chNumber = parseFloat(ch.attributes.chapter) || 1;
+        const chId = ch.id;
+
+        // Fetch direct panel images
+        const atHomeRes = await axios.get(`https://api.mangadex.org/at-home/server/${chId}`);
+        const baseUrl = atHomeRes.data.baseUrl;
+        const hash = atHomeRes.data.chapter.hash;
+        const pageFilenames = atHomeRes.data.chapter.data;
+
+        const panelUrls = pageFilenames.map(
+          (file) => `${baseUrl}/data/${hash}/${file}`
         );
 
-        console.log('-> Added Chapter ' + chapterNumber + ' (' + panelUrls.length + ' panels) for ' + title);
+        if (panelUrls.length > 0) {
+          await supabase.from('chapters').upsert(
+            {
+              series_id: seriesRow.id,
+              chapter_number: chNumber,
+              title: ch.attributes.title || `Chapter ${chNumber}`,
+              panel_urls: panelUrls,
+              source: 'mangadex'
+            },
+            { onConflict: 'series_id, chapter_number' }
+          );
+
+          console.log(`-> Saved Chapter ${chNumber} (${panelUrls.length} panels)`);
+        }
       }
     }
   } catch (err) {
-    console.warn('Asura Scans request error:', err.message);
+    console.error('MangaDex sync error:', err.message);
   }
 }
 
-async function run() {
-  await syncAsuraManhwa();
-  console.log('All scraper routines finished.');
-}
-
-run();
+syncMangaDexTrending();
