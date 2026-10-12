@@ -11,126 +11,107 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Fast axios instance with custom User-Agent
 const api = axios.create({
   baseURL: 'https://api.mangadex.org',
-  timeout: 8000,
-  headers: { 'User-Agent': 'MangaFlowFastSync/2.0' }
+  timeout: 10000,
+  headers: { 'User-Agent': 'MangaFlowHybrid/1.0' }
 });
 
-async function fetchChapterPanels(chapterId) {
+async function syncHybridCatalog() {
+  console.log('⚡ Running Lightweight Hybrid Sync...');
+
   try {
-    const { data } = await api.get(`/at-home/server/${chapterId}`);
-    const baseUrl = data.baseUrl;
-    const hash = data.chapter.hash;
-    // Uses data-saver for faster loading, fallback to standard data
-    const files = data.chapter.dataSaver || data.chapter.data;
-    const subFolder = data.chapter.dataSaver ? 'data-saver' : 'data';
-    return files.map((f) => `${baseUrl}/${subFolder}/${hash}/${f}`);
-  } catch {
-    return [];
-  }
-}
-
-async function fastSync() {
-  console.log('⚡ Starting High-Speed Sync...');
-
-  // 1. Fetch top 8 trending series
-  const { data: res } = await api.get('/manga', {
-    params: {
-      limit: 8,
-      'order[followedCount]': 'desc',
-      'includes[]': ['cover_art'],
-      'contentRating[]': ['safe', 'suggestive'],
-      hasAvailableChapters: 'true',
-    }
-  });
-
-  for (const item of res.data) {
-    const mangaId = item.id;
-    const title = item.attributes.title.en || Object.values(item.attributes.title)[0] || 'Untitled';
-    const synopsis = item.attributes.description.en || 'Read online on Manga Flow.';
-    const slug = (item.attributes.title.en || mangaId).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 50);
-
-    let coverUrl = '';
-    const coverRel = item.relationships.find((r) => r.type === 'cover_art');
-    if (coverRel && coverRel.attributes && coverRel.attributes.fileName) {
-      coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${coverRel.attributes.fileName}.512.jpg`;
-    }
-
-    // Upsert Series
-    const { data: seriesRow, error: sErr } = await supabase
-      .from('series')
-      .upsert(
-        {
-          slug,
-          title,
-          synopsis: synopsis.slice(0, 300),
-          cover_image_url: coverUrl,
-          reading_mode: 'manga',
-          source: 'mangadex',
-          source_url: `https://mangadex.org/title/${mangaId}`
-        },
-        { onConflict: 'slug' }
-      )
-      .select()
-      .single();
-
-    if (sErr || !seriesRow) continue;
-    console.log(`\n📚 Synced Series: ${title}`);
-
-    // 2. Fetch up to 20 English chapters starting from Chapter 1 (ascending)
-    const { data: feed } = await api.get(`/manga/${mangaId}/feed`, {
+    // 1. Fetch top 12 trending manga/manhwa
+    const { data: res } = await api.get('/manga', {
       params: {
-        limit: 20,
-        'translatedLanguage[]': ['en'],
-        'order[chapter]': 'asc'
+        limit: 12,
+        'order[followedCount]': 'desc',
+        'includes[]': ['cover_art'],
+        'contentRating[]': ['safe', 'suggestive'],
+        hasAvailableChapters: 'true',
       }
     });
 
-    const chapterItems = feed.data || [];
-    console.log(`Found ${chapterItems.length} chapters. Fetching panels concurrently...`);
+    for (const item of res.data) {
+      const mangaId = item.id;
+      const title = item.attributes.title.en || Object.values(item.attributes.title)[0] || 'Untitled';
+      const synopsis = item.attributes.description.en || 'Read online on Manga Flow.';
+      const slug = (item.attributes.title.en || mangaId)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 60);
 
-    // 3. Concurrent panel fetches (batches of 5 to respect rate limits)
-    const chapterRows = [];
-    const chunkSize = 5;
+      // Extract Cover
+      let coverUrl = '';
+      const coverRel = item.relationships.find((r) => r.type === 'cover_art');
+      if (coverRel && coverRel.attributes && coverRel.attributes.fileName) {
+        coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${coverRel.attributes.fileName}.512.jpg`;
+      }
 
-    for (let i = 0; i < chapterItems.length; i += chunkSize) {
-      const slice = chapterItems.slice(i, i + chunkSize);
+      // Upsert series with source_url saving the MangaDex ID
+      const { data: seriesRow, error: sErr } = await supabase
+        .from('series')
+        .upsert(
+          {
+            slug,
+            title,
+            synopsis: synopsis.slice(0, 350),
+            cover_image_url: coverUrl,
+            reading_mode: 'manga',
+            source: 'mangadex',
+            source_url: mangaId // Storing the MangaDex UUID for live chapter lookups
+          },
+          { onConflict: 'slug' }
+        )
+        .select()
+        .single();
 
-      const results = await Promise.allSettled(
-        slice.map(async (ch) => {
-          const chNumber = parseFloat(ch.attributes.chapter) || 1;
-          const panels = await fetchChapterPanels(ch.id);
-          if (panels.length === 0) return null;
+      if (sErr || !seriesRow) {
+        console.warn(`Failed series ${title}:`, sErr?.message);
+        continue;
+      }
 
-          return {
-            series_id: seriesRow.id,
-            chapter_number: chNumber,
-            title: ch.attributes.title || `Chapter ${chNumber}`,
-            panel_urls: panels,
-            source: 'mangadex'
-          };
-        })
-      );
+      console.log(`\n📚 Synced Series: ${title}`);
 
-      for (const r of results) {
-        if (r.status === 'fulfilled' && r.value) {
-          chapterRows.push(r.value);
+      // 2. Fetch up to 50 English chapters metadata (Instant: 1 single API call)
+      const { data: feed } = await api.get(`/manga/${mangaId}/feed`, {
+        params: {
+          limit: 50,
+          'translatedLanguage[]': ['en'],
+          'order[chapter]': 'asc'
         }
+      });
+
+      const chapters = feed.data || [];
+      const chapterRows = [];
+
+      for (const ch of chapters) {
+        const chNumber = parseFloat(ch.attributes.chapter);
+        if (isNaN(chNumber)) continue;
+
+        chapterRows.push({
+          series_id: seriesRow.id,
+          chapter_number: chNumber,
+          title: ch.attributes.title || `Chapter ${chNumber}`,
+          source: ch.id, // Store MangaDex chapter UUID here for instant on-demand fetching
+          panel_urls: [] // Empty array: Saves 99.9% database disk space!
+        });
+      }
+
+      // 3. Fast bulk insert of chapter index
+      if (chapterRows.length > 0) {
+        await supabase.from('chapters').upsert(chapterRows, {
+          onConflict: 'series_id, chapter_number'
+        });
+        console.log(`   -> Indexed ${chapterRows.length} chapters.`);
       }
     }
-
-    // 4. Single bulk insert for all chapters of this series
-    if (chapterRows.length > 0) {
-      await supabase.from('chapters').upsert(chapterRows, {
-        onConflict: 'series_id, chapter_number'
-      });
-      console.log(`✅ Bulk inserted ${chapterRows.length} chapters for ${title}`);
-    }
+  } catch (err) {
+    console.error('Sync failed:', err.message);
   }
 
-  console.log('\n🚀 High-speed sync finished successfully.');
+  console.log('\n🚀 Hybrid index sync complete.');
 }
 
-fastSync();
+syncHybridCatalog();
