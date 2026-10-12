@@ -4,108 +4,106 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-  console.error('Missing Supabase credentials (SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY).');
+  console.error('Missing Supabase environment secrets.');
   process.exit(1);
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function syncRealManga() {
-  console.log('Querying top rated manga from MangaDex API...');
+async function syncMangaLibrary() {
+  console.log('Fetching top manga series list from MangaDex...');
 
   try {
-    // 1. Fetch top rated series with English translations
+    // Fetch top 6 popular titles
     const searchRes = await fetch(
-      'https://api.mangadex.org/manga?limit=5&order[rating]=desc&availableTranslatedLanguage[]=en'
+      'https://api.mangadex.org/manga?limit=6&order[followedCount]=desc&availableTranslatedLanguage[]=en&includes[]=cover_art'
     );
     const searchData = await searchRes.json();
 
-    if (!searchData.data || searchData.data.length === 0) {
-      console.log('No series returned from MangaDex API.');
-      return;
-    }
+    if (!searchData.data) return;
 
-    const manga = searchData.data[0];
-    const mangaId = manga.id;
-    const title = manga.attributes.title.en || Object.values(manga.attributes.title)[0] || 'Featured Manga';
-    const slug = (manga.attributes.title.en || 'manga-series')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)+/g, '');
-    const synopsis = manga.attributes.description?.en || 'Read high-resolution webtoon and manga chapters online.';
+    for (const manga of searchData.data) {
+      const mangaId = manga.id;
+      const title = manga.attributes.title.en || Object.values(manga.attributes.title)[0] || 'Popular Series';
+      const slug = (manga.attributes.title.en || mangaId)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)+/g, '');
+      const synopsis = manga.attributes.description?.en || 'Read chapters online in high quality.';
 
-    // 2. Upsert the series record into Supabase
-    const { data: seriesRow, error: seriesError } = await supabase
-      .from('series')
-      .upsert(
-        {
-          slug: slug,
-          title: title,
-          synopsis: synopsis.slice(0, 500),
-          reading_mode: 'webtoon',
-        },
-        { onConflict: 'slug' }
-      )
-      .select()
-      .single();
+      // Extract cover image
+      const coverRel = manga.relationships.find((r) => r.type === 'cover_art');
+      const coverFile = coverRel?.attributes?.fileName;
+      const coverUrl = coverFile
+        ? `https://uploads.mangadex.org/covers/${mangaId}/${coverFile}.256.jpg`
+        : 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=500&auto=format&fit=crop&q=80';
 
-    if (seriesError) {
-      console.error('Failed to upsert series:', seriesError.message);
-      return;
-    }
+      // Determine default layout mode
+      const isLongStrip = manga.attributes.tags?.some((t) => t.attributes?.name?.en === 'Long Strip');
+      const readingMode = isLongStrip ? 'webtoon' : 'manga';
 
-    console.log(`Stored Series: "${title}" (ID: ${seriesRow.id})`);
+      // 1. Upsert Series
+      const { data: seriesRow, error: sErr } = await supabase
+        .from('series')
+        .upsert(
+          {
+            slug,
+            title,
+            synopsis: synopsis.slice(0, 400),
+            cover_image_url: coverUrl,
+            reading_mode: readingMode,
+          },
+          { onConflict: 'slug' }
+        )
+        .select()
+        .single();
 
-    // 3. Fetch chapter feed for this series
-    const feedRes = await fetch(
-      `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=5`
-    );
-    const feedData = await feedRes.json();
+      if (sErr || !seriesRow) {
+        console.error(`Failed upserting ${title}:`, sErr?.message);
+        continue;
+      }
 
-    if (!feedData.data || feedData.data.length === 0) {
-      console.log('No English chapters available for this series.');
-      return;
-    }
+      console.log(`Synced Series: ${title}`);
 
-    // 4. Fetch page panels for each chapter and insert into database
-    for (const ch of feedData.data) {
-      const chapterNumber = parseFloat(ch.attributes.chapter) || 1;
-      const chapterTitle = ch.attributes.title || `Chapter ${chapterNumber}`;
+      // 2. Fetch Latest Chapter for this Series
+      const feedRes = await fetch(
+        `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=1`
+      );
+      const feedData = await feedRes.json();
+
+      if (!feedData.data || feedData.data.length === 0) continue;
+
+      const ch = feedData.data[0];
+      const chNum = parseFloat(ch.attributes.chapter) || 1;
+      const chTitle = ch.attributes.title || `Chapter ${chNum}`;
 
       const atHomeRes = await fetch(`https://api.mangadex.org/at-home/server/${ch.id}`);
       const atHomeData = await atHomeRes.json();
 
-      if (!atHomeData.chapter || !atHomeData.chapter.data) {
-        continue;
-      }
+      if (!atHomeData.chapter?.data) continue;
 
       const baseUrl = atHomeData.baseUrl;
       const hash = atHomeData.chapter.hash;
-      const fileNames = atHomeData.chapter.data;
+      const panelUrls = atHomeData.chapter.data.map((file) => `${baseUrl}/data/${hash}/${file}`);
 
-      const panelUrls = fileNames.map((fileName) => `${baseUrl}/data/${hash}/${fileName}`);
-
-      const { error: chError } = await supabase.from('chapters').upsert(
+      // 3. Upsert Chapter
+      await supabase.from('chapters').upsert(
         {
           series_id: seriesRow.id,
-          chapter_number: chapterNumber,
-          title: chapterTitle,
+          chapter_number: chNum,
+          title: chTitle,
           panel_urls: panelUrls,
         },
         { onConflict: 'series_id, chapter_number' }
       );
 
-      if (chError) {
-        console.error(`Error saving chapter ${chapterNumber}:`, chError.message);
-      } else {
-        console.log(`Successfully synced ${chapterTitle} with ${panelUrls.length} pages.`);
-      }
+      console.log(`-> Added ${chTitle} (${panelUrls.length} pages) for ${title}`);
     }
 
-    console.log('Sync process completed successfully.');
+    console.log('Library sync completed.');
   } catch (err) {
-    console.error('Unexpected error running sync:', err);
+    console.error('Sync failed:', err);
   }
 }
 
-syncRealManga();
+syncMangaLibrary();
