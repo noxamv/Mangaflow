@@ -24,17 +24,19 @@ async function syncAsuraManhwa() {
     const { data: html } = await axios.get(targetUrl, { headers, timeout: 10000 });
     const $ = cheerio.load(html);
 
-    // Grab the first 3 trending series cards from the homepage
+    // Grab first 3 series links
     const seriesElements = $('div.grid a[href*="/series/"]').slice(0, 3).toArray();
 
     for (const el of seriesElements) {
       const link = $(el).attr('href');
+      if (!link) continue;
+
       const seriesPageUrl = link.startsWith('http') ? link : `https://asuracomic.net${link}`;
       const title = $(el).find('span, h3, h2').first().text().trim() || 'Trending Manhwa';
       const coverUrl = $(el).find('img').attr('src') || '';
       const slug = seriesPageUrl.split('/').filter(Boolean).pop().replace(/[^a-z0-9]+/g, '-');
 
-      // 1. Insert series record into Supabase
+      // 1. Upsert Series Record
       const { data: seriesRow, error: sErr } = await supabase
         .from('series')
         .upsert(
@@ -57,7 +59,7 @@ async function syncAsuraManhwa() {
 
       console.log(`Synced Series: ${title}`);
 
-      // 2. Fetch series page to find latest chapter link
+      // 2. Fetch series page for chapter link
       const { data: seriesHtml } = await axios.get(seriesPageUrl, { headers, timeout: 10000 });
       const $s = cheerio.load(seriesHtml);
       const chapterLink = $s('a[href*="/chapter/"]').first().attr('href');
@@ -65,7 +67,7 @@ async function syncAsuraManhwa() {
       if (!chapterLink) continue;
       const chapterUrl = chapterLink.startsWith('http') ? chapterLink : `https://asuracomic.net${chapterLink}`;
 
-      // 3. Fetch chapter page to extract image panels
+      // 3. Fetch chapter page for panel URLs
       const { data: chHtml } = await axios.get(chapterUrl, { headers, timeout: 10000 });
       const $c = cheerio.load(chHtml);
 
