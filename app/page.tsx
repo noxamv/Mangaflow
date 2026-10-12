@@ -1,270 +1,136 @@
-'use client';
-
-import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { createClient } from '@supabase/supabase-js';
 
+// Revalidate page data every 60 seconds
+export const revalidate = 60;
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-interface Chapter {
-  id: string;
-  chapter_number: number;
-  title: string;
-  panel_urls: string[];
-}
-
-interface Series {
+interface SeriesItem {
   id: string;
   slug: string;
   title: string;
-  synopsis: string;
-  cover_image_url: string;
-  reading_mode: 'webtoon' | 'manga';
-  chapters: Chapter[];
+  synopsis: string | null;
+  cover_image_url: string | null;
+  reading_mode: string | null;
+  source: string | null;
 }
 
-export default function HomePage() {
-  const [library, setLibrary] = useState<Series[]>([]);
-  const [selectedSeries, setSelectedSeries] = useState<Series | null>(null);
-  const [activeChapterIndex, setActiveChapterIndex] = useState(0);
-  const [readingMode, setReadingMode] = useState<'webtoon' | 'manga'>('webtoon');
-  const [currentPage, setCurrentPage] = useState(0);
-  const [loading, setLoading] = useState(true);
+export default async function HomePage() {
+  const { data: seriesList, error } = await supabase
+    .from('series')
+    .select('id, slug, title, synopsis, cover_image_url, reading_mode, source')
+    .order('created_at', { ascending: false });
 
-  useEffect(() => {
-    async function loadLibrary() {
-      try {
-        const { data, error } = await supabase
-          .from('series')
-          .select('id, slug, title, synopsis, cover_image_url, reading_mode, chapters(id, chapter_number, title, panel_urls)')
-          .order('created_at', { ascending: false });
-
-        if (error) console.error(error.message);
-        if (data) {
-          // Sort chapters inside each series numerically
-          const sorted = (data as unknown as Series[]).map(s => ({
-            ...s,
-            chapters: (s.chapters || []).sort((a, b) => a.chapter_number - b.chapter_number)
-          }));
-          setLibrary(sorted);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadLibrary();
-  }, []);
-
-  const openReader = (series: Series, chapterIdx = 0) => {
-    setSelectedSeries(series);
-    setActiveChapterIndex(chapterIdx);
-    setCurrentPage(0);
-    setReadingMode(series.reading_mode || 'webtoon');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-neutral-950 flex flex-col items-center justify-center text-neutral-400 gap-3">
-        <div className="w-7 h-7 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-        <p className="text-xs tracking-wider uppercase font-semibold">Loading Manga Flow...</p>
-      </div>
-    );
+  if (error) {
+    console.error('Error fetching series:', error.message);
   }
 
-  // READER VIEW
-  if (selectedSeries && selectedSeries.chapters?.length > 0) {
-    const currentChapter = selectedSeries.chapters[activeChapterIndex];
+  const items: SeriesItem[] = seriesList || [];
 
-    return (
-      <div className="min-h-screen flex flex-col items-center bg-neutral-950 text-neutral-100">
-        <header className="sticky top-0 z-50 w-full max-w-xl bg-neutral-900/95 backdrop-blur border-b border-neutral-800 px-4 py-2.5 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <button
-              onClick={() => setSelectedSeries(null)}
-              className="p-1 px-2 text-neutral-400 hover:text-white bg-neutral-800 rounded-lg text-xs shrink-0"
-            >
-              ← Back
-            </button>
-            <div className="min-w-0">
-              <h1 className="font-bold text-xs sm:text-sm text-indigo-400 truncate">{selectedSeries.title}</h1>
-              {/* CHAPTER SELECT DROPDOWN */}
-              <select
-                value={activeChapterIndex}
-                onChange={(e) => {
-                  setActiveChapterIndex(Number(e.target.value));
-                  setCurrentPage(0);
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                }}
-                className="bg-neutral-800 text-[11px] text-neutral-200 rounded px-1.5 py-0.5 border border-neutral-700 outline-none"
-              >
-                {selectedSeries.chapters.map((ch, idx) => (
-                  <option key={ch.id} value={idx}>
-                    Ch. {ch.chapter_number} {ch.title ? `- ${ch.title}` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="flex bg-neutral-800 p-0.5 rounded-lg text-xs shrink-0">
-            <button
-              onClick={() => setReadingMode('webtoon')}
-              className={`px-2 py-1 rounded-md transition ${
-                readingMode === 'webtoon' ? 'bg-indigo-600 text-white font-medium' : 'text-neutral-400'
-              }`}
-            >
-              Webtoon
-            </button>
-            <button
-              onClick={() => setReadingMode('manga')}
-              className={`px-2 py-1 rounded-md transition ${
-                readingMode === 'manga' ? 'bg-indigo-600 text-white font-medium' : 'text-neutral-400'
-              }`}
-            >
-              Manga
-            </button>
-          </div>
-        </header>
-
-        <main className="w-full max-w-xl flex flex-col items-center pb-12">
-          {readingMode === 'webtoon' ? (
-            <div className="w-full flex flex-col shadow-2xl">
-              {currentChapter.panel_urls.map((url, i) => (
-                <div key={i} className="relative w-full bg-neutral-900">
-                  <img
-                    src={url}
-                    alt={`Page ${i + 1}`}
-                    referrerPolicy="no-referrer"
-                    loading="lazy"
-                    className="w-full h-auto block select-none"
-                  />
-                  <span className="absolute bottom-2 right-2 bg-black/75 text-[10px] px-2 py-0.5 rounded text-neutral-300">
-                    {i + 1} / {currentChapter.panel_urls.length}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="w-full px-4 py-6 flex flex-col items-center">
-              <img
-                src={currentChapter.panel_urls[currentPage]}
-                alt={`Page ${currentPage + 1}`}
-                referrerPolicy="no-referrer"
-                className="max-h-[75vh] w-auto rounded shadow-lg object-contain cursor-pointer"
-                onClick={() => setCurrentPage((p) => Math.min(currentChapter.panel_urls.length - 1, p + 1))}
-              />
-              <div className="flex items-center gap-4 mt-6">
-                <button
-                  disabled={currentPage === 0}
-                  onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
-                  className="px-4 py-2 bg-neutral-800 disabled:opacity-30 rounded text-sm"
-                >
-                  Prev
-                </button>
-                <span className="text-xs text-neutral-400">
-                  {currentPage + 1} of {currentChapter.panel_urls.length}
-                </span>
-                <button
-                  disabled={currentPage === currentChapter.panel_urls.length - 1}
-                  onClick={() => setCurrentPage((p) => Math.min(currentChapter.panel_urls.length - 1, p + 1))}
-                  className="px-4 py-2 bg-indigo-600 disabled:opacity-30 rounded text-sm font-medium"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="w-full flex justify-between items-center px-4 py-6 mt-4 border-t border-neutral-800">
-            <button
-              disabled={activeChapterIndex === 0}
-              onClick={() => {
-                setActiveChapterIndex((idx) => Math.max(0, idx - 1));
-                setCurrentPage(0);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-xs"
-            >
-              ← Previous Ch.
-            </button>
-            <span className="text-xs text-neutral-500">
-              {activeChapterIndex + 1} / {selectedSeries.chapters.length}
-            </span>
-            <button
-              disabled={activeChapterIndex === selectedSeries.chapters.length - 1}
-              onClick={() => {
-                setActiveChapterIndex((idx) => Math.min(selectedSeries.chapters.length - 1, idx + 1));
-                setCurrentPage(0);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-xs"
-            >
-              Next Ch. →
-            </button>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
-  // MAIN HOMEPAGE CATALOG
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 px-4 py-6 max-w-4xl mx-auto">
-      <header className="flex items-center justify-between pb-6 border-b border-neutral-800 mb-6">
-        <div>
-          <h1 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
-            <span className="text-indigo-500">Manga</span>Flow
-          </h1>
-          <p className="text-xs text-neutral-400 mt-0.5">Automated Cloud Reader</p>
+    <main className="min-h-screen bg-[#0a0a0c] text-neutral-100 font-sans selection:bg-indigo-500 selection:text-white pb-20">
+      {/* Top Header Bar */}
+      <header className="sticky top-0 z-40 bg-[#0a0a0c]/80 backdrop-blur-md border-b border-neutral-800/80 px-4 py-4 md:px-8">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
+              <span className="text-indigo-500">Manga</span>
+              <span>Flow</span>
+            </h1>
+            <p className="text-xs text-neutral-400">Automated Cloud Reader</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-medium px-3 py-1 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+              {items.length} {items.length === 1 ? 'Series' : 'Series'} Synced
+            </span>
+          </div>
         </div>
-        <span className="text-xs px-2.5 py-1 bg-neutral-900 border border-neutral-800 rounded-full text-indigo-400">
-          {library.length} Series Synced
-        </span>
       </header>
 
-      <section>
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-400 mb-4">Popular & Trending</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-          {library.map((item) => (
-            <div
-              key={item.id}
-              onClick={() => openReader(item, 0)}
-              className="group cursor-pointer bg-neutral-900 border border-neutral-800 hover:border-indigo-500/50 rounded-xl overflow-hidden transition flex flex-col"
-            >
-              <div className="aspect-[3/4] w-full overflow-hidden bg-neutral-800 relative">
-                <img
-                  src={item.cover_image_url}
-                  alt={item.title}
-                  referrerPolicy="no-referrer"
-                  loading="lazy"
-                  className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                />
-                <span className="absolute bottom-2 left-2 bg-black/80 backdrop-blur text-[10px] uppercase font-bold text-indigo-300 px-2 py-0.5 rounded">
-                  {item.reading_mode}
-                </span>
-              </div>
-              <div className="p-3 flex-1 flex flex-col justify-between">
-                <div>
-                  <h3 className="font-semibold text-sm line-clamp-1 group-hover:text-indigo-400 transition">
-                    {item.title}
-                  </h3>
-                  <p className="text-[11px] text-neutral-400 line-clamp-2 mt-1 leading-relaxed">
-                    {item.synopsis}
-                  </p>
-                </div>
-                <div className="mt-3 pt-2 border-t border-neutral-800/60 flex items-center justify-between text-[11px] text-neutral-500">
-                  <span>{item.chapters?.length || 0} Ch.</span>
-                  <span className="text-indigo-400 font-medium group-hover:underline">Read →</span>
-                </div>
-              </div>
-            </div>
-          ))}
+      {/* Main Content Area */}
+      <section className="max-w-7xl mx-auto px-4 md:px-8 mt-8">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-sm font-semibold tracking-wider text-neutral-400 uppercase">
+            Popular & Trending
+          </h2>
         </div>
+
+        {items.length === 0 ? (
+          <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-12 text-center">
+            <p className="text-neutral-400 text-sm">No series found in the database yet.</p>
+            <p className="text-neutral-500 text-xs mt-1">Run the GitHub Actions scraper to sync titles.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            {items.map((series) => (
+              <Link
+                key={series.id}
+                href={`/series/${series.slug}`}
+                className="group relative flex flex-col overflow-hidden rounded-xl bg-neutral-900/60 border border-neutral-800/80 hover:border-indigo-500/50 transition-all duration-300 hover:shadow-xl hover:shadow-indigo-500/10"
+              >
+                {/* Cover Image Container */}
+                <div className="aspect-[3/4] w-full relative bg-neutral-950 overflow-hidden">
+                  {series.cover_image_url ? (
+                    <img
+                      src={series.cover_image_url}
+                      alt={series.title}
+                      referrerPolicy="no-referrer"
+                      loading="lazy"
+                      className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                    />
+                  ) : (
+                    <div className="h-full w-full flex items-center justify-center p-4 text-center text-xs text-neutral-500">
+                      No Cover
+                    </div>
+                  )}
+
+                  {/* Gradient Overlay */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent pointer-events-none" />
+
+                  {/* Badges */}
+                  <div className="absolute top-2 left-2 flex flex-wrap gap-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-black/70 backdrop-blur-md text-indigo-300 border border-white/10">
+                      {series.reading_mode === 'webtoon' ? 'Webtoon' : 'Manga'}
+                    </span>
+                  </div>
+
+                  {series.source && (
+                    <div className="absolute top-2 right-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-neutral-900/80 text-neutral-300 border border-neutral-700/60">
+                        {series.source}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Series Details */}
+                <div className="p-3 flex flex-col flex-1 justify-between">
+                  <div>
+                    <h3 className="font-semibold text-sm line-clamp-2 text-neutral-100 group-hover:text-indigo-400 transition-colors">
+                      {series.title}
+                    </h3>
+                    {series.synopsis && (
+                      <p className="text-neutral-400 text-xs line-clamp-2 mt-1.5 leading-relaxed">
+                        {series.synopsis}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="mt-3 pt-2 border-t border-neutral-800/60 flex items-center justify-between text-xs text-neutral-500">
+                    <span>Read Now</span>
+                    <span className="text-indigo-400 group-hover:translate-x-1 transition-transform">
+                      →
+                    </span>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </section>
-    </div>
+    </main>
   );
 }
