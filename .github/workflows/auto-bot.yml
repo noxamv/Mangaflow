@@ -2,9 +2,8 @@ name: Manga Flow Auto-Updater
 
 on:
   schedule:
-    # Runs automatically every 6 hours
     - cron: '0 */6 * * *'
-  workflow_dispatch: # Allows you to tap "Run" manually from your phone
+  workflow_dispatch:
 
 jobs:
   auto-sync:
@@ -18,10 +17,10 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install Supabase Client
+      - name: Install Dependencies
         run: npm install @supabase/supabase-js
 
-      - name: Run Auto Sync
+      - name: Run Manga Feed Sync
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
