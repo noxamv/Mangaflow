@@ -41,7 +41,14 @@ export default function HomePage() {
           .order('created_at', { ascending: false });
 
         if (error) console.error(error.message);
-        if (data) setLibrary(data as unknown as Series[]);
+        if (data) {
+          // Sort chapters inside each series numerically
+          const sorted = (data as unknown as Series[]).map(s => ({
+            ...s,
+            chapters: (s.chapters || []).sort((a, b) => a.chapter_number - b.chapter_number)
+          }));
+          setLibrary(sorted);
+        }
       } catch (err) {
         console.error(err);
       } finally {
@@ -51,9 +58,9 @@ export default function HomePage() {
     loadLibrary();
   }, []);
 
-  const openReader = (series: Series) => {
+  const openReader = (series: Series, chapterIdx = 0) => {
     setSelectedSeries(series);
-    setActiveChapterIndex(0);
+    setActiveChapterIndex(chapterIdx);
     setCurrentPage(0);
     setReadingMode(series.reading_mode || 'webtoon');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -68,32 +75,45 @@ export default function HomePage() {
     );
   }
 
-  // ACTIVE CHAPTER READER VIEW
+  // READER VIEW
   if (selectedSeries && selectedSeries.chapters?.length > 0) {
     const currentChapter = selectedSeries.chapters[activeChapterIndex];
 
     return (
       <div className="min-h-screen flex flex-col items-center bg-neutral-950 text-neutral-100">
-        <header className="sticky top-0 z-50 w-full max-w-xl bg-neutral-900/95 backdrop-blur border-b border-neutral-800 px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <header className="sticky top-0 z-50 w-full max-w-xl bg-neutral-900/95 backdrop-blur border-b border-neutral-800 px-4 py-2.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <button
               onClick={() => setSelectedSeries(null)}
-              className="p-1.5 -ml-1 text-neutral-400 hover:text-white bg-neutral-800 rounded-lg text-xs"
+              className="p-1 px-2 text-neutral-400 hover:text-white bg-neutral-800 rounded-lg text-xs shrink-0"
             >
               ← Back
             </button>
-            <div className="max-w-[140px] sm:max-w-xs truncate">
-              <h1 className="font-bold text-sm text-indigo-400 truncate">{selectedSeries.title}</h1>
-              <p className="text-[11px] text-neutral-400">
-                Ch. {currentChapter.chapter_number} {currentChapter.title ? `• ${currentChapter.title}` : ''}
-              </p>
+            <div className="min-w-0">
+              <h1 className="font-bold text-xs sm:text-sm text-indigo-400 truncate">{selectedSeries.title}</h1>
+              {/* CHAPTER SELECT DROPDOWN */}
+              <select
+                value={activeChapterIndex}
+                onChange={(e) => {
+                  setActiveChapterIndex(Number(e.target.value));
+                  setCurrentPage(0);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="bg-neutral-800 text-[11px] text-neutral-200 rounded px-1.5 py-0.5 border border-neutral-700 outline-none"
+              >
+                {selectedSeries.chapters.map((ch, idx) => (
+                  <option key={ch.id} value={idx}>
+                    Ch. {ch.chapter_number} {ch.title ? `- ${ch.title}` : ''}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
-          <div className="flex bg-neutral-800 p-0.5 rounded-lg text-xs">
+          <div className="flex bg-neutral-800 p-0.5 rounded-lg text-xs shrink-0">
             <button
               onClick={() => setReadingMode('webtoon')}
-              className={`px-2.5 py-1 rounded-md transition ${
+              className={`px-2 py-1 rounded-md transition ${
                 readingMode === 'webtoon' ? 'bg-indigo-600 text-white font-medium' : 'text-neutral-400'
               }`}
             >
@@ -101,11 +121,11 @@ export default function HomePage() {
             </button>
             <button
               onClick={() => setReadingMode('manga')}
-              className={`px-2.5 py-1 rounded-md transition ${
+              className={`px-2 py-1 rounded-md transition ${
                 readingMode === 'manga' ? 'bg-indigo-600 text-white font-medium' : 'text-neutral-400'
               }`}
             >
-              Manga (RTL)
+              Manga
             </button>
           </div>
         </header>
@@ -115,7 +135,13 @@ export default function HomePage() {
             <div className="w-full flex flex-col shadow-2xl">
               {currentChapter.panel_urls.map((url, i) => (
                 <div key={i} className="relative w-full bg-neutral-900">
-                  <img src={url} alt={`Page ${i + 1}`} loading="lazy" className="w-full h-auto block select-none" />
+                  <img
+                    src={url}
+                    alt={`Page ${i + 1}`}
+                    referrerPolicy="no-referrer"
+                    loading="lazy"
+                    className="w-full h-auto block select-none"
+                  />
                   <span className="absolute bottom-2 right-2 bg-black/75 text-[10px] px-2 py-0.5 rounded text-neutral-300">
                     {i + 1} / {currentChapter.panel_urls.length}
                   </span>
@@ -127,6 +153,7 @@ export default function HomePage() {
               <img
                 src={currentChapter.panel_urls[currentPage]}
                 alt={`Page ${currentPage + 1}`}
+                referrerPolicy="no-referrer"
                 className="max-h-[75vh] w-auto rounded shadow-lg object-contain cursor-pointer"
                 onClick={() => setCurrentPage((p) => Math.min(currentChapter.panel_urls.length - 1, p + 1))}
               />
@@ -139,7 +166,7 @@ export default function HomePage() {
                   Prev
                 </button>
                 <span className="text-xs text-neutral-400">
-                  {currentPage + 1} / {currentChapter.panel_urls.length}
+                  {currentPage + 1} of {currentChapter.panel_urls.length}
                 </span>
                 <button
                   disabled={currentPage === currentChapter.panel_urls.length - 1}
@@ -151,15 +178,42 @@ export default function HomePage() {
               </div>
             </div>
           )}
+
+          <div className="w-full flex justify-between items-center px-4 py-6 mt-4 border-t border-neutral-800">
+            <button
+              disabled={activeChapterIndex === 0}
+              onClick={() => {
+                setActiveChapterIndex((idx) => Math.max(0, idx - 1));
+                setCurrentPage(0);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-xs"
+            >
+              ← Previous Ch.
+            </button>
+            <span className="text-xs text-neutral-500">
+              {activeChapterIndex + 1} / {selectedSeries.chapters.length}
+            </span>
+            <button
+              disabled={activeChapterIndex === selectedSeries.chapters.length - 1}
+              onClick={() => {
+                setActiveChapterIndex((idx) => Math.min(selectedSeries.chapters.length - 1, idx + 1));
+                setCurrentPage(0);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-xs"
+            >
+              Next Ch. →
+            </button>
+          </div>
         </main>
       </div>
     );
   }
 
-  // MAIN LIBRARY HOMEPAGE VIEW
+  // MAIN HOMEPAGE CATALOG
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 px-4 py-6 max-w-4xl mx-auto">
-      {/* Brand Header */}
       <header className="flex items-center justify-between pb-6 border-b border-neutral-800 mb-6">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
@@ -172,20 +226,20 @@ export default function HomePage() {
         </span>
       </header>
 
-      {/* Series Grid */}
       <section>
         <h2 className="text-sm font-semibold uppercase tracking-wider text-neutral-400 mb-4">Popular & Trending</h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
           {library.map((item) => (
             <div
               key={item.id}
-              onClick={() => openReader(item)}
+              onClick={() => openReader(item, 0)}
               className="group cursor-pointer bg-neutral-900 border border-neutral-800 hover:border-indigo-500/50 rounded-xl overflow-hidden transition flex flex-col"
             >
               <div className="aspect-[3/4] w-full overflow-hidden bg-neutral-800 relative">
                 <img
                   src={item.cover_image_url}
                   alt={item.title}
+                  referrerPolicy="no-referrer"
                   loading="lazy"
                   className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                 />
