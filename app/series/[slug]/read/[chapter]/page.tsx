@@ -2,8 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
-// Cache page for 5 minutes
-export const revalidate = 300;
+export const revalidate = 60;
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -13,21 +12,20 @@ interface PageProps {
   params: Promise<{ slug: string; chapter: string }>;
 }
 
-// Helper function: Live On-Demand fetch of panels from MangaDex
-async function getPanelsOnDemand(chapterSourceId: string): Promise<string[]> {
+async function fetchLivePanels(chapterId: string): Promise<string[]> {
   try {
-    const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterSourceId}`, {
-      next: { revalidate: 3600 } // Cache images for 1 hour
+    const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterId}`, {
+      cache: 'no-store'
     });
     if (!res.ok) return [];
-    
+
     const data = await res.json();
     const baseUrl = data.baseUrl;
     const hash = data.chapter.hash;
-    const files = data.chapter.dataSaver || data.chapter.data || [];
-    const folder = data.chapter.dataSaver ? 'data-saver' : 'data';
+    // Standard quality files
+    const files = data.chapter.data || data.chapter.dataSaver || [];
 
-    return files.map((f: string) => `${baseUrl}/${folder}/${hash}/${f}`);
+    return files.map((file: string) => `${baseUrl}/data/${hash}/${file}`);
   } catch {
     return [];
   }
@@ -48,7 +46,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
 
   if (!series) notFound();
 
-  // 2. Fetch the target chapter metadata
+  // 2. Fetch Chapter metadata
   const { data: currentChapter } = await supabase
     .from('chapters')
     .select('id, chapter_number, title, source, panel_urls')
@@ -58,7 +56,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
 
   if (!currentChapter) notFound();
 
-  // 3. Fetch list of all chapters for prev/next buttons
+  // 3. Prev & Next chapter navigation
   const { data: allChapters } = await supabase
     .from('chapters')
     .select('chapter_number')
@@ -70,10 +68,10 @@ export default async function ChapterReaderPage({ params }: PageProps) {
   const prevChapter = currentIndex > 0 ? chapters[currentIndex - 1].chapter_number : null;
   const nextChapter = currentIndex < chapters.length - 1 ? chapters[currentIndex + 1].chapter_number : null;
 
-  // 4. ON-DEMAND FETCH: If panel_urls is empty in DB, fetch live from MangaDex
+  // 4. Resolve panel URLs (Hybrid fetch)
   let panels: string[] = currentChapter.panel_urls || [];
   if (panels.length === 0 && currentChapter.source) {
-    panels = await getPanelsOnDemand(currentChapter.source);
+    panels = await fetchLivePanels(currentChapter.source);
   }
 
   return (
@@ -93,7 +91,6 @@ export default async function ChapterReaderPage({ params }: PageProps) {
           </span>
         </div>
 
-        {/* Prev / Next controls */}
         <div className="flex items-center gap-2">
           {prevChapter !== null ? (
             <Link
@@ -123,22 +120,23 @@ export default async function ChapterReaderPage({ params }: PageProps) {
         </div>
       </header>
 
-      {/* Reader Container (Vertical Webtoon Scroll) */}
-      <section className="w-full max-w-3xl flex flex-col items-center py-4 px-0">
+      {/* Reader Container (Continuous Webtoon Scroll) */}
+      <section className="w-full max-w-2xl flex flex-col items-center py-2 px-0">
         {panels.length === 0 ? (
           <div className="p-16 text-center text-sm text-neutral-400 bg-neutral-900/40 rounded-xl mt-8 border border-neutral-800">
-            <p>Panels are currently resolving or loading.</p>
-            <p className="text-xs text-neutral-500 mt-2">Try refreshing in a few moments.</p>
+            <p>Panels are currently resolving from the source network.</p>
+            <p className="text-xs text-neutral-500 mt-2">Please refresh in a moment.</p>
           </div>
         ) : (
           panels.map((url, idx) => (
-            <div key={idx} className="w-full flex justify-center bg-black min-h-[300px]">
+            <div key={idx} className="w-full bg-black flex justify-center">
               <img
                 src={url}
-                alt={`Page ${idx + 1}`}
+                alt={`Panel ${idx + 1}`}
                 referrerPolicy="no-referrer"
-                loading={idx < 2 ? 'eager' : 'lazy'}
-                className="w-full h-auto block select-none"
+                crossOrigin="anonymous"
+                loading="eager"
+                className="w-full h-auto block select-none pointer-events-none"
               />
             </div>
           ))
@@ -146,13 +144,13 @@ export default async function ChapterReaderPage({ params }: PageProps) {
       </section>
 
       {/* Bottom Chapter Switcher */}
-      <footer className="w-full max-w-3xl py-10 px-4 flex items-center justify-between border-t border-neutral-800/80 my-8">
+      <footer className="w-full max-w-2xl py-10 px-4 flex items-center justify-between border-t border-neutral-800/80 my-8">
         <div>
           <Link
             href={`/series/${series.slug}`}
             className="text-xs text-neutral-400 hover:text-white transition"
           >
-            ← Back to Chapter List
+            ← Back to Series Details
           </Link>
         </div>
         <div className="flex gap-2">
