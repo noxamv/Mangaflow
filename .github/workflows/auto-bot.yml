@@ -2,9 +2,8 @@ name: Manga Flow Auto-Updater
 
 on:
   schedule:
-    # Runs automatically every 4 hours
     - cron: '0 */4 * * *'
-  workflow_dispatch: # Allows manual "Run workflow" button click
+  workflow_dispatch:
 
 jobs:
   update-catalog:
@@ -16,19 +15,18 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
+          cache: 'npm'
 
-      - name: Install Dependencies
-        run: npm install @supabase/supabase-js axios
+      - name: Fast Install Dependencies
+        run: npm ci --omit=dev || npm install @supabase/supabase-js axios --no-audit --no-fund
 
-      # 1. Runs the normal MangaDex crawler
       - name: Sync MangaDex Catalog
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node scripts/sync-feed.js
 
-      # 2. Runs the secondary mirror crawler for Shadow Slave, Lookism, etc.
       - name: Run Mirror Sync for Priority Manhwa
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
