@@ -1,36 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'edge';
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const imageUrl = searchParams.get('url');
 
-export async function GET(req: NextRequest) {
-  const url = req.nextUrl.searchParams.get('url');
+  if (!imageUrl) {
+    return new NextResponse('Missing image URL', { status: 400 });
+  }
 
-  if (!url || !url.startsWith('http')) {
-    return new NextResponse('Invalid URL', { status: 400 });
+  // 1. HOTLINK PROTECTION: Block requests not originating from your site
+  const referer = request.headers.get('referer');
+  const host = request.headers.get('host');
+
+  // Allow localhost during development, but check host in production
+  if (referer && host && !referer.includes(host) && !referer.includes('localhost')) {
+    return new NextResponse('Forbidden: Hotlinking is not allowed', { status: 403 });
   }
 
   try {
-    const res = await fetch(url, {
+    const response = await fetch(imageUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        Referer: 'https://mangadex.org/',
-      },
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://mangadex.org/'
+      }
     });
 
-    if (!res.ok) {
-      return new NextResponse('Failed to fetch image', { status: res.status });
+    if (!response.ok) {
+      return new NextResponse('Failed to fetch image', { status: response.status });
     }
 
-    const blob = await res.arrayBuffer();
-    const contentType = res.headers.get('content-type') || 'image/jpeg';
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const buffer = await response.arrayBuffer();
 
-    return new NextResponse(blob, {
+    // 2. EDGE CACHING: Tell Vercel and browsers to cache this image for 7 days
+    // This stops Vercel from re-fetching the image on every single page view!
+    return new NextResponse(buffer, {
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=86400, s-maxage=86400',
+        'Cache-Control': 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400',
       },
     });
-  } catch {
-    return new NextResponse('Error loading image', { status: 500 });
+  } catch (error) {
+    return new NextResponse('Internal Server Error', { status: 500 });
   }
 }
