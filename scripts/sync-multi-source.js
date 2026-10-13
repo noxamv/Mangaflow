@@ -8,37 +8,36 @@ const supabase = createClient(
 );
 
 async function syncMultiSourceCatalog() {
-  console.log('⚡ Starting Multi-Platform Mirror Ingestion...');
+  console.log('⚡ Starting Extended Providers Ingestion (MangaPlus & Scans)...');
 
   const { data: allSeries } = await supabase
     .from('series')
     .select('id, title, slug, source_url');
 
-  for (const series of allSeries) {
-    console.log(`\n🔍 Checking multi-sources for: "${series.title}"`);
-    
-    let extraChapters = [];
+  if (!allSeries) return;
 
-    // 1. Try MangaPlus for major Shonen Jump / official titles
-    const mangaPlusChapters = await getMangaPlusChapters(series.title);
-    if (mangaPlusChapters.length > 0) {
-      console.log(`   └─ Found ${mangaPlusChapters.length} chapters on MangaPlus`);
-      extraChapters.push(...mangaPlusChapters);
+  for (const series of allSeries) {
+    const extraChapters = [];
+
+    // 1. MangaPlus check
+    const mpChapters = await getMangaPlusChapters(series.title);
+    if (mpChapters.length > 0) {
+      extraChapters.push(...mpChapters);
     }
 
-    // 2. Try Asura / Temple scan groups if source_url has MD UUID
+    // 2. Scan Groups check via UUID
     const uuidMatch = series.source_url?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
     if (uuidMatch) {
-      const asuraChaps = await getScanGroupChapters(uuidMatch[0], 'asura');
-      if (asuraChaps.length > 0) {
-        console.log(`   └─ Found ${asuraChaps.length} Asura Scans releases`);
-        extraChapters.push(...asuraChaps);
-      }
+      const mangaUuid = uuidMatch[0];
+      const asura = await getScanGroupChapters(mangaUuid, 'asura');
+      const temple = await getScanGroupChapters(mangaUuid, 'temple');
+      const hive = await getScanGroupChapters(mangaUuid, 'hive');
+
+      extraChapters.push(...asura, ...temple, ...hive);
     }
 
-    // 3. Upsert into Supabase
     if (extraChapters.length > 0) {
-      const payload = extraChapters.map(c => ({
+      const payload = extraChapters.map((c) => ({
         series_id: series.id,
         chapter_number: c.chapter_number,
         title: c.title,
@@ -50,9 +49,11 @@ async function syncMultiSourceCatalog() {
       await supabase.from('chapters').upsert(payload, {
         onConflict: 'series_id, chapter_number'
       });
-      console.log(`   └─ ✅ Upserted ${extraChapters.length} multi-source chapters.`);
+      console.log(`   └─ [${series.title}] Ingested ${extraChapters.length} group/official chapters.`);
     }
   }
+
+  console.log('🎉 Multi-source ingestion complete.');
 }
 
 syncMultiSourceCatalog();
