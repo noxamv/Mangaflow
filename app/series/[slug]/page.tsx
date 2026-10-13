@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
@@ -37,9 +37,83 @@ interface ChapterItem {
 
 interface CommentItem {
   id: string;
+  user_id: string;
   username: string;
   content: string;
   created_at: string;
+}
+
+function StarRatingCard({ seriesId, userId }: { seriesId: string; userId?: string }) {
+  const [selectedStars, setSelectedStars] = useState<number>(10);
+  const [userRating, setUserRating] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!userId || !seriesId) return;
+    supabase
+      .from('series_reviews')
+      .select('rating')
+      .eq('series_id', seriesId)
+      .eq('user_id', userId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) {
+          setUserRating(data.rating);
+          setSelectedStars(data.rating);
+        }
+      });
+  }, [seriesId, userId]);
+
+  const handleRate = async () => {
+    if (!userId) {
+      alert('Sign in with your Gmail to rate this title.');
+      return;
+    }
+    setSubmitting(true);
+
+    const { error } = await supabase.from('series_reviews').upsert(
+      {
+        series_id: seriesId,
+        user_id: userId,
+        rating: selectedStars,
+        username: 'Reader',
+      },
+      { onConflict: 'user_id,series_id' }
+    );
+
+    if (!error) {
+      setUserRating(selectedStars);
+    }
+    setSubmitting(false);
+  };
+
+  return (
+    <div className="bg-[#12141c] border border-neutral-800/80 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 max-w-xl mx-auto my-3">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-bold text-neutral-300">Your Rating:</span>
+        <select
+          value={selectedStars}
+          onChange={(e) => setSelectedStars(Number(e.target.value))}
+          className="bg-neutral-900 border border-neutral-700 text-amber-400 font-bold text-xs rounded-lg px-2 py-1 focus:outline-none"
+        >
+          {[10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map((num) => (
+            <option key={num} value={num}>
+              ★ {num} / 10
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <button
+        type="button"
+        disabled={submitting}
+        onClick={handleRate}
+        className="px-3.5 py-1 bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 font-bold text-xs rounded-lg transition"
+      >
+        {userRating ? `Update (${userRating}★)` : 'Submit Rating'}
+      </button>
+    </div>
+  );
 }
 
 export default function SeriesDetailPage() {
@@ -86,13 +160,13 @@ export default function SeriesDetailPage() {
         // Fetch Comments
         const { data: commData } = await supabase
           .from('series_comments')
-          .select('id, username, content, created_at')
+          .select('id, user_id, username, content, created_at')
           .eq('series_id', sData.id)
           .order('created_at', { ascending: false })
           .limit(20);
         setComments(commData || []);
 
-        // Fetch User Reading Progress & Bookmark
+        // Reading History & Bookmarks
         if (authData?.user) {
           const { data: bData } = await supabase
             .from('user_bookmarks')
@@ -158,7 +232,7 @@ export default function SeriesDetailPage() {
         username,
         content: newComment.trim(),
       })
-      .select('id, username, content, created_at')
+      .select('id, user_id, username, content, created_at')
       .single();
 
     if (!error && data) {
@@ -166,6 +240,21 @@ export default function SeriesDetailPage() {
       setNewComment('');
     }
     setSubmittingComment(false);
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!confirm('Are you sure you want to delete this comment?')) return;
+
+    const { error } = await supabase
+      .from('series_comments')
+      .delete()
+      .eq('id', commentId);
+
+    if (!error) {
+      setComments((prev) => prev.filter((c) => c.id !== commentId));
+    } else {
+      alert(error.message);
+    }
   };
 
   const filteredChapters = useMemo(() => {
@@ -221,7 +310,7 @@ export default function SeriesDetailPage() {
         <div className="absolute inset-0 bg-gradient-to-t from-[#0b0c10] via-black/85 to-transparent" />
 
         <div className="relative max-w-5xl mx-auto px-4 sm:px-6 flex flex-col items-center text-center">
-          {/* Main Cover Poster */}
+          {/* Main Poster */}
           <div className="w-36 sm:w-48 aspect-[3/4.2] rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-neutral-900 mb-4">
             {series.cover_image_url ? (
               <img
@@ -242,7 +331,7 @@ export default function SeriesDetailPage() {
             {series.title}
           </h1>
 
-          {/* MangaFire Metadata Pill Badges */}
+          {/* Metadata Badges */}
           <div className="flex flex-wrap items-center justify-center gap-2 text-[10px] font-bold uppercase mb-3">
             <span className="px-2.5 py-0.5 rounded bg-black/60 text-neutral-300 border border-white/10">
               {series.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
@@ -258,7 +347,7 @@ export default function SeriesDetailPage() {
             </span>
           </div>
 
-          {/* Quick Metrics */}
+          {/* Metrics */}
           <div className="flex items-center gap-4 text-xs font-semibold text-neutral-400 mb-4">
             <span className="flex items-center gap-1 text-white">
               <span className="text-amber-400">★</span> {series.rating || '9.6'}
@@ -268,7 +357,7 @@ export default function SeriesDetailPage() {
             <span>{(series.followed_count || 1400).toLocaleString()} follows</span>
           </div>
 
-          {/* Clickable Genre Pills */}
+          {/* Clickable Genre Chips */}
           <div className="flex flex-wrap justify-center gap-1.5 max-w-xl mb-4">
             {defaultGenres.map((g) => (
               <Link
@@ -288,12 +377,15 @@ export default function SeriesDetailPage() {
           </div>
 
           {/* Synopsis */}
-          <p className="text-xs text-neutral-300 max-w-2xl leading-relaxed mb-6">
+          <p className="text-xs text-neutral-300 max-w-2xl leading-relaxed mb-4">
             {series.synopsis || 'Read all chapters for free on MangaFlow.'}
           </p>
 
-          {/* Action Hub */}
-          <div className="flex items-center gap-3">
+          {/* Star Rating & Review Component */}
+          <StarRatingCard seriesId={series.id} userId={user?.id} />
+
+          {/* Primary Action Buttons */}
+          <div className="flex items-center gap-3 mt-2">
             {firstChapter && (
               <Link
                 href={`/read/${firstChapter.id}`}
@@ -320,7 +412,7 @@ export default function SeriesDetailPage() {
         </div>
       </div>
 
-      {/* Chapters Listing with Embedded Compact Filter Bar */}
+      {/* Chapters Listing with Embedded Search & Sort */}
       <section className="max-w-4xl mx-auto px-4 mt-8">
         <div className="bg-[#12141c] border border-neutral-800/80 rounded-2xl overflow-hidden shadow-xl">
           <div className="p-3.5 bg-[#161824] border-b border-neutral-800 flex flex-wrap items-center justify-between gap-2.5">
@@ -328,7 +420,6 @@ export default function SeriesDetailPage() {
               Chapters ({chapters.length})
             </span>
 
-            {/* Seamless, Non-intrusive Search & Sort */}
             <div className="flex items-center gap-2">
               <input
                 type="text"
@@ -378,7 +469,7 @@ export default function SeriesDetailPage() {
           </div>
         </div>
 
-        {/* Native Comments Section */}
+        {/* Discussion Section */}
         <div className="mt-10 bg-[#12141c] border border-neutral-800/80 rounded-2xl p-4 sm:p-6 shadow-xl">
           <h3 className="text-sm font-bold text-white mb-4">
             Discussion ({comments.length})
@@ -389,7 +480,7 @@ export default function SeriesDetailPage() {
               rows={3}
               value={newComment}
               onChange={(e) => setNewComment(e.target.value)}
-              placeholder={user ? "Write a comment..." : "Sign in to leave a comment..."}
+              placeholder={user ? 'Write a comment...' : 'Sign in to leave a comment...'}
               disabled={!user}
               className="w-full bg-neutral-900 border border-neutral-700/80 rounded-xl p-3 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
             />
@@ -413,12 +504,33 @@ export default function SeriesDetailPage() {
               comments.map((c) => (
                 <div key={c.id} className="pt-3 first:pt-0">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold text-neutral-300">
-                      {c.username}
-                    </span>
-                    <span className="text-[10px] text-neutral-500">
-                      {new Date(c.created_at).toLocaleDateString()}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-neutral-300">
+                        {c.username}
+                      </span>
+                      {user?.id === c.user_id && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                          You
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-[10px] text-neutral-500">
+                        {new Date(c.created_at).toLocaleDateString()}
+                      </span>
+
+                      {user?.id === c.user_id && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteComment(c.id)}
+                          className="text-[11px] text-neutral-500 hover:text-rose-400 transition"
+                          title="Delete comment"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <p className="text-xs text-neutral-400 leading-relaxed">
                     {c.content}
