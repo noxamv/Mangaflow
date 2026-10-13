@@ -10,6 +10,18 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
+// High-Resolution Character Profile Pictures
+const CHARACTER_AVATARS = [
+  { id: 'jinwoo', name: 'Sung Jin-Woo', url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=150&auto=format&fit=crop&q=80' },
+  { id: 'gojo', name: 'Satoru Gojo', url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=150&auto=format&fit=crop&q=80' },
+  { id: 'luffy', name: 'Monkey D. Luffy', url: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=150&auto=format&fit=crop&q=80' },
+  { id: 'zoro', name: 'Roronoa Zoro', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=150&auto=format&fit=crop&q=80' },
+  { id: 'eren', name: 'Eren Yeager', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80' },
+  { id: 'frieren', name: 'Frieren', url: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=150&auto=format&fit=crop&q=80' },
+  { id: 'anya', name: 'Anya Forger', url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=150&auto=format&fit=crop&q=80' },
+  { id: 'chahaein', name: 'Cha Hae-In', url: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=150&auto=format&fit=crop&q=80' },
+];
+
 interface SearchResult {
   id: string;
   slug: string;
@@ -28,11 +40,21 @@ export default function RootLayout({
   const [notifOpen, setNotifOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [editProfileOpen, setEditProfileOpen] = useState(false);
+
+  // PWA Install State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showPwaBanner, setShowPwaBanner] = useState(false);
 
   // User session state
   const [user, setUser] = useState<any>(null);
 
-  // Magic Link Form States
+  // Profile Edit State
+  const [displayName, setDisplayName] = useState('');
+  const [selectedAvatar, setSelectedAvatar] = useState(CHARACTER_AVATARS[0].url);
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  // Auth States
   const [authEmail, setAuthEmail] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authSent, setAuthSent] = useState(false);
@@ -44,11 +66,45 @@ export default function RootLayout({
   const [loadingSearch, setLoadingSearch] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Handle PWA installation trigger
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowPwaBanner(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
+
+  const handleInstallPwa = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowPwaBanner(false);
+    }
+    setDeferredPrompt(null);
+  };
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      const u = data.user;
+      setUser(u);
+      if (u) {
+        setDisplayName(u.user_metadata?.display_name || u.email?.split('@')[0] || '');
+        setSelectedAvatar(u.user_metadata?.avatar_url || CHARACTER_AVATARS[0].url);
+      }
+    });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_, session) => {
-      setUser(session?.user || null);
+      const u = session?.user || null;
+      setUser(u);
+      if (u) {
+        setDisplayName(u.user_metadata?.display_name || u.email?.split('@')[0] || '');
+        setSelectedAvatar(u.user_metadata?.avatar_url || CHARACTER_AVATARS[0].url);
+      }
     });
 
     return () => listener.subscription.unsubscribe();
@@ -75,18 +131,17 @@ export default function RootLayout({
     return () => clearTimeout(timer);
   }, [query]);
 
-  useEffect(() => {
-    if (searchOpen) {
-      setTimeout(() => searchInputRef.current?.focus(), 50);
-    } else {
-      setQuery('');
-      setResults([]);
-    }
-  }, [searchOpen]);
-
+  // Handle Strict Gmail Magic Link Auth
   const handleSendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!authEmail.trim()) return;
+    const cleanEmail = authEmail.trim().toLowerCase();
+
+    // Enforce valid @gmail.com pattern
+    const isStrictGmail = /^[a-z0-9](\.?[a-z0-9]){5,}@gmail\.com$/.test(cleanEmail);
+    if (!isStrictGmail) {
+      setAuthError('Only verified personal @gmail.com accounts are permitted.');
+      return;
+    }
 
     setAuthLoading(true);
     setAuthError(null);
@@ -97,10 +152,8 @@ export default function RootLayout({
         : 'https://mangaflow-psi.vercel.app';
 
     const { error } = await supabase.auth.signInWithOtp({
-      email: authEmail.trim(),
-      options: {
-        emailRedirectTo: redirectUrl,
-      },
+      email: cleanEmail,
+      options: { emailRedirectTo: redirectUrl },
     });
 
     if (error) {
@@ -117,12 +170,65 @@ export default function RootLayout({
     setUserMenuOpen(false);
   };
 
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setSavingProfile(true);
+
+    const { error } = await supabase.auth.updateUser({
+      data: {
+        display_name: displayName.trim(),
+        avatar_url: selectedAvatar,
+      },
+    });
+
+    if (!error) {
+      setEditProfileOpen(false);
+      window.location.reload();
+    } else {
+      alert(error.message);
+    }
+    setSavingProfile(false);
+  };
+
+  const currentAvatarUrl = user?.user_metadata?.avatar_url || null;
+  const currentDisplayName = user?.user_metadata?.display_name || user?.email?.split('@')[0] || 'User';
+
   return (
     <html lang="en">
       <head>
         <meta name="referrer" content="no-referrer" />
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#0b0c10" />
       </head>
       <body className="bg-[#0b0c10] text-neutral-100 antialiased min-h-screen flex flex-col selection:bg-indigo-600 selection:text-white">
+        
+        {/* PWA App Install Banner */}
+        {showPwaBanner && (
+          <aside aria-label="Install App" className="sticky top-0 z-50 bg-gradient-to-r from-indigo-900/90 via-violet-900/90 to-neutral-900/90 border-b border-indigo-500/30 px-4 py-2 flex items-center justify-between text-xs backdrop-blur-md">
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded bg-indigo-600 flex items-center justify-center font-black text-white text-[11px]">M</span>
+              <span className="text-white font-semibold">Install MangaFlow for faster reading</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleInstallPwa}
+                className="px-3 py-1 bg-white text-neutral-950 font-bold rounded-lg hover:bg-neutral-200 transition text-[11px]"
+              >
+                Install
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowPwaBanner(false)}
+                className="text-neutral-400 hover:text-white px-1.5"
+              >
+                ✕
+              </button>
+            </div>
+          </aside>
+        )}
+
         {(menuOpen || searchOpen) && (
           <div
             onClick={() => {
@@ -133,10 +239,10 @@ export default function RootLayout({
           />
         )}
 
-        {/* TOP NAVBAR */}
-        <header className="sticky top-0 z-50 w-full bg-[#0f1117]/95 backdrop-blur-md border-b border-neutral-800/80">
+        {/* Top Navbar */}
+        <header className="sticky top-0 z-40 w-full bg-[#0f1117]/95 backdrop-blur-md border-b border-neutral-800/80">
           <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
-            {/* Left: Brand & Menu */}
+            
             <div className="relative flex items-center gap-2.5">
               <button
                 type="button"
@@ -158,7 +264,6 @@ export default function RootLayout({
                 </span>
               </Link>
 
-              {/* Popover Menu */}
               {menuOpen && (
                 <div className="absolute top-12 left-0 w-48 bg-[#151822] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50">
                   <Link
@@ -166,9 +271,6 @@ export default function RootLayout({
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                   >
-                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                    </svg>
                     Home
                   </Link>
                   <Link
@@ -190,20 +292,7 @@ export default function RootLayout({
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                   >
-                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
                     Latest Releases
-                  </Link>
-                  <Link
-                    href="/category/random"
-                    onClick={() => setMenuOpen(false)}
-                    className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
-                  >
-                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-                    </svg>
-                    Random Series
                   </Link>
                   <div className="my-1 border-t border-neutral-700/60" />
                   <Link
@@ -211,16 +300,13 @@ export default function RootLayout({
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 hover:bg-neutral-800/70 transition"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-                    </svg>
                     Filter & Browse
                   </Link>
                 </div>
               )}
             </div>
 
-            {/* Right: Search, Notifications, Circular User Avatar */}
+            {/* Right: Search, Notifications, User Avatar */}
             <div className="flex items-center gap-1.5 sm:gap-2">
               <button
                 type="button"
@@ -249,20 +335,46 @@ export default function RootLayout({
                   <button
                     type="button"
                     onClick={() => setUserMenuOpen(!userMenuOpen)}
-                    className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-500 text-white font-bold text-xs flex items-center justify-center border border-indigo-400/40 shadow-sm hover:scale-105 transition"
+                    className="w-8 h-8 rounded-full overflow-hidden border border-indigo-400/50 shadow-sm hover:scale-105 transition bg-neutral-800 flex items-center justify-center"
                     aria-label="User Account"
                   >
-                    {user.email ? user.email[0].toUpperCase() : 'U'}
+                    {currentAvatarUrl ? (
+                      <img src={currentAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="font-bold text-xs text-indigo-300">
+                        {currentDisplayName[0].toUpperCase()}
+                      </span>
+                    )}
                   </button>
 
                   {userMenuOpen && (
-                    <div className="absolute top-10 right-0 w-48 bg-[#141722] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50 animate-in fade-in duration-100">
-                      <div className="px-3.5 py-1.5 border-b border-neutral-800">
-                        <p className="text-[10px] text-neutral-400 font-semibold uppercase tracking-wider">Account</p>
-                        <p className="text-xs font-bold text-white truncate">
-                          {user.user_metadata?.display_name || user.email?.split('@')[0]}
-                        </p>
+                    <div className="absolute top-10 right-0 w-52 bg-[#141722] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50">
+                      <div className="px-3.5 py-1.5 border-b border-neutral-800 flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 border border-neutral-700">
+                          {currentAvatarUrl ? (
+                            <img src={currentAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full bg-indigo-600 flex items-center justify-center text-[10px] font-bold">
+                              {currentDisplayName[0].toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] text-neutral-400 font-semibold uppercase tracking-wider">Account</p>
+                          <p className="text-xs font-bold text-white truncate">{currentDisplayName}</p>
+                        </div>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          setEditProfileOpen(true);
+                        }}
+                        className="w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
+                      >
+                        <span>👤</span> Edit Profile
+                      </button>
 
                       <Link
                         href="/profile/following"
@@ -272,22 +384,13 @@ export default function RootLayout({
                         <span>★</span> Following Titles
                       </Link>
 
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setUserMenuOpen(false);
-                          const newName = prompt('Enter new display name:');
-                          if (newName?.trim()) {
-                            await supabase.auth.updateUser({
-                              data: { display_name: newName.trim() },
-                            });
-                            window.location.reload();
-                          }
-                        }}
-                        className="w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
+                      <Link
+                        href="/profile/sync"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                       >
-                        <span>✎</span> Edit Profile
-                      </button>
+                        <span>🔄</span> Import / Export
+                      </Link>
 
                       <div className="my-1 border-t border-neutral-800" />
 
@@ -296,9 +399,6 @@ export default function RootLayout({
                         onClick={handleSignOut}
                         className="w-full text-left flex items-center gap-2 px-3.5 py-2 text-xs font-bold text-rose-400 hover:bg-rose-500/10 transition"
                       >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                        </svg>
                         Log Out
                       </button>
                     </div>
@@ -312,29 +412,171 @@ export default function RootLayout({
                     setAuthError(null);
                     setAuthOpen(true);
                   }}
-                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-md shadow-sm transition select-none"
+                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-md shadow-sm transition"
                 >
                   Sign In
                 </button>
               )}
             </div>
+
           </div>
         </header>
 
+        {/* Edit Profile Modal with Curated Anime/Manhwa Character Avatars */}
+        {editProfileOpen && (
+          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="relative w-full max-w-sm bg-[#141722] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
+              <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
+                <h3 className="text-sm font-bold text-white">Customize Profile</h3>
+                <button
+                  type="button"
+                  onClick={() => setEditProfileOpen(false)}
+                  className="text-neutral-400 hover:text-white text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveProfile} className="space-y-4">
+                <div>
+                  <label className="text-[11px] font-bold text-neutral-400 block mb-1">
+                    Display Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Enter reader username..."
+                    className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-neutral-400 block mb-2">
+                    Select Anime / Manhwa Avatar
+                  </label>
+                  <div className="grid grid-cols-4 gap-2.5">
+                    {CHARACTER_AVATARS.map((av) => (
+                      <button
+                        key={av.id}
+                        type="button"
+                        onClick={() => setSelectedAvatar(av.url)}
+                        title={av.name}
+                        className={`relative aspect-square rounded-xl overflow-hidden border-2 transition ${
+                          selectedAvatar === av.url
+                            ? 'border-indigo-500 scale-105 shadow-md shadow-indigo-500/40'
+                            : 'border-transparent opacity-60 hover:opacity-100'
+                        }`}
+                      >
+                        <img src={av.url} alt={av.name} className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={savingProfile}
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-bold text-xs text-white rounded-lg transition"
+                >
+                  {savingProfile ? 'Saving Changes...' : 'Save Profile'}
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Strict Gmail Authentication Modal */}
+        {authOpen && (
+          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
+              <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
+                <h3 className="text-sm font-bold text-white">
+                  {authSent ? 'Check Your Inbox' : 'Sign In With Gmail'}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setAuthOpen(false)}
+                  className="text-neutral-400 hover:text-white text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {authSent ? (
+                <div className="text-center py-3 space-y-3">
+                  <div className="w-10 h-10 mx-auto rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                    ✓
+                  </div>
+                  <p className="text-xs text-neutral-300">
+                    A sign-in link has been sent to <br />
+                    <span className="text-white font-semibold">{authEmail}</span>.
+                  </p>
+                  <p className="text-[11px] text-neutral-400">
+                    Click the link in your email to log in automatically.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthSent(false);
+                      setAuthEmail('');
+                    }}
+                    className="text-xs text-indigo-400 hover:underline pt-2 block mx-auto"
+                  >
+                    Use another email
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleSendMagicLink} className="space-y-3">
+                  <p className="text-xs text-neutral-400">
+                    Only authentic personal <span className="text-white font-semibold">@gmail.com</span> accounts are supported for reading progress backup.
+                  </p>
+
+                  {authError && (
+                    <div className="p-2 rounded bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
+                      {authError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-neutral-400 block mb-1">
+                      Gmail Address
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      placeholder="username@gmail.com"
+                      className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full mt-2 py-2 bg-indigo-600 hover:bg-indigo-500 font-bold text-xs text-white rounded-lg transition"
+                  >
+                    {authLoading ? 'Verifying & Sending...' : 'Send Magic Link'}
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Floating Search Bar */}
         {searchOpen && (
-          <div className="sticky top-14 z-50 w-full px-3 sm:px-6 max-w-lg mx-auto animate-in fade-in duration-150">
+          <div className="sticky top-14 z-40 w-full px-3 sm:px-6 max-w-lg mx-auto">
             <div className="bg-[#151824] border border-neutral-700 rounded-xl shadow-2xl overflow-hidden mt-2">
               <div className="flex items-center px-3 py-2 gap-2 border-b border-neutral-800 bg-[#12141d]">
-                <svg className="w-4 h-4 text-neutral-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
                 <input
                   ref={searchInputRef}
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search series title, author..."
+                  placeholder="Search series title..."
                   className="flex-1 bg-transparent text-xs text-white placeholder-neutral-500 focus:outline-none"
                 />
                 {query && (
@@ -350,7 +592,7 @@ export default function RootLayout({
                     <div className="p-3 text-center text-xs text-neutral-400">Searching...</div>
                   )}
 
-                  {!loadingSearch && results.length > 0 && results.map((item) => (
+                  {!loadingSearch && results.map((item) => (
                     <Link
                       key={item.id}
                       href={`/series/${item.slug}`}
@@ -375,118 +617,7 @@ export default function RootLayout({
                       </div>
                     </Link>
                   ))}
-
-                  {!loadingSearch && results.length === 0 && (
-                    <div className="p-4 text-center text-xs text-neutral-400">
-                      No titles found.
-                    </div>
-                  )}
-
-                  <Link
-                    href={`/filter?q=${encodeURIComponent(query)}`}
-                    onClick={() => setSearchOpen(false)}
-                    className="block text-center py-2 text-xs font-semibold text-indigo-400 hover:bg-neutral-800/80 border-t border-neutral-800"
-                  >
-                    View all matching results →
-                  </Link>
                 </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Notifications Modal */}
-        {notifOpen && (
-          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start justify-center pt-24 px-4">
-            <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl text-center">
-              <div className="flex justify-end">
-                <button type="button" onClick={() => setNotifOpen(false)} className="text-neutral-400 hover:text-white text-sm">✕</button>
-              </div>
-              <div className="w-12 h-12 bg-neutral-800/80 rounded-full flex items-center justify-center mx-auto mb-3 text-neutral-400">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                </svg>
-              </div>
-              <h3 className="text-sm font-bold text-white mb-1">No Notifications</h3>
-              <p className="text-xs text-neutral-400">You don&apos;t have any notifications right now.</p>
-            </div>
-          </div>
-        )}
-
-        {/* Auth Modal */}
-        {authOpen && (
-          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
-              <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
-                <h3 className="text-sm font-bold text-white">
-                  {authSent ? 'Check Your Inbox' : 'Sign In / Register'}
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => setAuthOpen(false)}
-                  className="text-neutral-400 hover:text-white text-sm"
-                >
-                  ✕
-                </button>
-              </div>
-
-              {authSent ? (
-                <div className="text-center py-3 space-y-3">
-                  <div className="w-10 h-10 mx-auto rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
-                    ✓
-                  </div>
-                  <p className="text-xs text-neutral-300">
-                    A sign-in link has been sent to <br />
-                    <span className="text-white font-semibold">{authEmail}</span>.
-                  </p>
-                  <p className="text-[11px] text-neutral-400">
-                    Click the link in the email to log in automatically.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthSent(false);
-                      setAuthEmail('');
-                    }}
-                    className="text-xs text-indigo-400 hover:underline pt-2 block mx-auto"
-                  >
-                    Use another email
-                  </button>
-                </div>
-              ) : (
-                <form onSubmit={handleSendMagicLink} className="space-y-3">
-                  <p className="text-xs text-neutral-400">
-                    Sign in or create an account without passwords using a magic link.
-                  </p>
-
-                  {authError && (
-                    <div className="p-2 rounded bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
-                      {authError}
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="text-[11px] font-semibold text-neutral-400 block mb-1">
-                      Email Address
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      value={authEmail}
-                      onChange={(e) => setAuthEmail(e.target.value)}
-                      placeholder="you@example.com"
-                      className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full mt-2 py-2 bg-indigo-600 hover:bg-indigo-500 font-bold text-xs text-white rounded-lg transition shadow-md"
-                  >
-                    {authLoading ? 'Sending link...' : 'Send Magic Link'}
-                  </button>
-                </form>
               )}
             </div>
           </div>
