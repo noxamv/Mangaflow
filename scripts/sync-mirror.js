@@ -14,15 +14,28 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const MIRROR_API = axios.create({
   baseURL: 'https://api.comick.fun',
   timeout: 15000,
-  headers: { 'User-Agent': 'MangaFlowOneRunBackfill/2.0' }
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  }
 });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function runCompleteBackfill() {
-  console.log('⚡ Starting Complete Single-Run Catalog Backfill...');
+function sanitizeSearchQuery(title) {
+  return title
+    .replace(/[“”"']/g, '') // Remove curly and straight quotes
+    .replace(/\([^)]*\)/g, '') // Remove brackets/parentheses
+    .replace(/\[[^\]]*\]/g, '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Strip accents (e.g. Nán -> Nan)
+    .replace(/[-_:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  // 1. Fetch ALL series currently in your database (no small limits)
+async function runCompleteBackfill() {
+  console.log('⚡ Starting Refined Catalog Chapter Backfill...');
+
   const { data: allSeries, error: sErr } = await supabase
     .from('series')
     .select('id, title, slug, source_url')
@@ -33,51 +46,54 @@ async function runCompleteBackfill() {
     process.exit(1);
   }
 
-  console.log(`📋 Total series queued for full backfill: ${allSeries.length}`);
+  console.log(`📋 Total series queued: ${allSeries.length}`);
 
   let totalChaptersFilled = 0;
   let currentIndex = 0;
 
   for (const series of allSeries) {
     currentIndex++;
-    const cleanTitle = series.title.replace(/\([^)]*\)/g, '').trim();
-    console.log(`\n[${currentIndex}/${allSeries.length}] Processing: "${cleanTitle}"...`);
+    const cleanQuery = sanitizeSearchQuery(series.title);
+    console.log(`\n[${currentIndex}/${allSeries.length}] Checking: "${series.title}" -> Search: "${cleanQuery}"`);
 
     try {
-      let hid = series.source_url;
+      let hid = null;
 
-      // Resolve Comic HID if not saved as a valid mirror ID
-      if (!hid || hid.length > 32) {
-        let retries = 3;
+      // 1. If source_url is already a 32-char Comick HID
+      if (series.source_url && series.source_url.length <= 32 && !series.source_url.includes('-')) {
+        hid = series.source_url;
+      }
+
+      // 2. Otherwise search Comick with clean query
+      if (!hid) {
+        let attempts = 0;
         let searchResults = null;
 
-        while (retries > 0) {
+        while (attempts < 2) {
           try {
             const res = await MIRROR_API.get('/v1.0/search', {
-              params: { q: cleanTitle, limit: 1 }
+              params: { q: cleanQuery, limit: 3 }
             });
             searchResults = res.data;
             break;
           } catch (err) {
-            if (err.response?.status === 429) {
-              console.warn('   ⚠️ Rate-limited on search. Waiting 5 seconds...');
-              await sleep(5000);
-              retries--;
-            } else {
-              break;
-            }
+            attempts++;
+            await sleep(1500);
           }
         }
 
-        if (!searchResults || searchResults.length === 0) {
-          console.log(`   └─ ⏩ Not found on mirror. Skipping.`);
-          continue;
+        if (searchResults && searchResults.length > 0) {
+          hid = searchResults[0].hid;
         }
-
-        hid = searchResults[0].hid;
       }
 
-      // 2. Fetch existing chapters in DB to compare against
+      if (!hid) {
+        console.log(`   └─ ⏩ Not found on mirror. Skipping.`);
+        await sleep(200);
+        continue;
+      }
+
+      // 3. Fetch existing chapter numbers in DB
       const { data: existingChapters, error: cErr } = await supabase
         .from('chapters')
         .select('chapter_number')
@@ -90,11 +106,11 @@ async function runCompleteBackfill() {
 
       const existingSet = new Set((existingChapters || []).map((c) => Number(c.chapter_number)));
 
-      // 3. Paginate through ALL English chapters on the mirror
+      // 4. Paginate all English chapters from mirror
       let page = 1;
       let mirrorChapters = [];
 
-      while (page <= 30) { // Crawls up to 3,000 chapters per series
+      while (page <= 25) {
         try {
           const { data: chRes } = await MIRROR_API.get(`/comic/${hid}/chapters`, {
             params: { lang: 'en', page, limit: 100 }
@@ -105,18 +121,13 @@ async function runCompleteBackfill() {
 
           if (batch.length < 100) break;
           page++;
-          await sleep(120);
-        } catch (fetchErr) {
-          if (fetchErr.response?.status === 429) {
-            console.warn('   ⚠️ Rate limit reached on chapter pagination. Cooling down 4s...');
-            await sleep(4000);
-            continue;
-          }
+          await sleep(150);
+        } catch {
           break;
         }
       }
 
-      // 4. Calculate missing chapters
+      // 5. Build missing chapter list
       const missingPayload = [];
       const seen = new Set();
 
@@ -137,7 +148,7 @@ async function runCompleteBackfill() {
         }
       }
 
-      // 5. Batch-upsert missing chapters into Supabase
+      // 6. Save missing chapters to Supabase
       if (missingPayload.length > 0) {
         for (let i = 0; i < missingPayload.length; i += 200) {
           const chunk = missingPayload.slice(i, i + 200);
@@ -146,19 +157,18 @@ async function runCompleteBackfill() {
           });
         }
         totalChaptersFilled += missingPayload.length;
-        console.log(`   └─ ✅ Inserted ${missingPayload.length} missing chapters (Total: ${existingSet.size + missingPayload.length}).`);
+        console.log(`   └─ ✅ Added ${missingPayload.length} missing chapters! (Total now: ${existingSet.size + missingPayload.length})`);
       } else {
-        console.log(`   └─ ⚡ Up to date (${existingSet.size} chapters already indexed).`);
+        console.log(`   └─ ⚡ Up to date (${existingSet.size} chapters present).`);
       }
 
-      // Prevent provider rate limiting between titles
-      await sleep(250);
+      await sleep(350);
     } catch (err) {
-      console.error(`   └─ Failed to process "${cleanTitle}":`, err.message);
+      console.error(`   └─ Error processing "${series.title}":`, err.message);
     }
   }
 
-  console.log(`\n🎉 Backfill complete! Added ${totalChaptersFilled} missing chapters across your catalog.`);
+  console.log(`\n🎉 Backfill complete! Added ${totalChaptersFilled} missing chapters.`);
 }
 
 runCompleteBackfill();
