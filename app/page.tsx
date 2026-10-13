@@ -26,7 +26,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
     if (items.length <= 1) return;
     const interval = setInterval(() => {
       setIndex((prev) => (prev + 1) % items.length);
-    }, 3000); // 3.0 seconds per slide
+    }, 3000);
     return () => clearInterval(interval);
   }, [items.length]);
 
@@ -199,29 +199,63 @@ function ShareBar() {
   );
 }
 
-// Default export makes app/page.tsx a valid module
 export default function HomePage() {
-  const [series, setSeries] = useState<SeriesItem[]>([]);
+  const [trendingList, setTrendingList] = useState<SeriesItem[]>([]);
+  const [popularList, setPopularList] = useState<SeriesItem[]>([]);
+  const [viewedList, setViewedList] = useState<SeriesItem[]>([]);
+  const [latestList, setLatestList] = useState<SeriesItem[]>([]);
+  const [randomList, setRandomList] = useState<SeriesItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function loadData() {
-      const { data } = await supabase
+      // 1. Trending: Sorted by Rating
+      const { data: trendingData } = await supabase
         .from('series')
         .select('id, slug, title, synopsis, cover_image_url, reading_mode')
-        .order('created_at', { ascending: false });
-      setSeries(data || []);
+        .order('rating', { ascending: false, nullsFirst: false })
+        .limit(12);
+
+      // 2. Popular: Sorted by Followed Count
+      const { data: popData } = await supabase
+        .from('series')
+        .select('id, slug, title, synopsis, cover_image_url, reading_mode')
+        .order('followed_count', { ascending: false, nullsFirst: false })
+        .limit(12);
+
+      // 3. Most Viewed: Sorted by Views Count
+      const { data: viewsData } = await supabase
+        .from('series')
+        .select('id, slug, title, synopsis, cover_image_url, reading_mode')
+        .order('views_count', { ascending: false, nullsFirst: false })
+        .limit(12);
+
+      // 4. Latest: Sorted by Created Date
+      const { data: latestData } = await supabase
+        .from('series')
+        .select('id, slug, title, synopsis, cover_image_url, reading_mode')
+        .order('created_at', { ascending: false })
+        .limit(12);
+
+      // 5. Random: Gather and shuffle
+      const { data: allForRandom } = await supabase
+        .from('series')
+        .select('id, slug, title, synopsis, cover_image_url, reading_mode')
+        .limit(60);
+
+      const randomized = (allForRandom || []).sort(() => 0.5 - Math.random()).slice(0, 12);
+
+      setTrendingList(trendingData || []);
+      setPopularList(popData || []);
+      setViewedList(viewsData || []);
+      setLatestList(latestData || []);
+      setRandomList(randomized);
       setLoading(false);
     }
     loadData();
   }, []);
 
-  const spotlightItems = series.slice(0, 7);
-  const trending = series.slice(0, 10);
-  const popular = series.slice(10, 20);
-  const mostViewed = series.slice(20, 30);
-  const randomPicks = [...series].sort(() => 0.5 - Math.random()).slice(0, 10);
-  const latestReleases = series.slice(30, 40);
+  const spotlightItems = trendingList.slice(0, 7);
 
   const HorizontalRow = ({
     title,
@@ -300,11 +334,11 @@ export default function HomePage() {
         <ShareBar />
       </div>
 
-      <HorizontalRow title="Trending Series" viewAllHref="/category/trending" items={trending} badgeColor="bg-amber-500" />
-      <HorizontalRow title="Popular Series" viewAllHref="/category/popular" items={popular} badgeColor="bg-indigo-500" />
-      <HorizontalRow title="Most Viewed Series" viewAllHref="/category/views" items={mostViewed} badgeColor="bg-rose-500" />
-      <HorizontalRow title="Random Picks" viewAllHref="/category/random" items={randomPicks} badgeColor="bg-emerald-500" />
-      <HorizontalRow title="Latest Releases" viewAllHref="/category/latest" items={latestReleases} badgeColor="bg-cyan-500" />
+      <HorizontalRow title="Trending Series" viewAllHref="/category/trending" items={trendingList} badgeColor="bg-amber-500" />
+      <HorizontalRow title="Popular Series" viewAllHref="/category/popular" items={popularList} badgeColor="bg-indigo-500" />
+      <HorizontalRow title="Most Viewed Series" viewAllHref="/category/views" items={viewedList} badgeColor="bg-rose-500" />
+      <HorizontalRow title="Random Picks" viewAllHref="/category/random" items={randomList} badgeColor="bg-emerald-500" />
+      <HorizontalRow title="Latest Releases" viewAllHref="/category/latest" items={latestList} badgeColor="bg-cyan-500" />
     </main>
   );
 }
