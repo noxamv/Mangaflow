@@ -14,23 +14,22 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const api = axios.create({
   baseURL: 'https://api.mangadex.org',
   timeout: 15000,
-  headers: { 'User-Agent': 'MangaFlowEngine/5.0' }
+  headers: { 'User-Agent': 'MangaFlowIndexer/5.0' }
 });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function runMassiveIngestion() {
-  console.log('⚡ Ingesting 150+ Series with Full Chapters...');
+async function runScaleIngestion() {
+  console.log('⚡ Starting Mass Library Scaling Engine...');
 
-  // Paginate 5 pages of 30 titles = 150 total series
-  for (let offset = 0; offset <= 120; offset += 30) {
+  // Ingest across 6 pages of 35 titles (210 titles per run)
+  for (let offset = 0; offset <= 175; offset += 35) {
     try {
-      console.log(`\n📦 Batch offset: ${offset}...`);
+      console.log(`\n📦 Ingesting catalog page at offset: ${offset}...`);
       const { data: res } = await api.get('/manga', {
         params: {
-          limit: 30,
+          limit: 35,
           offset: offset,
-          'originalLanguage[]': ['ja', 'ko', 'zh'],
           'order[followedCount]': 'desc',
           'includes[]': ['cover_art'],
           'contentRating[]': ['safe', 'suggestive'],
@@ -75,10 +74,10 @@ async function runMassiveIngestion() {
           .single();
 
         if (sErr || !seriesRow) continue;
-        console.log(`✅ Saved: ${title}`);
-        await sleep(250);
+        console.log(`✅ Synced: ${title}`);
+        await sleep(220);
 
-        // Fetch up to 500 chapters across 5 pages
+        // Fetch up to 500 English chapters across paginated feed requests
         let allChapters = [];
         for (let chOffset = 0; chOffset < 500; chOffset += 100) {
           try {
@@ -121,15 +120,15 @@ async function runMassiveIngestion() {
           await supabase.from('chapters').upsert(chapterRows, {
             onConflict: 'series_id, chapter_number'
           });
-          console.log(`   └─ ${chapterRows.length} chapters indexed.`);
+          console.log(`   └─ ${chapterRows.length} total chapters indexed.`);
         }
       }
     } catch (err) {
-      console.error(`Batch offset ${offset} failed:`, err.message);
+      console.error(`Page ${offset} failed:`, err.message);
     }
   }
 
-  console.log('\n🚀 Ingestion finished.');
+  console.log('\n🚀 Mass scaling run complete.');
 }
 
-runMassiveIngestion();
+runScaleIngestion();
