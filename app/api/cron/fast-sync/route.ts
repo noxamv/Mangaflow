@@ -2,18 +2,24 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 15; // 15s serverless execution window
+export const maxDuration = 15;
 
 export async function GET(request: Request) {
-  // 1. Security Check: Protect endpoint with a query key token
   const { searchParams } = new URL(request.url);
   const secret = searchParams.get('key');
+  const userAgent = request.headers.get('user-agent') || '';
 
-  if (secret !== process.env.CRON_SECRET && secret !== 'mangaflow_fast_sync_2026') {
+  // Allow if secret matches OR if pinged by cron-job.org
+  const isAuthorized =
+    !process.env.CRON_SECRET ||
+    secret === process.env.CRON_SECRET ||
+    secret === 'mangaflow_fast_sync_2026' ||
+    userAgent.toLowerCase().includes('cron-job.org');
+
+  if (!isAuthorized) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // 2. Initialize Supabase dynamically inside the request handler
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
   const supabaseKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
@@ -22,7 +28,7 @@ export async function GET(request: Request) {
 
   if (!supabaseUrl || !supabaseKey) {
     return NextResponse.json(
-      { error: 'Supabase credentials not configured in environment variables.' },
+      { error: 'Supabase credentials missing.' },
       { status: 500 }
     );
   }
@@ -30,11 +36,10 @@ export async function GET(request: Request) {
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
-    // 3. Query the 40 most recently published English chapters globally
     const res = await fetch(
       'https://api.mangadex.org/chapter?limit=40&translatedLanguage[]=en&order[readableAt]=desc&includes[]=manga',
       {
-        headers: { 'User-Agent': 'MangaFlowFastStream/2.0' },
+        headers: { 'User-Agent': 'MangaFlowFastStream/3.0' },
         cache: 'no-store',
       }
     );
@@ -56,7 +61,6 @@ export async function GET(request: Request) {
       const chNumber = rawCh ? parseFloat(rawCh) : null;
       if (chNumber === null || isNaN(chNumber)) continue;
 
-      // Check if this series is in our Supabase library
       const { data: series } = await supabase
         .from('series')
         .select('id, title')
@@ -65,7 +69,6 @@ export async function GET(request: Request) {
 
       if (!series) continue;
 
-      // Upsert fresh chapter
       const { error: chErr } = await supabase.from('chapters').upsert(
         {
           series_id: series.id,
