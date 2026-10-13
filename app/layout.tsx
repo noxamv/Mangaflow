@@ -89,9 +89,8 @@ export default function RootLayout({
               </div>
             </div>
 
-            {/* Right: Search Icon Button, Notification Icon Button, Sign Up Button */}
+            {/* Right: Search Icon, Notifications, Sign Up Button */}
             <div className="flex items-center gap-1 sm:gap-2">
-              {/* Search Icon Trigger */}
               <label
                 htmlFor="search-modal-toggle"
                 className="cursor-pointer p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/60 rounded-lg transition"
@@ -102,7 +101,6 @@ export default function RootLayout({
                 </svg>
               </label>
 
-              {/* Notification Icon Trigger */}
               <label
                 htmlFor="notif-modal-toggle"
                 className="cursor-pointer p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/60 rounded-lg transition"
@@ -113,7 +111,6 @@ export default function RootLayout({
                 </svg>
               </label>
 
-              {/* Sign Up Button Trigger */}
               <label
                 htmlFor="auth-modal-toggle"
                 className="cursor-pointer px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-md shadow-sm transition select-none"
@@ -138,7 +135,6 @@ export default function RootLayout({
                 type="text"
                 name="q"
                 placeholder="Search series title, author, genre..."
-                autoFocus
                 className="flex-1 bg-neutral-900 border border-neutral-700 focus:border-indigo-500 focus:outline-none rounded-xl px-4 py-2 text-xs text-white"
               />
               <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition">
@@ -173,7 +169,7 @@ export default function RootLayout({
               <h3 className="text-sm font-bold text-white">Create an Account</h3>
               <label htmlFor="auth-modal-toggle" className="cursor-pointer text-neutral-400 hover:text-white text-sm">✕</label>
             </div>
-            <form className="space-y-3" onSubmit={(e) => e.preventDefault()}>
+            <div className="space-y-3">
               <div>
                 <label className="text-[11px] font-semibold text-neutral-400 block mb-1">Username</label>
                 <input type="text" placeholder="Reader123" className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white" />
@@ -189,7 +185,7 @@ export default function RootLayout({
               <button type="button" className="w-full mt-2 py-2 bg-indigo-600 hover:bg-indigo-500 font-bold text-xs text-white rounded-lg transition">
                 Create Account
               </button>
-            </form>
+            </div>
           </div>
         </div>
 
