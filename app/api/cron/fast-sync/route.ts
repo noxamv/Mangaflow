@@ -51,22 +51,26 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: true, added: 0 });
     }
 
-    // 2. Gather unique MangaDex IDs from incoming feed
-    const mangaIdToChapters = new Map<string, any[]>();
-    for (const ch of recentChapters) {
+    // 2. Gather unique MangaDex IDs using a standard object
+    const mangaIdToChapters: Record<string, any[]> = {};
+    for (let i = 0; i < recentChapters.length; i++) {
+      const ch = recentChapters[i];
       const mangaRel = ch.relationships?.find((r: any) => r.type === 'manga');
       if (!mangaRel) continue;
 
       const mId = mangaRel.id;
-      if (!mangaIdToChapters.has(mId)) {
-        mangaIdToChapters.set(mId, []);
+      if (!mangaIdToChapters[mId]) {
+        mangaIdToChapters[mId] = [];
       }
-      mangaIdToChapters.get(mId)!.push(ch);
+      mangaIdToChapters[mId].push(ch);
     }
 
-    const uniqueMangaIds = Array.from(mangaIdToChapters.keys());
+    const uniqueMangaIds = Object.keys(mangaIdToChapters);
+    if (uniqueMangaIds.length === 0) {
+      return NextResponse.json({ success: true, added: 0 });
+    }
 
-    // 3. ONE fast single query to find matching series in our library
+    // 3. ONE fast single query to find matching series in library
     const { data: matchedSeries } = await supabase
       .from('series')
       .select('id, source_url')
@@ -81,15 +85,23 @@ export async function GET(request: Request) {
       });
     }
 
-    // 4. Map series_id and prepare batch upsert payload
-    const seriesMap = new Map(matchedSeries.map((s) => [s.source_url, s.id]));
-    const chapterRows: any[] = [];
+    // 4. Map series_id and prepare batch upsert payload using standard object lookup
+    const seriesMap: Record<string, string> = {};
+    for (let i = 0; i < matchedSeries.length; i++) {
+      seriesMap[matchedSeries[i].source_url] = matchedSeries[i].id;
+    }
 
-    for (const [mangaDexId, chapters] of mangaIdToChapters.entries()) {
-      const seriesId = seriesMap.get(mangaDexId);
+    const chapterRows: any[] = [];
+    const keys = Object.keys(mangaIdToChapters);
+
+    for (let i = 0; i < keys.length; i++) {
+      const mangaDexId = keys[i];
+      const seriesId = seriesMap[mangaDexId];
       if (!seriesId) continue;
 
-      for (const ch of chapters) {
+      const chapters = mangaIdToChapters[mangaDexId];
+      for (let j = 0; j < chapters.length; j++) {
+        const ch = chapters[j];
         const rawCh = ch.attributes?.chapter;
         const chNumber = rawCh ? parseFloat(rawCh) : null;
         if (chNumber === null || isNaN(chNumber)) continue;
@@ -104,7 +116,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // 5. ONE fast single batch upsert
+    // 5. ONE batch upsert
     let addedCount = 0;
     if (chapterRows.length > 0) {
       const { error: upsertErr } = await supabase.from('chapters').upsert(chapterRows, {
