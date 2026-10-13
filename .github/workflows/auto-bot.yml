@@ -16,10 +16,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
-      - name: Fast Install Dependencies
-        run: npm ci --omit=dev || npm install @supabase/supabase-js axios --no-audit --no-fund
+      - name: Install Ingestion Libraries
+        run: npm install --no-package-lock --no-audit --no-fund @supabase/supabase-js axios
 
       - name: Sync MangaDex Catalog
         env:
