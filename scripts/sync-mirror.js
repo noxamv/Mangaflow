@@ -11,148 +11,139 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const MIRROR_API = axios.create({
-  baseURL: 'https://api.comick.fun',
-  timeout: 20000,
+const MANGADEX_API = axios.create({
+  baseURL: 'https://api.mangadex.org',
+  timeout: 15000,
   headers: {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-    'Accept': 'application/json'
+    'User-Agent': 'MangaFlowOfficialCatalogFiller/3.0'
   }
 });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function runDirectUuidBackfill() {
-  console.log('⚡ Starting Direct UUID Mapping Backfill...');
+async function runOfficialBacklogSync() {
+  console.log('⚡ Starting Complete MangaDex Backlog Chapter Ingestion...');
 
+  // 1. Fetch series from database
   const { data: allSeries, error: sErr } = await supabase
     .from('series')
     .select('id, title, slug, source_url')
     .order('id', { ascending: true });
 
   if (sErr || !allSeries || allSeries.length === 0) {
-    console.error('Failed to retrieve series:', sErr?.message);
+    console.error('Failed to load series:', sErr?.message);
     process.exit(1);
   }
 
-  console.log(`📋 Total series in database: ${allSeries.length}`);
+  console.log(`📋 Queued ${allSeries.length} series for full chapter crawl.`);
 
   let totalChaptersFilled = 0;
   let currentIndex = 0;
 
   for (const series of allSeries) {
     currentIndex++;
-    console.log(`\n[${currentIndex}/${allSeries.length}] Resolving: "${series.title}"`);
+    console.log(`\n[${currentIndex}/${allSeries.length}] Scanning: "${series.title}"`);
+
+    // Extract MangaDex UUID
+    let mangaUuid = null;
+    if (series.source_url && series.source_url.includes('-')) {
+      const match = series.source_url.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      if (match) mangaUuid = match[0];
+    }
+
+    if (!mangaUuid && series.slug && series.slug.includes('-')) {
+      const match = series.slug.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+      if (match) mangaUuid = match[0];
+    }
+
+    if (!mangaUuid) {
+      console.log(`   └─ ⏩ No MangaDex UUID found in source_url/slug. Skipping.`);
+      continue;
+    }
 
     try {
-      let hid = null;
-
-      // Method 1: Check if source_url contains MangaDex UUID
-      if (series.source_url && series.source_url.includes('-')) {
-        try {
-          const mappingRes = await MIRROR_API.get(`/comic/${series.source_url}`);
-          if (mappingRes.data?.comic?.hid) {
-            hid = mappingRes.data.comic.hid;
-            console.log(`   └─ 🎯 Direct UUID match found: HID [${hid}]`);
-          }
-        } catch (e) {}
-      }
-
-      // Method 2: Slug lookup fallback
-      if (!hid && series.slug) {
-        try {
-          const slugRes = await MIRROR_API.get(`/comic/${series.slug}`);
-          if (slugRes.data?.comic?.hid) {
-            hid = slugRes.data.comic.hid;
-            console.log(`   └─ 🎯 Slug match found: HID [${hid}]`);
-          }
-        } catch (e) {}
-      }
-
-      // Method 3: First words search fallback
-      if (!hid) {
-        const simpleName = series.title
-          .replace(/[^\w\s]/gi, '')
-          .split(' ')
-          .slice(0, 3)
-          .join(' ')
-          .trim();
-
-        if (simpleName.length > 2) {
-          try {
-            const searchRes = await MIRROR_API.get('/v1.0/search', {
-              params: { q: simpleName, limit: 1 }
-            });
-            if (searchRes.data && searchRes.data.length > 0) {
-              hid = searchRes.data[0].hid;
-              console.log(`   └─ 🔍 Search match found for "${simpleName}": HID [${hid}]`);
-            }
-          } catch (e) {}
-        }
-      }
-
-      if (!hid) {
-        console.log(`   └─ ⏩ No mirror mapping found. Skipping.`);
-        await sleep(200);
-        continue;
-      }
-
-      // Fetch existing chapters
+      // 2. Fetch existing chapters currently recorded in Supabase
       const { data: dbChapters, error: cErr } = await supabase
         .from('chapters')
         .select('chapter_number')
         .eq('series_id', series.id);
 
       if (cErr) {
-        console.error(`   └─ DB read failed:`, cErr.message);
+        console.error(`   └─ DB error:`, cErr.message);
         continue;
       }
 
       const existingSet = new Set((dbChapters || []).map((c) => Number(c.chapter_number)));
 
-      // Crawl all English chapters from mirror
-      let page = 1;
-      let mirrorChapters = [];
+      // 3. Paginate through ALL English chapters on MangaDex
+      let offset = 0;
+      const limit = 100;
+      let totalFetched = 0;
+      const missingPayload = [];
+      const seenThisRun = new Set();
 
-      while (page <= 25) {
-        try {
-          const { data: chRes } = await MIRROR_API.get(`/comic/${hid}/chapters`, {
-            params: { lang: 'en', page, limit: 100 }
-          });
+      while (true) {
+        let res = null;
+        let attempts = 0;
 
-          const batch = chRes.chapters || [];
-          mirrorChapters.push(...batch);
+        while (attempts < 3) {
+          try {
+            res = await MANGADEX_API.get(`/manga/${mangaUuid}/feed`, {
+              params: {
+                translatedLanguage: ['en'],
+                order: { chapter: 'asc' },
+                limit: limit,
+                offset: offset
+              }
+            });
+            break;
+          } catch (err) {
+            attempts++;
+            if (err.response?.status === 429) {
+              console.log('   ⚠️ MangaDex rate limit reached. Waiting 3s...');
+              await sleep(3000);
+            } else {
+              await sleep(1000);
+            }
+          }
+        }
 
-          if (batch.length < 100) break;
-          page++;
-          await sleep(150);
-        } catch {
+        if (!res || !res.data || !res.data.data || res.data.data.length === 0) {
           break;
         }
-      }
 
-      // Filter missing chapters
-      const missingPayload = [];
-      const seen = new Set();
+        const chapters = res.data.data;
+        totalFetched += chapters.length;
 
-      for (const ch of mirrorChapters) {
-        const num = ch.chap ? parseFloat(ch.chap) : null;
-        if (num === null || isNaN(num) || seen.has(num)) continue;
-        seen.add(num);
+        for (const ch of chapters) {
+          const chapStr = ch.attributes?.chapter;
+          if (!chapStr) continue;
 
-        if (!existingSet.has(num)) {
-          missingPayload.push({
-            series_id: series.id,
-            chapter_number: num,
-            title: ch.title || `Chapter ${num}`,
-            source: ch.hid,
-            source_provider: 'mirror',
-            panel_urls: []
-          });
+          const num = parseFloat(chapStr);
+          if (isNaN(num) || seenThisRun.has(num)) continue;
+          seenThisRun.add(num);
+
+          if (!existingSet.has(num)) {
+            missingPayload.push({
+              series_id: series.id,
+              chapter_number: num,
+              title: ch.attributes?.title || `Chapter ${num}`,
+              source: ch.id,
+              source_provider: 'mangadex',
+              panel_urls: []
+            });
+          }
         }
+
+        if (totalFetched >= res.data.total || chapters.length < limit) {
+          break;
+        }
+
+        offset += limit;
+        await sleep(250); // MangaDex allows 5 req/sec safely
       }
 
-      // Upsert missing chapters
+      // 4. Upsert missing chapters in chunks
       if (missingPayload.length > 0) {
         for (let i = 0; i < missingPayload.length; i += 200) {
           const chunk = missingPayload.slice(i, i + 200);
@@ -161,18 +152,18 @@ async function runDirectUuidBackfill() {
           });
         }
         totalChaptersFilled += missingPayload.length;
-        console.log(`   └─ ✅ Inserted ${missingPayload.length} chapters (Total: ${existingSet.size + missingPayload.length}).`);
+        console.log(`   └─ ✅ Added ${missingPayload.length} missing chapters (Total in DB: ${existingSet.size + missingPayload.length}).`);
       } else {
-        console.log(`   └─ ⚡ Complete (${existingSet.size} chapters in DB).`);
+        console.log(`   └─ ⚡ Complete (${existingSet.size} chapters already up to date).`);
       }
 
-      await sleep(350);
+      await sleep(250);
     } catch (err) {
       console.error(`   └─ Error on "${series.title}":`, err.message);
     }
   }
 
-  console.log(`\n🎉 Backfill finished! Successfully inserted ${totalChaptersFilled} missing chapters.`);
+  console.log(`\n🎉 Finished! Successfully added ${totalChaptersFilled} missing chapters directly from MangaDex.`);
 }
 
-runDirectUuidBackfill();
+runOfficialBacklogSync();
