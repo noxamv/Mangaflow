@@ -9,12 +9,12 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
-const CATEGORY_MAP: Record<string, { title: string; subtitle: string; orderCol: string }> = {
-  trending: { title: 'Trending Series', subtitle: 'The most popular manga and manhwa readers are enjoying today.', orderCol: 'created_at' },
-  popular: { title: 'Popular Series', subtitle: 'All-time favorites with highest community followings.', orderCol: 'created_at' },
-  views: { title: 'Most Viewed', subtitle: 'Top records by total chapter reads.', orderCol: 'created_at' },
-  latest: { title: 'Latest Releases', subtitle: 'Freshly indexed chapters and newly serialized stories.', orderCol: 'created_at' },
-  random: { title: 'Random Series', subtitle: 'Discover unexpected titles across every genre.', orderCol: 'created_at' },
+const CATEGORY_MAP: Record<string, { title: string; subtitle: string; sortField: string }> = {
+  trending: { title: 'Trending Series', subtitle: 'The highest-rated trending stories across manga and manhwa.', sortField: 'rating' },
+  popular: { title: 'Popular Series', subtitle: 'All-time fan favorites with the highest followings.', sortField: 'followed_count' },
+  views: { title: 'Most Viewed', subtitle: 'Leading records sorted by total community chapter views.', sortField: 'views_count' },
+  latest: { title: 'Latest Releases', subtitle: 'Freshly indexed series and chapters.', sortField: 'created_at' },
+  random: { title: 'Random Series', subtitle: 'Discover unexpected picks across all genres.', sortField: 'created_at' },
 };
 
 interface PageProps {
@@ -27,23 +27,23 @@ export default async function CategoryPage({ params }: PageProps) {
 
   if (!config) notFound();
 
-  const { data: seriesList } = await supabase
-    .from('series')
-    .select('id, slug, title, cover_image_url, reading_mode')
-    .order(config.orderCol, { ascending: false })
-    .limit(60);
+  let query = supabase.from('series').select('id, slug, title, cover_image_url, reading_mode');
 
-  const series = seriesList || [];
+  if (slug === 'random') {
+    const { data: all } = await query.limit(80);
+    var series = (all || []).sort(() => 0.5 - Math.random()).slice(0, 40);
+  } else {
+    const { data: sorted } = await query.order(config.sortField, { ascending: false, nullsFirst: false }).limit(40);
+    var series = sorted || [];
+  }
 
   return (
     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      {/* Category Heading Banner */}
       <div className="border-b border-neutral-800 pb-4">
         <h1 className="text-xl sm:text-2xl font-black text-white">{config.title}</h1>
         <p className="text-xs text-neutral-400 mt-1">{config.subtitle}</p>
       </div>
 
-      {/* Grid Display */}
       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
         {series.map((item) => (
           <Link
