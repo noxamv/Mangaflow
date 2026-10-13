@@ -1,34 +1,112 @@
-        // Fetch up to 300 English chapters per series (pages of 100)
+const { createClient } = require('@supabase/supabase-js');
+const axios = require('axios');
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Missing Supabase environment secrets.');
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const api = axios.create({
+  baseURL: 'https://api.mangadex.org',
+  timeout: 15000,
+  headers: { 'User-Agent': 'MangaFlowEngine/5.0' }
+});
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function runMassiveIngestion() {
+  console.log('⚡ Ingesting 150+ Series with Full Chapters...');
+
+  // Paginate 5 pages of 30 titles = 150 total series
+  for (let offset = 0; offset <= 120; offset += 30) {
+    try {
+      console.log(`\n📦 Batch offset: ${offset}...`);
+      const { data: res } = await api.get('/manga', {
+        params: {
+          limit: 30,
+          offset: offset,
+          'originalLanguage[]': ['ja', 'ko', 'zh'],
+          'order[followedCount]': 'desc',
+          'includes[]': ['cover_art'],
+          'contentRating[]': ['safe', 'suggestive'],
+          hasAvailableChapters: 'true'
+        }
+      });
+
+      for (const item of res.data || []) {
+        const mangaId = item.id;
+        const title = item.attributes.title.en || Object.values(item.attributes.title)[0] || 'Untitled';
+        const synopsis = item.attributes.description?.en || 'Read online on Manga Flow.';
+        const slug = (item.attributes.title.en || mangaId)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+          .slice(0, 60);
+
+        const origLang = item.attributes.originalLanguage;
+        const readingMode = origLang === 'ko' || origLang === 'zh' ? 'webtoon' : 'manga';
+
+        let coverUrl = '';
+        const coverRel = item.relationships?.find((r) => r.type === 'cover_art');
+        if (coverRel?.attributes?.fileName) {
+          coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${coverRel.attributes.fileName}.512.jpg`;
+        }
+
+        const { data: seriesRow, error: sErr } = await supabase
+          .from('series')
+          .upsert(
+            {
+              slug,
+              title,
+              synopsis: synopsis.slice(0, 350),
+              cover_image_url: coverUrl,
+              reading_mode: readingMode,
+              source: 'mangadex',
+              source_url: mangaId
+            },
+            { onConflict: 'slug' }
+          )
+          .select()
+          .single();
+
+        if (sErr || !seriesRow) continue;
+        console.log(`✅ Saved: ${title}`);
+        await sleep(250);
+
+        // Fetch up to 500 chapters across 5 pages
         let allChapters = [];
-        for (let chOffset = 0; chOffset < 300; chOffset += 100) {
-          const { data: feed } = await api.get(`/manga/${mangaId}/feed`, {
-            params: {
-              limit: 100,
-              offset: chOffset,
-              'translatedLanguage[]': ['en'],
-              'order[chapter]': 'asc',
-              includeEmptyPages: 0
-            }
-          });
-
-          const batch = feed.data || [];
-          allChapters.push(...batch);
-
-          // Stop if we received fewer than 100 (reached the end of chapters)
-          if (batch.length < 100) break;
-          await sleep(200);
+        for (let chOffset = 0; chOffset < 500; chOffset += 100) {
+          try {
+            const { data: feed } = await api.get(`/manga/${mangaId}/feed`, {
+              params: {
+                limit: 100,
+                offset: chOffset,
+                'translatedLanguage[]': ['en'],
+                'order[chapter]': 'asc'
+              }
+            });
+            const batch = feed.data || [];
+            allChapters.push(...batch);
+            if (batch.length < 100) break;
+            await sleep(200);
+          } catch {
+            break;
+          }
         }
 
         const chapterRows = [];
-        const seenChapters = new Set();
+        const seen = new Set();
 
         for (const ch of allChapters) {
           const rawNum = ch.attributes.chapter;
           const chNumber = rawNum ? parseFloat(rawNum) : null;
-
-          if (chNumber === null || isNaN(chNumber)) continue;
-          if (seenChapters.has(chNumber)) continue;
-          seenChapters.add(chNumber);
+          if (chNumber === null || isNaN(chNumber) || seen.has(chNumber)) continue;
+          seen.add(chNumber);
 
           chapterRows.push({
             series_id: seriesRow.id,
@@ -43,5 +121,15 @@
           await supabase.from('chapters').upsert(chapterRows, {
             onConflict: 'series_id, chapter_number'
           });
-          console.log(`   └─ Indexed ${chapterRows.length} total chapters.`);
+          console.log(`   └─ ${chapterRows.length} chapters indexed.`);
         }
+      }
+    } catch (err) {
+      console.error(`Batch offset ${offset} failed:`, err.message);
+    }
+  }
+
+  console.log('\n🚀 Ingestion finished.');
+}
+
+runMassiveIngestion();
