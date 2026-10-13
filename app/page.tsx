@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { createClient } from '@supabase/supabase-js';
 
 // Revalidate page data every 60 seconds
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
