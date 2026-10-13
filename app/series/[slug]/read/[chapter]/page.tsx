@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -22,7 +22,7 @@ async function fetchLivePanels(chapterId: string): Promise<string[]> {
     const data = await res.json();
     const baseUrl = data.baseUrl;
     const hash = data.chapter.hash;
-    // Standard quality files
+    // Standard quality files, fallback to dataSaver
     const files = data.chapter.data || data.chapter.dataSaver || [];
 
     return files.map((file: string) => `${baseUrl}/data/${hash}/${file}`);
@@ -56,7 +56,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
 
   if (!currentChapter) notFound();
 
-  // 3. Prev & Next chapter navigation
+  // 3. Navigation controls
   const { data: allChapters } = await supabase
     .from('chapters')
     .select('chapter_number')
@@ -68,7 +68,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
   const prevChapter = currentIndex > 0 ? chapters[currentIndex - 1].chapter_number : null;
   const nextChapter = currentIndex < chapters.length - 1 ? chapters[currentIndex + 1].chapter_number : null;
 
-  // 4. Resolve panel URLs (Hybrid fetch)
+  // 4. Resolve panels
   let panels: string[] = currentChapter.panel_urls || [];
   if (panels.length === 0 && currentChapter.source) {
     panels = await fetchLivePanels(currentChapter.source);
@@ -120,11 +120,11 @@ export default async function ChapterReaderPage({ params }: PageProps) {
         </div>
       </header>
 
-      {/* Reader Container (Continuous Webtoon Scroll) */}
-      <section className="w-full max-w-2xl flex flex-col items-center py-2 px-0">
+      {/* Reader Container (Vertical Webtoon Scroll) */}
+      <section className="w-full max-w-2xl flex flex-col items-center py-2 px-0 bg-black">
         {panels.length === 0 ? (
           <div className="p-16 text-center text-sm text-neutral-400 bg-neutral-900/40 rounded-xl mt-8 border border-neutral-800">
-            <p>Panels are currently resolving from the source network.</p>
+            <p>Panels are resolving from the source network.</p>
             <p className="text-xs text-neutral-500 mt-2">Please refresh in a moment.</p>
           </div>
         ) : (
@@ -134,16 +134,15 @@ export default async function ChapterReaderPage({ params }: PageProps) {
                 src={url}
                 alt={`Panel ${idx + 1}`}
                 referrerPolicy="no-referrer"
-                crossOrigin="anonymous"
-                loading="eager"
-                className="w-full h-auto block select-none pointer-events-none"
+                loading={idx < 3 ? 'eager' : 'lazy'}
+                className="w-full h-auto block select-none"
               />
             </div>
           ))
         )}
       </section>
 
-      {/* Bottom Chapter Switcher */}
+      {/* Bottom Controls */}
       <footer className="w-full max-w-2xl py-10 px-4 flex items-center justify-between border-t border-neutral-800/80 my-8">
         <div>
           <Link
