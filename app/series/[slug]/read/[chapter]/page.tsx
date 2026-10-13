@@ -22,7 +22,6 @@ async function fetchLivePanels(chapterId: string): Promise<string[]> {
     const data = await res.json();
     const baseUrl = data.baseUrl;
     const hash = data.chapter.hash;
-    // dataSaver uses WebP/compressed formats that load smoothly on mobile without rate-limit drops
     const files = data.chapter.dataSaver || data.chapter.data || [];
     const folder = data.chapter.dataSaver ? 'data-saver' : 'data';
 
@@ -77,7 +76,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
 
   return (
     <main className="min-h-screen bg-[#070709] text-neutral-100 flex flex-col items-center">
-      {/* Floating Reader Header Bar */}
+      {/* Top Bar */}
       <header className="sticky top-0 z-50 w-full bg-[#0a0a0c]/90 backdrop-blur-md border-b border-neutral-800/80 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link
@@ -121,7 +120,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
         </div>
       </header>
 
-      {/* Reader Container (Vertical Webtoon Scroll) */}
+      {/* Reader Body */}
       <section className="w-full max-w-2xl flex flex-col items-center py-2 px-0 bg-black">
         {panels.length === 0 ? (
           <div className="p-16 text-center text-sm text-neutral-400 bg-neutral-900/40 rounded-xl mt-8 border border-neutral-800">
@@ -130,12 +129,11 @@ export default async function ChapterReaderPage({ params }: PageProps) {
           </div>
         ) : (
           panels.map((url, idx) => (
-            <div key={idx} className="w-full bg-black flex justify-center min-h-[200px]">
+            <div key={idx} className="w-full bg-black flex justify-center min-h-[300px]">
               <img
                 src={url}
                 alt={`Panel ${idx + 1}`}
-                referrerPolicy="no-referrer"
-                loading="lazy"
+                loading={idx < 2 ? 'eager' : 'lazy'}
                 decoding="async"
                 className="w-full h-auto block select-none pointer-events-none"
               />
@@ -144,7 +142,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
         )}
       </section>
 
-      {/* Bottom Controls */}
+      {/* Bottom Footer */}
       <footer className="w-full max-w-2xl py-10 px-4 flex items-center justify-between border-t border-neutral-800/80 my-8">
         <div>
           <Link
