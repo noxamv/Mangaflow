@@ -78,7 +78,16 @@ export default function RootLayout({
   const [loadingSearch, setLoadingSearch] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // PWA listener
+  // Service Worker Registration for Offline PWA Capabilities
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
+      navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.warn('Service Worker registration skipped:', err);
+      });
+    }
+  }, []);
+
+  // PWA install trigger listener
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -178,7 +187,7 @@ export default function RootLayout({
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Strict Gmail Authentication
+  // Strict Gmail Magic Link verification
   const handleSendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanEmail = authEmail.trim().toLowerCase();
@@ -249,12 +258,12 @@ export default function RootLayout({
       </head>
       <body className="bg-[#0b0c10] text-neutral-100 antialiased min-h-screen flex flex-col selection:bg-indigo-600 selection:text-white">
         
-        {/* PWA App Install Banner */}
+        {/* PWA App Install Slide-Down Banner */}
         {showPwaBanner && (
           <aside aria-label="Install App" className="sticky top-0 z-50 bg-gradient-to-r from-indigo-900/90 via-violet-900/90 to-neutral-900/90 border-b border-indigo-500/30 px-4 py-2 flex items-center justify-between text-xs backdrop-blur-md">
             <div className="flex items-center gap-2">
               <span className="w-6 h-6 rounded bg-indigo-600 flex items-center justify-center font-black text-white text-[11px]">M</span>
-              <span className="text-white font-semibold">Install MangaFlow for faster reading</span>
+              <span className="text-white font-semibold">Install MangaFlow for faster offline reading</span>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -365,7 +374,7 @@ export default function RootLayout({
                 </svg>
               </button>
 
-              {/* Notification Bell Button with Badge */}
+              {/* Notification Bell Button with Unread Pulse */}
               <button
                 type="button"
                 onClick={() => setNotifOpen(true)}
@@ -595,7 +604,7 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* Auth Modal */}
+        {/* Strict Gmail Authentication Modal */}
         {authOpen && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
