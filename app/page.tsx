@@ -1,9 +1,9 @@
 import Link from 'next/link';
-import Image from 'next/image';
 import { createClient } from '@supabase/supabase-js';
-import SpotlightSlider from '../components/SpotlightSlider';
+import SpotlightSliderClient from './SpotlightSliderClient';
+import ShareBarClient from './ShareBarClient';
 
-// Revalidate in the background every 60 seconds (prevents slow cold starts)
+// Cache page at edge and refresh in background every 60s (Instant loads, 0s delay)
 export const revalidate = 60;
 
 const supabase = createClient(
@@ -11,115 +11,144 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
-interface SeriesRow {
+export interface SeriesItem {
   id: string;
-  title: string;
   slug: string;
-  cover_url?: string;
-  cover_image_url?: string;
-  description?: string;
-  synopsis?: string;
-  reading_mode?: string;
+  title: string;
+  synopsis: string | null;
+  cover_image_url: string | null;
+  reading_mode: string | null;
 }
 
-async function getFeaturedSeries(): Promise<SeriesRow[]> {
+async function getHomeData() {
   try {
-    const { data, error } = await supabase
-      .from('series')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(30);
+    // Run all 5 queries simultaneously instead of one by one
+    const [trendingRes, popRes, viewsRes, latestRes, randomRes] = await Promise.all([
+      supabase
+        .from('series')
+        .select('id, slug, title, synopsis, cover_image_url, reading_mode')
+        .order('rating', { ascending: false, nullsFirst: false })
+        .limit(12),
+      supabase
+        .from('series')
+        .select('id, slug, title, synopsis, cover_image_url, reading_mode')
+        .order('followed_count', { ascending: false, nullsFirst: false })
+        .limit(12),
+      supabase
+        .from('series')
+        .select('id, slug, title, synopsis, cover_image_url, reading_mode')
+        .order('views_count', { ascending: false, nullsFirst: false })
+        .limit(12),
+      supabase
+        .from('series')
+        .select('id, slug, title, synopsis, cover_image_url, reading_mode')
+        .order('created_at', { ascending: false })
+        .limit(12),
+      supabase
+        .from('series')
+        .select('id, slug, title, synopsis, cover_image_url, reading_mode')
+        .limit(50),
+    ]);
 
-    if (error || !data) return [];
-    return data as SeriesRow[];
+    const randomPool = randomRes.data || [];
+    const randomized = [...randomPool].sort(() => 0.5 - Math.random()).slice(0, 12);
+
+    return {
+      trendingList: trendingRes.data || [],
+      popularList: popRes.data || [],
+      viewedList: viewsRes.data || [],
+      latestList: latestRes.data || [],
+      randomList: randomized,
+    };
   } catch {
-    return [];
+    return {
+      trendingList: [],
+      popularList: [],
+      viewedList: [],
+      latestList: [],
+      randomList: [],
+    };
   }
 }
 
-export default async function HomePage() {
-  const seriesList = await getFeaturedSeries();
+function HorizontalRow({
+  title,
+  viewAllHref,
+  items,
+  badgeColor,
+}: {
+  title: string;
+  viewAllHref: string;
+  items: SeriesItem[];
+  badgeColor: string;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between px-3 sm:px-0">
+        <div className="flex items-center gap-2">
+          <span className={`w-1.5 h-4 ${badgeColor} rounded-sm`}></span>
+          <h2 className="text-sm sm:text-base font-bold text-white tracking-tight">{title}</h2>
+        </div>
+        <Link href={viewAllHref} className="text-[11px] font-semibold text-neutral-400 hover:text-indigo-400 transition">
+          View all →
+        </Link>
+      </div>
 
-  // Map to the shape expected by SpotlightSlider
-  const spotlightItems = seriesList.slice(0, 5).map((item) => ({
-    ...item,
-    cover_image_url: item.cover_image_url || item.cover_url || '',
-    synopsis: item.synopsis || item.description || '',
-    reading_mode: item.reading_mode || 'webtoon',
-  }));
+      <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 px-3 sm:px-0 scroll-smooth">
+        {items.map((item) => (
+          <Link
+            key={item.id}
+            href={`/series/${item.slug}`}
+            className="shrink-0 w-28 sm:w-36 flex flex-col group"
+          >
+            <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition">
+              {item.cover_image_url ? (
+                <img
+                  src={item.cover_image_url}
+                  alt={item.title}
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                  className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-600">
+                  No Cover
+                </div>
+              )}
+              <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-md text-neutral-200 border border-white/10">
+                {item.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
+              </span>
+            </div>
+            <h3 className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition">
+              {item.title}
+            </h3>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export default async function HomePage() {
+  const { trendingList, popularList, viewedList, latestList, randomList } = await getHomeData();
+  const spotlightItems = trendingList.slice(0, 7);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 pb-16">
-      {/* Featured Spotlight */}
-      {spotlightItems.length > 0 && (
-        <section className="w-full mb-8">
-          <SpotlightSlider items={spotlightItems as any} />
-        </section>
-      )}
+    <main className="max-w-7xl mx-auto px-0 sm:px-6 lg:px-8 py-4 space-y-6 sm:space-y-8">
+      <div className="px-3 sm:px-0">
+        <SpotlightSliderClient items={spotlightItems} />
+      </div>
 
-      {/* Main Catalog Grid */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold tracking-tight text-white">
-            Latest Releases
-          </h1>
-          <Link
-            href="/browse"
-            className="text-sm font-semibold text-indigo-400 hover:text-indigo-300 transition-colors"
-          >
-            View All →
-          </Link>
-        </div>
+      <div className="px-3 sm:px-0">
+        <ShareBarClient />
+      </div>
 
-        {seriesList.length === 0 ? (
-          <div className="text-center py-20 text-slate-400">
-            No series available yet. Check back soon!
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 sm:gap-6">
-            {seriesList.map((item) => {
-              const cover = item.cover_image_url || item.cover_url;
-              const desc = item.synopsis || item.description;
-
-              return (
-                <Link
-                  key={item.id}
-                  href={`/series/${item.slug}`}
-                  className="group relative flex flex-col overflow-hidden rounded-xl bg-slate-900 border border-slate-800 hover:border-indigo-500/50 transition-all duration-300 hover:shadow-lg hover:shadow-indigo-500/10"
-                >
-                  <div className="aspect-[3/4] w-full overflow-hidden bg-slate-800 relative">
-                    {cover ? (
-                      <Image
-                        src={cover}
-                        alt={item.title}
-                        fill
-                        sizes="(max-width: 640px) 50vw, (max-width: 1024px) 25vw, 16vw"
-                        className="object-cover transition-transform duration-300 group-hover:scale-105"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-slate-500 text-xs px-2 text-center">
-                        No Cover
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="p-3 flex flex-col flex-grow">
-                    <h2 className="text-sm font-semibold text-slate-200 line-clamp-1 group-hover:text-indigo-400 transition-colors">
-                      {item.title}
-                    </h2>
-                    {desc && (
-                      <p className="mt-1 text-xs text-slate-400 line-clamp-2">
-                        {desc}
-                      </p>
-                    )}
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </section>
+      <HorizontalRow title="Trending Series" viewAllHref="/category/trending" items={trendingList} badgeColor="bg-amber-500" />
+      <HorizontalRow title="Popular Series" viewAllHref="/category/popular" items={popularList} badgeColor="bg-indigo-500" />
+      <HorizontalRow title="Most Viewed Series" viewAllHref="/category/views" items={viewedList} badgeColor="bg-rose-500" />
+      <HorizontalRow title="Random Picks" viewAllHref="/category/random" items={randomList} badgeColor="bg-emerald-500" />
+      <HorizontalRow title="Latest Releases" viewAllHref="/category/latest" items={latestList} badgeColor="bg-cyan-500" />
     </main>
   );
 }
