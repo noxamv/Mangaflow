@@ -57,7 +57,7 @@ export default function RootLayout({
                 </span>
               </Link>
 
-              {/* MangaFire-Style Compact Popover Menu */}
+              {/* Compact Popover Menu */}
               <div className="absolute top-12 left-0 w-56 bg-[#151822] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50 hidden peer-checked/menu:block transition-all">
                 <Link href="/" className="flex items-center gap-3 px-4 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition">
                   <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
@@ -89,7 +89,7 @@ export default function RootLayout({
               </div>
             </div>
 
-            {/* Right: Search Icon, Notifications, Sign Up Button */}
+            {/* Right: Search, Notifications, Sign Up */}
             <div className="flex items-center gap-1 sm:gap-2">
               <label
                 htmlFor="search-modal-toggle"
