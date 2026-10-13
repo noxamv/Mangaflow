@@ -225,7 +225,7 @@ export default function HomePage() {
 
   useEffect(() => {
     async function loadData() {
-      // Parallelize queries using Promise.all to cut wait time significantly
+      // Parallelize queries using Promise.all to load all rows simultaneously
       const [trendingRes, popRes, viewsRes, latestRes, randomRes] = await Promise.all([
         supabase
           .from('series')
