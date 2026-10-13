@@ -13,28 +13,17 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const MIRROR_API = axios.create({
   baseURL: 'https://api.comick.fun',
-  timeout: 15000,
+  timeout: 20000,
   headers: {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'application/json'
   }
 });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function sanitizeSearchQuery(title) {
-  return title
-    .replace(/[“”"']/g, '') // Remove curly and straight quotes
-    .replace(/\([^)]*\)/g, '') // Remove brackets/parentheses
-    .replace(/\[[^\]]*\]/g, '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // Strip accents (e.g. Nán -> Nan)
-    .replace(/[-_:]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-async function runCompleteBackfill() {
-  console.log('⚡ Starting Refined Catalog Chapter Backfill...');
+async function runDirectUuidBackfill() {
+  console.log('⚡ Starting Direct UUID Mapping Backfill...');
 
   const { data: allSeries, error: sErr } = await supabase
     .from('series')
@@ -46,55 +35,70 @@ async function runCompleteBackfill() {
     process.exit(1);
   }
 
-  console.log(`📋 Total series queued: ${allSeries.length}`);
+  console.log(`📋 Total series in database: ${allSeries.length}`);
 
   let totalChaptersFilled = 0;
   let currentIndex = 0;
 
   for (const series of allSeries) {
     currentIndex++;
-    const cleanQuery = sanitizeSearchQuery(series.title);
-    console.log(`\n[${currentIndex}/${allSeries.length}] Checking: "${series.title}" -> Search: "${cleanQuery}"`);
+    console.log(`\n[${currentIndex}/${allSeries.length}] Resolving: "${series.title}"`);
 
     try {
       let hid = null;
 
-      // 1. If source_url is already a 32-char Comick HID
-      if (series.source_url && series.source_url.length <= 32 && !series.source_url.includes('-')) {
-        hid = series.source_url;
-      }
-
-      // 2. Otherwise search Comick with clean query
-      if (!hid) {
-        let attempts = 0;
-        let searchResults = null;
-
-        while (attempts < 2) {
-          try {
-            const res = await MIRROR_API.get('/v1.0/search', {
-              params: { q: cleanQuery, limit: 3 }
-            });
-            searchResults = res.data;
-            break;
-          } catch (err) {
-            attempts++;
-            await sleep(1500);
+      // Method 1: Check if source_url contains MangaDex UUID
+      if (series.source_url && series.source_url.includes('-')) {
+        try {
+          const mappingRes = await MIRROR_API.get(`/comic/${series.source_url}`);
+          if (mappingRes.data?.comic?.hid) {
+            hid = mappingRes.data.comic.hid;
+            console.log(`   └─ 🎯 Direct UUID match found: HID [${hid}]`);
           }
-        }
+        } catch (e) {}
+      }
 
-        if (searchResults && searchResults.length > 0) {
-          hid = searchResults[0].hid;
+      // Method 2: Slug lookup fallback
+      if (!hid && series.slug) {
+        try {
+          const slugRes = await MIRROR_API.get(`/comic/${series.slug}`);
+          if (slugRes.data?.comic?.hid) {
+            hid = slugRes.data.comic.hid;
+            console.log(`   └─ 🎯 Slug match found: HID [${hid}]`);
+          }
+        } catch (e) {}
+      }
+
+      // Method 3: First words search fallback
+      if (!hid) {
+        const simpleName = series.title
+          .replace(/[^\w\s]/gi, '')
+          .split(' ')
+          .slice(0, 3)
+          .join(' ')
+          .trim();
+
+        if (simpleName.length > 2) {
+          try {
+            const searchRes = await MIRROR_API.get('/v1.0/search', {
+              params: { q: simpleName, limit: 1 }
+            });
+            if (searchRes.data && searchRes.data.length > 0) {
+              hid = searchRes.data[0].hid;
+              console.log(`   └─ 🔍 Search match found for "${simpleName}": HID [${hid}]`);
+            }
+          } catch (e) {}
         }
       }
 
       if (!hid) {
-        console.log(`   └─ ⏩ Not found on mirror. Skipping.`);
+        console.log(`   └─ ⏩ No mirror mapping found. Skipping.`);
         await sleep(200);
         continue;
       }
 
-      // 3. Fetch existing chapter numbers in DB
-      const { data: existingChapters, error: cErr } = await supabase
+      // Fetch existing chapters
+      const { data: dbChapters, error: cErr } = await supabase
         .from('chapters')
         .select('chapter_number')
         .eq('series_id', series.id);
@@ -104,9 +108,9 @@ async function runCompleteBackfill() {
         continue;
       }
 
-      const existingSet = new Set((existingChapters || []).map((c) => Number(c.chapter_number)));
+      const existingSet = new Set((dbChapters || []).map((c) => Number(c.chapter_number)));
 
-      // 4. Paginate all English chapters from mirror
+      // Crawl all English chapters from mirror
       let page = 1;
       let mirrorChapters = [];
 
@@ -127,7 +131,7 @@ async function runCompleteBackfill() {
         }
       }
 
-      // 5. Build missing chapter list
+      // Filter missing chapters
       const missingPayload = [];
       const seen = new Set();
 
@@ -148,7 +152,7 @@ async function runCompleteBackfill() {
         }
       }
 
-      // 6. Save missing chapters to Supabase
+      // Upsert missing chapters
       if (missingPayload.length > 0) {
         for (let i = 0; i < missingPayload.length; i += 200) {
           const chunk = missingPayload.slice(i, i + 200);
@@ -157,18 +161,18 @@ async function runCompleteBackfill() {
           });
         }
         totalChaptersFilled += missingPayload.length;
-        console.log(`   └─ ✅ Added ${missingPayload.length} missing chapters! (Total now: ${existingSet.size + missingPayload.length})`);
+        console.log(`   └─ ✅ Inserted ${missingPayload.length} chapters (Total: ${existingSet.size + missingPayload.length}).`);
       } else {
-        console.log(`   └─ ⚡ Up to date (${existingSet.size} chapters present).`);
+        console.log(`   └─ ⚡ Complete (${existingSet.size} chapters in DB).`);
       }
 
       await sleep(350);
     } catch (err) {
-      console.error(`   └─ Error processing "${series.title}":`, err.message);
+      console.error(`   └─ Error on "${series.title}":`, err.message);
     }
   }
 
-  console.log(`\n🎉 Backfill complete! Added ${totalChaptersFilled} missing chapters.`);
+  console.log(`\n🎉 Backfill finished! Successfully inserted ${totalChaptersFilled} missing chapters.`);
 }
 
-runCompleteBackfill();
+runDirectUuidBackfill();
