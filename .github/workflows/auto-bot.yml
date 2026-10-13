@@ -1,28 +1,185 @@
-name: Manga Flow Auto-Updater
+const { createClient } = require('@supabase/supabase-js');
+const axios = require('axios');
 
-on:
-  schedule:
-    - cron: '0 */4 * * *'
-  workflow_dispatch:
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-jobs:
-  update-catalog:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Missing Supabase credentials.');
+  process.exit(1);
+}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-      - name: Install Ingestion Libraries
-        run: npm install --no-package-lock --no-audit --no-fund @supabase/supabase-js axios
+const MIRROR_API = axios.create({
+  baseURL: 'https://api.comick.fun',
+  timeout: 20000,
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'application/json'
+  }
+});
 
-      - name: Run Complete Catalog Chapter Backfill
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node scripts/sync-mirror.js
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function runDirectUuidBackfill() {
+  console.log('⚡ Starting Direct UUID Mapping Backfill...');
+
+  const { data: allSeries, error: sErr } = await supabase
+    .from('series')
+    .select('id, title, slug, source_url')
+    .order('id', { ascending: true });
+
+  if (sErr || !allSeries || allSeries.length === 0) {
+    console.error('Failed to retrieve series:', sErr?.message);
+    process.exit(1);
+  }
+
+  console.log(`📋 Total series in database: ${allSeries.length}`);
+
+  let totalChaptersFilled = 0;
+  let currentIndex = 0;
+
+  for (const series of allSeries) {
+    currentIndex++;
+    console.log(`\n[${currentIndex}/${allSeries.length}] Resolving: "${series.title}"`);
+
+    try {
+      let hid = null;
+
+      // Method 1: If source_url is a MangaDex UUID, query comic directly by mapping
+      if (series.source_url && series.source_url.includes('-')) {
+        try {
+          // Comick maintains a direct mapping endpoint for MangaDex UUIDs
+          const mappingRes = await MIRROR_API.get(`/comic/${series.source_url}`);
+          if (mappingRes.data?.comic?.hid) {
+            hid = mappingRes.data.comic.hid;
+            console.log(`   └─ 🎯 Direct UUID match found: HID [${hid}]`);
+          }
+        } catch (e) {
+          // Fall through to Method 2 if direct UUID lookup 404s
+        }
+      }
+
+      // Method 2: Fall back to slug lookup
+      if (!hid && series.slug) {
+        try {
+          const slugRes = await MIRROR_API.get(`/comic/${series.slug}`);
+          if (slugRes.data?.comic?.hid) {
+            hid = slugRes.data.comic.hid;
+            console.log(`   └─ 🎯 Slug match found: HID [${hid}]`);
+          }
+        } catch (e) {
+          // Slug didn't match directly
+        }
+      }
+
+      // Method 3: Clean first-3-words search fallback
+      if (!hid) {
+        const simpleName = series.title
+          .replace(/[^\w\s]/gi, '')
+          .split(' ')
+          .slice(0, 3)
+          .join(' ')
+          .trim();
+
+        if (simpleName.length > 2) {
+          try {
+            const searchRes = await MIRROR_API.get('/v1.0/search', {
+              params: { q: simpleName, limit: 1 }
+            });
+            if (searchRes.data && searchRes.data.length > 0) {
+              hid = searchRes.data[0].hid;
+              console.log(`   └─ 🔍 Search match found for "${simpleName}": HID [${hid}]`);
+            }
+          } catch (e) {
+            // Search blocked or empty
+          }
+        }
+      }
+
+      if (!hid) {
+        console.log(`   └─ ⏩ No mirror mapping found. Skipping.`);
+        await sleep(200);
+        continue;
+      }
+
+      // 1. Fetch current chapters in DB
+      const { data: dbChapters, error: cErr } = await supabase
+        .from('chapters')
+        .select('chapter_number')
+        .eq('series_id', series.id);
+
+      if (cErr) {
+        console.error(`   └─ DB read failed:`, cErr.message);
+        continue;
+      }
+
+      const existingSet = new Set((dbChapters || []).map((c) => Number(c.chapter_number)));
+
+      // 2. Fetch all chapters from mirror
+      let page = 1;
+      let mirrorChapters = [];
+
+      while (page <= 25) {
+        try {
+          const { data: chRes } = await MIRROR_API.get(`/comic/${hid}/chapters`, {
+            params: { lang: 'en', page, limit: 100 }
+          });
+
+          const batch = chRes.chapters || [];
+          mirrorChapters.push(...batch);
+
+          if (batch.length < 100) break;
+          page++;
+          await sleep(150);
+        } catch {
+          break;
+        }
+      }
+
+      // 3. Collect missing chapters
+      const missingPayload = [];
+      const seen = new Set();
+
+      for (const ch of mirrorChapters) {
+        const num = ch.chap ? parseFloat(ch.chap) : null;
+        if (num === null || isNaN(num) || seen.has(num)) continue;
+        seen.add(num);
+
+        if (!existingSet.has(num)) {
+          missingPayload.push({
+            series_id: series.id,
+            chapter_number: num,
+            title: ch.title || `Chapter ${num}`,
+            source: ch.hid,
+            source_provider: 'mirror',
+            panel_urls: []
+          });
+        }
+      }
+
+      // 4. Batch upsert into Supabase
+      if (missingPayload.length > 0) {
+        for (let i = 0; i < missingPayload.length; i += 200) {
+          const chunk = missingPayload.slice(i, i + 200);
+          await supabase.from('chapters').upsert(chunk, {
+            onConflict: 'series_id, chapter_number'
+          });
+        }
+        totalChaptersFilled += missingPayload.length;
+        console.log(`   └─ ✅ Inserted ${missingPayload.length} chapters (Total: ${existingSet.size + missingPayload.length}).`);
+      } else {
+        console.log(`   └─ ⚡ Complete (${existingSet.size} chapters in DB).`);
+      }
+
+      await sleep(350);
+    } catch (err) {
+      console.error(`   └─ Error on "${series.title}":`, err.message);
+    }
+  }
+
+  console.log(`\n🎉 Backfill finished! Successfully inserted ${totalChaptersFilled} missing chapters.`);
+}
+
+runDirectUuidBackfill();
