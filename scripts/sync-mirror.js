@@ -11,154 +11,180 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Public aggregator mirror endpoint
 const MIRROR_API = axios.create({
   baseURL: 'https://api.comick.fun',
   timeout: 15000,
-  headers: { 'User-Agent': 'MangaFlowMirrorSync/1.0' }
+  headers: { 'User-Agent': 'MangaFlowAutoGapFiller/2.0' }
 });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Priority manhwa & webcomic titles that require complete backlogs
-const PRIORITY_SEARCHES = [
+// Fallback search priorities if library is fresh
+const SEED_TITLES = [
   'Lookism',
   'Shadow Slave',
   'Solo Leveling',
   'Omniscient Reader',
   'Nano Machine',
-  'The Beginning After The End',
+  'One Piece',
+  'Jujutsu Kaisen',
   'Tower of God',
-  'Wind Breaker',
-  'Pick Me Up, Infinite Gacha',
-  'Magic Emperor'
+  'Wind Breaker'
 ];
 
-async function syncMirrorCatalog() {
-  console.log('⚡ Starting Secondary Mirror Catalog Ingestion...');
+async function fillCatalogGaps() {
+  console.log('⚡ Starting Universal Gap-Filler Engine...');
 
-  for (const query of PRIORITY_SEARCHES) {
+  // 1. Fetch series from Supabase to inspect their chapter health
+  const { data: allSeries, error } = await supabase
+    .from('series')
+    .select('id, title, slug')
+    .order('followed_count', { ascending: false })
+    .limit(80);
+
+  if (error || !allSeries) {
+    console.error('Failed to read series table:', error?.message);
+    return;
+  }
+
+  // Combine database series titles with initial priority seeds
+  const targetTitles = new Set([
+    ...SEED_TITLES,
+    ...allSeries.map((s) => s.title)
+  ]);
+
+  console.log(`📋 Inspecting ${targetTitles.size} priority titles for missing chapters...`);
+
+  for (const rawTitle of targetTitles) {
+    // Clean up title for mirror search (remove volume tags, sub-brackets)
+    const cleanTitle = rawTitle.replace(/\([^)]*\)/g, '').trim();
+
     try {
-      console.log(`\n🔍 Searching Mirror for: "${query}"...`);
-
-      // 1. Search series in mirror index
+      console.log(`\n🔍 Searching mirror for: "${cleanTitle}"...`);
       const { data: searchResults } = await MIRROR_API.get('/v1.0/search', {
-        params: { q: query, limit: 5 }
+        params: { q: cleanTitle, limit: 3 }
       });
 
       if (!searchResults || searchResults.length === 0) {
-        console.warn(`   └─ No results found on mirror for "${query}".`);
+        console.log(`   └─ No mirror match found for "${cleanTitle}". Skipping.`);
         continue;
       }
 
-      // Pick top match
-      const comic = searchResults[0];
-      const hid = comic.hid;
-      const title = comic.title;
-      const slug = (comic.slug || title)
+      const match = searchResults[0];
+      const hid = match.hid;
+      const slug = (match.slug || cleanTitle)
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '')
         .slice(0, 60);
 
-      console.log(`   └─ Matched: ${title} (HID: ${hid})`);
-
-      // 2. Fetch full series detail
-      const { data: detail } = await MIRROR_API.get(`/comic/${hid}`);
-      const comicData = detail.comic;
-
-      const synopsis = comicData.desc || 'Read online for free on MangaFlow.';
-      const coverUrl = comicData.cover_url || (comic.md_covers?.[0]?.b2key ? `https://meo.comick.pictures/${comic.md_covers[0].b2key}` : null);
-      const isWebtoon = comicData.country === 'kr' || comicData.country === 'cn' || comicData.is_webtoon;
-      const readingMode = isWebtoon ? 'webtoon' : 'manga';
-
-      // 3. Upsert Series in Supabase
-      const { data: seriesRow, error: sErr } = await supabase
+      // 2. Ensure Series Record exists in Supabase
+      let { data: seriesRow } = await supabase
         .from('series')
-        .upsert({
-          slug,
-          title,
-          synopsis: synopsis.slice(0, 350),
-          cover_image_url: coverUrl,
-          reading_mode: readingMode,
-          source: 'mirror',
-          source_url: hid,
-          followed_count: comicData.user_follow_count || Math.floor(Math.random() * 15000) + 5000,
-          views_count: Math.floor(Math.random() * 80000) + 20000,
-          rating: parseFloat((comicData.bayesian_rating || 9.2).toFixed(2))
-        }, { onConflict: 'slug' })
-        .select()
-        .single();
+        .select('id')
+        .eq('slug', slug)
+        .maybeSingle();
 
-      if (sErr || !seriesRow) {
-        console.error(`   └─ Supabase series upsert failed:`, sErr?.message);
-        continue;
+      if (!seriesRow) {
+        const { data: detail } = await MIRROR_API.get(`/comic/${hid}`);
+        const c = detail.comic;
+        const synopsis = c.desc || 'Read online for free on MangaFlow.';
+        const coverUrl = c.cover_url || (match.md_covers?.[0]?.b2key ? `https://meo.comick.pictures/${match.md_covers[0].b2key}` : null);
+        const isWebtoon = c.country === 'kr' || c.country === 'cn' || c.is_webtoon;
+
+        const { data: created, error: createErr } = await supabase
+          .from('series')
+          .upsert({
+            slug,
+            title: match.title,
+            synopsis: synopsis.slice(0, 350),
+            cover_image_url: coverUrl,
+            reading_mode: isWebtoon ? 'webtoon' : 'manga',
+            source: 'mirror',
+            source_url: hid,
+            followed_count: c.user_follow_count || 12000,
+            views_count: 55000,
+            rating: parseFloat((c.bayesian_rating || 9.0).toFixed(2))
+          }, { onConflict: 'slug' })
+          .select('id')
+          .single();
+
+        if (createErr || !created) {
+          console.error(`   └─ Failed to create series entry:`, createErr?.message);
+          continue;
+        }
+        seriesRow = created;
       }
 
-      await sleep(300);
+      // 3. Fetch existing chapter numbers already in DB to identify gaps
+      const { data: existingChapters } = await supabase
+        .from('chapters')
+        .select('chapter_number')
+        .eq('series_id', seriesRow.id);
 
-      // 4. Fetch ALL English chapters with pagination
+      const existingSet = new Set((existingChapters || []).map((c) => c.chapter_number));
+
+      // 4. Pull all chapters from the mirror
       let page = 1;
-      let allChapters = [];
+      let allMirrorChapters = [];
 
-      while (page <= 15) { // Up to 1,500 chapters
+      while (page <= 20) { // Up to 2,000 chapters
         try {
           const { data: chRes } = await MIRROR_API.get(`/comic/${hid}/chapters`, {
-            params: {
-              lang: 'en',
-              page: page,
-              limit: 100
-            }
+            params: { lang: 'en', page, limit: 100 }
           });
-
           const chapters = chRes.chapters || [];
-          allChapters.push(...chapters);
-
+          allMirrorChapters.push(...chapters);
           if (chapters.length < 100) break;
           page++;
-          await sleep(200);
+          await sleep(150);
         } catch {
           break;
         }
       }
 
-      // 5. Deduplicate and batch insert chapters
-      const chapterRows = [];
+      // 5. Filter ONLY chapters missing from our DB
+      const missingPayload = [];
       const seen = new Set();
 
-      for (const ch of allChapters) {
+      for (const ch of allMirrorChapters) {
         const rawNum = ch.chap;
-        const chNumber = rawNum ? parseFloat(rawNum) : null;
-        if (chNumber === null || isNaN(chNumber) || seen.has(chNumber)) continue;
-        seen.add(chNumber);
+        const num = rawNum ? parseFloat(rawNum) : null;
+        if (num === null || isNaN(num) || seen.has(num)) continue;
+        seen.add(num);
 
-        chapterRows.push({
-          series_id: seriesRow.id,
-          chapter_number: chNumber,
-          title: ch.title || `Chapter ${chNumber}`,
-          source: ch.hid, // Unique mirror chapter ID
-          source_provider: 'mirror',
-          panel_urls: []
-        });
+        // Only insert if the chapter doesn't already exist
+        if (!existingSet.has(num)) {
+          missingPayload.push({
+            series_id: seriesRow.id,
+            chapter_number: num,
+            title: ch.title || `Chapter ${num}`,
+            source: ch.hid,
+            source_provider: 'mirror',
+            panel_urls: []
+          });
+        }
       }
 
-      if (chapterRows.length > 0) {
-        for (let i = 0; i < chapterRows.length; i += 200) {
-          const chunk = chapterRows.slice(i, i + 200);
+      if (missingPayload.length > 0) {
+        for (let i = 0; i < missingPayload.length; i += 200) {
+          const chunk = missingPayload.slice(i, i + 200);
           await supabase.from('chapters').upsert(chunk, {
             onConflict: 'series_id, chapter_number'
           });
         }
-        console.log(`   └─ Successfully indexed ${chapterRows.length} total chapters (Highest: Ch. ${Math.max(...seen)}).`);
+        console.log(`   └─ ✅ Filled ${missingPayload.length} missing chapters for "${cleanTitle}".`);
+      } else {
+        console.log(`   └─ ⚡ All chapters up-to-date for "${cleanTitle}". No gaps found.`);
       }
 
-      await sleep(500);
+      await sleep(400);
     } catch (err) {
-      console.error(`Error syncing "${query}":`, err.message);
+      console.error(`Error processing "${cleanTitle}":`, err.message);
     }
   }
 
-  console.log('\n🚀 Mirror catalog sync complete.');
+  console.log('\n🚀 Gap-filling engine finished.');
 }
 
-syncMirrorCatalog();
+fillCatalogGaps();
