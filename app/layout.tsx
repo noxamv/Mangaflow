@@ -28,11 +28,33 @@ export default function RootLayout({
   const [notifOpen, setNotifOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
 
+  // User session state
+  const [user, setUser] = useState<any>(null);
+
+  // Magic Link Form States
+  const [authEmail, setAuthEmail] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authSent, setAuthSent] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  // Search States
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Listen to Auth State
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_, session) => {
+      setUser(session?.user || null);
+    });
+
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  // Search debounce
   useEffect(() => {
     if (!query.trim()) {
       setResults([]);
@@ -63,6 +85,39 @@ export default function RootLayout({
     }
   }, [searchOpen]);
 
+  // Magic Link Submission Handler
+  const handleSendMagicLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail.trim()) return;
+
+    setAuthLoading(true);
+    setAuthError(null);
+
+    const redirectUrl =
+      typeof window !== 'undefined'
+        ? window.location.origin
+        : 'https://mangaflow-psi.vercel.app';
+
+    const { error } = await supabase.auth.signInWithOtp({
+      email: authEmail.trim(),
+      options: {
+        emailRedirectTo: redirectUrl,
+      },
+    });
+
+    if (error) {
+      setAuthError(error.message);
+    } else {
+      setAuthSent(true);
+    }
+    setAuthLoading(false);
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+  };
+
   return (
     <html lang="en">
       <head>
@@ -85,7 +140,7 @@ export default function RootLayout({
         <header className="sticky top-0 z-50 w-full bg-[#0f1117]/95 backdrop-blur-md border-b border-neutral-800/80">
           <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
             
-            {/* Left: Compact Hamburger Menu & Brand */}
+            {/* Left: Hamburger Menu & Brand */}
             <div className="relative flex items-center gap-2.5">
               <button
                 type="button"
@@ -107,7 +162,7 @@ export default function RootLayout({
                 </span>
               </Link>
 
-              {/* Compact Popover Menu (< half screen width) */}
+              {/* Compact Menu */}
               {menuOpen && (
                 <div className="absolute top-12 left-0 w-48 bg-[#151822] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50">
                   <Link
@@ -168,8 +223,8 @@ export default function RootLayout({
               )}
             </div>
 
-            {/* Right: Search, Notifications, Sign Up */}
-            <div className="flex items-center gap-1 sm:gap-2">
+            {/* Right: Search, Notifications, Auth Session */}
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <button
                 type="button"
                 onClick={() => setSearchOpen(!searchOpen)}
@@ -192,24 +247,41 @@ export default function RootLayout({
                 </svg>
               </button>
 
-              <button
-                type="button"
-                onClick={() => setAuthOpen(true)}
-                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-md shadow-sm transition select-none"
-              >
-                Sign Up
-              </button>
+              {user ? (
+                <div className="flex items-center gap-2 bg-neutral-900/90 border border-neutral-700/60 py-1 px-2.5 rounded-lg">
+                  <span className="text-[11px] font-semibold text-neutral-300 max-w-[90px] sm:max-w-[130px] truncate">
+                    {user.email?.split('@')[0]}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className="text-[10px] font-bold text-rose-400 hover:text-rose-300 transition"
+                  >
+                    Log Out
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthSent(false);
+                    setAuthError(null);
+                    setAuthOpen(true);
+                  }}
+                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-md shadow-sm transition select-none"
+                >
+                  Sign In
+                </button>
+              )}
             </div>
 
           </div>
         </header>
 
-        {/* ================= COMPACT MANGAFIRE-STYLE SEARCH FLOATING BAR ================= */}
+        {/* Search Floating Bar */}
         {searchOpen && (
           <div className="sticky top-14 z-50 w-full px-3 sm:px-6 max-w-lg mx-auto animate-in fade-in duration-150">
             <div className="bg-[#151824] border border-neutral-700 rounded-xl shadow-2xl overflow-hidden mt-2">
-              
-              {/* Compact Input */}
               <div className="flex items-center px-3 py-2 gap-2 border-b border-neutral-800 bg-[#12141d]">
                 <svg className="w-4 h-4 text-neutral-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -229,7 +301,6 @@ export default function RootLayout({
                 )}
               </div>
 
-              {/* Instant compact results list */}
               {query && (
                 <div className="max-h-72 overflow-y-auto divide-y divide-neutral-800/60 bg-[#151824]">
                   {loadingSearch && (
@@ -299,35 +370,81 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* Sign Up Modal */}
+        {/* Functional Authentication Modal (Magic Link) */}
         {authOpen && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
               <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
-                <h3 className="text-sm font-bold text-white">Create an Account</h3>
-                <button type="button" onClick={() => setAuthOpen(false)} className="text-neutral-400 hover:text-white text-sm">✕</button>
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <label className="text-[11px] font-semibold text-neutral-400 block mb-1">Username</label>
-                  <input type="text" placeholder="Reader123" className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white" />
-                </div>
-                <div>
-                  <label className="text-[11px] font-semibold text-neutral-400 block mb-1">Email</label>
-                  <input type="email" placeholder="you@example.com" className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white" />
-                </div>
-                <div>
-                  <label className="text-[11px] font-semibold text-neutral-400 block mb-1">Password</label>
-                  <input type="password" placeholder="••••••••" className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white" />
-                </div>
+                <h3 className="text-sm font-bold text-white">
+                  {authSent ? 'Check Your Inbox' : 'Sign In / Register'}
+                </h3>
                 <button
                   type="button"
                   onClick={() => setAuthOpen(false)}
-                  className="w-full mt-2 py-2 bg-indigo-600 hover:bg-indigo-500 font-bold text-xs text-white rounded-lg transition"
+                  className="text-neutral-400 hover:text-white text-sm"
                 >
-                  Create Account
+                  ✕
                 </button>
               </div>
+
+              {authSent ? (
+                <div className="text-center py-3 space-y-3">
+                  <div className="w-10 h-10 mx-auto rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                    ✓
+                  </div>
+                  <p className="text-xs text-neutral-300">
+                    A sign-in link has been sent to <br />
+                    <span className="text-white font-semibold">{authEmail}</span>.
+                  </p>
+                  <p className="text-[11px] text-neutral-400">
+                    Click the link in the email to log in automatically.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthSent(false);
+                      setAuthEmail('');
+                    }}
+                    className="text-xs text-indigo-400 hover:underline pt-2 block mx-auto"
+                  >
+                    Use another email
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleSendMagicLink} className="space-y-3">
+                  <p className="text-xs text-neutral-400">
+                    Sign in or create an account without passwords using a magic link.
+                  </p>
+
+                  {authError && (
+                    <div className="p-2 rounded bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs">
+                      {authError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-neutral-400 block mb-1">
+                      Email Address
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full mt-2 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-bold text-xs text-white rounded-lg transition shadow-md"
+                  >
+                    {authLoading ? 'Sending link...' : 'Send Magic Link'}
+                  </button>
+                </form>
+              )}
             </div>
           </div>
         )}
