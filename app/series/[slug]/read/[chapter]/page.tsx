@@ -76,7 +76,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
 
   return (
     <main className="min-h-screen bg-[#070709] text-neutral-100 flex flex-col items-center">
-      {/* Top Bar */}
+      {/* Top Floating Reader Bar */}
       <header className="sticky top-0 z-50 w-full bg-[#0a0a0c]/90 backdrop-blur-md border-b border-neutral-800/80 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link
@@ -120,7 +120,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
         </div>
       </header>
 
-      {/* Reader Body */}
+      {/* Reader Container (Routed via Proxy) */}
       <section className="w-full max-w-2xl flex flex-col items-center py-2 px-0 bg-black">
         {panels.length === 0 ? (
           <div className="p-16 text-center text-sm text-neutral-400 bg-neutral-900/40 rounded-xl mt-8 border border-neutral-800">
@@ -131,7 +131,7 @@ export default async function ChapterReaderPage({ params }: PageProps) {
           panels.map((url, idx) => (
             <div key={idx} className="w-full bg-black flex justify-center min-h-[300px]">
               <img
-                src={url}
+                src={`/api/proxy-image?url=${encodeURIComponent(url)}`}
                 alt={`Panel ${idx + 1}`}
                 loading={idx < 2 ? 'eager' : 'lazy'}
                 decoding="async"
