@@ -1,0 +1,42 @@
+name: 4-Hour Automated Scraper & Chapter Sync
+
+on:
+  schedule:
+    # Runs at minute 0 of every 4th hour: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
+    - cron: '0 */4 * * *'
+  workflow_dispatch: # Allows manual trigger directly from GitHub Actions tab
+
+concurrency:
+  group: scraper-sync
+  cancel-in-progress: true
+
+jobs:
+  scrape-and-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Chapter & Series Scraper
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          if [ -f "scripts/scraper.js" ]; then
+            node scripts/scraper.js
+          elif [ -f "scripts/scrape.ts" ]; then
+            npx tsx scripts/scrape.ts
+          else
+            echo "No custom scraper script detected in scripts/. Ensure your scraping entry point is correctly configured."
+          fi
