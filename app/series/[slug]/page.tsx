@@ -33,6 +33,7 @@ interface ChapterItem {
   chapter_number: number;
   title: string | null;
   created_at: string;
+  scan_group?: string;
 }
 
 interface CommentItem {
@@ -126,8 +127,12 @@ export default function SeriesDetailPage() {
   const [newComment, setNewComment] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Filters & Sorting
   const [searchChapter, setSearchChapter] = useState('');
   const [sortAsc, setSortAsc] = useState(false);
+  const [selectedGroup, setSelectedGroup] = useState<string>('all');
+
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [lastReadChapter, setLastReadChapter] = useState<number | null>(null);
   const [user, setUser] = useState<any>(null);
@@ -149,15 +154,13 @@ export default function SeriesDetailPage() {
       if (sData) {
         setSeries(sData);
 
-        // Fetch Chapters
         const { data: chData } = await supabase
           .from('chapters')
-          .select('id, chapter_number, title, created_at')
+          .select('id, chapter_number, title, created_at, scan_group')
           .eq('series_id', sData.id)
           .order('chapter_number', { ascending: false });
         setChapters(chData || []);
 
-        // Fetch Comments
         const { data: commData } = await supabase
           .from('series_comments')
           .select('id, user_id, username, content, created_at')
@@ -166,7 +169,6 @@ export default function SeriesDetailPage() {
           .limit(20);
         setComments(commData || []);
 
-        // Reading History & Bookmarks
         if (authData?.user) {
           const { data: bData } = await supabase
             .from('user_bookmarks')
@@ -257,8 +259,21 @@ export default function SeriesDetailPage() {
     }
   };
 
+  // Scanlation group list extraction
+  const availableGroups = useMemo(() => {
+    const groups = new Set<string>();
+    chapters.forEach((ch) => {
+      if (ch.scan_group) groups.add(ch.scan_group);
+    });
+    return Array.from(groups);
+  }, [chapters]);
+
+  // Combined chapter filter
   const filteredChapters = useMemo(() => {
     let result = [...chapters];
+    if (selectedGroup !== 'all') {
+      result = result.filter((ch) => (ch.scan_group || 'Official') === selectedGroup);
+    }
     if (searchChapter.trim()) {
       result = result.filter(
         (ch) =>
@@ -270,7 +285,7 @@ export default function SeriesDetailPage() {
       sortAsc ? a.chapter_number - b.chapter_number : b.chapter_number - a.chapter_number
     );
     return result;
-  }, [chapters, searchChapter, sortAsc]);
+  }, [chapters, selectedGroup, searchChapter, sortAsc]);
 
   if (loading) {
     return (
@@ -310,7 +325,6 @@ export default function SeriesDetailPage() {
         <div className="absolute inset-0 bg-gradient-to-t from-[#0b0c10] via-black/85 to-transparent" />
 
         <div className="relative max-w-5xl mx-auto px-4 sm:px-6 flex flex-col items-center text-center">
-          {/* Main Poster */}
           <div className="w-36 sm:w-48 aspect-[3/4.2] rounded-2xl overflow-hidden border border-white/10 shadow-2xl bg-neutral-900 mb-4">
             {series.cover_image_url ? (
               <img
@@ -326,12 +340,10 @@ export default function SeriesDetailPage() {
             )}
           </div>
 
-          {/* Title */}
           <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight mb-2">
             {series.title}
           </h1>
 
-          {/* Metadata Badges */}
           <div className="flex flex-wrap items-center justify-center gap-2 text-[10px] font-bold uppercase mb-3">
             <span className="px-2.5 py-0.5 rounded bg-black/60 text-neutral-300 border border-white/10">
               {series.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
@@ -347,7 +359,6 @@ export default function SeriesDetailPage() {
             </span>
           </div>
 
-          {/* Metrics */}
           <div className="flex items-center gap-4 text-xs font-semibold text-neutral-400 mb-4">
             <span className="flex items-center gap-1 text-white">
               <span className="text-amber-400">★</span> {series.rating || '9.6'}
@@ -357,7 +368,6 @@ export default function SeriesDetailPage() {
             <span>{(series.followed_count || 1400).toLocaleString()} follows</span>
           </div>
 
-          {/* Clickable Genre Chips */}
           <div className="flex flex-wrap justify-center gap-1.5 max-w-xl mb-4">
             {defaultGenres.map((g) => (
               <Link
@@ -370,21 +380,17 @@ export default function SeriesDetailPage() {
             ))}
           </div>
 
-          {/* Author / Artist */}
           <div className="text-xs text-neutral-400 space-y-0.5 mb-3">
             <p>Author: <span className="text-neutral-200 font-medium">{series.author || 'Original Author'}</span></p>
             <p>Art: <span className="text-neutral-200 font-medium">{series.artist || 'Original Artist'}</span></p>
           </div>
 
-          {/* Synopsis */}
           <p className="text-xs text-neutral-300 max-w-2xl leading-relaxed mb-4">
             {series.synopsis || 'Read all chapters for free on MangaFlow.'}
           </p>
 
-          {/* Star Rating & Review Component */}
           <StarRatingCard seriesId={series.id} userId={user?.id} />
 
-          {/* Primary Action Buttons */}
           <div className="flex items-center gap-3 mt-2">
             {firstChapter && (
               <Link
@@ -412,7 +418,7 @@ export default function SeriesDetailPage() {
         </div>
       </div>
 
-      {/* Chapters Listing with Embedded Search & Sort */}
+      {/* Chapters Listing with Search, Sort, and Scanlation Group Switcher */}
       <section className="max-w-4xl mx-auto px-4 mt-8">
         <div className="bg-[#12141c] border border-neutral-800/80 rounded-2xl overflow-hidden shadow-xl">
           <div className="p-3.5 bg-[#161824] border-b border-neutral-800 flex flex-wrap items-center justify-between gap-2.5">
@@ -420,14 +426,31 @@ export default function SeriesDetailPage() {
               Chapters ({chapters.length})
             </span>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Scanlation Group Filter */}
+              {availableGroups.length > 1 && (
+                <select
+                  value={selectedGroup}
+                  onChange={(e) => setSelectedGroup(e.target.value)}
+                  className="bg-neutral-900 border border-neutral-700/80 rounded-lg px-2 py-1 text-xs text-neutral-300 focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="all">All Groups</option>
+                  {availableGroups.map((grp) => (
+                    <option key={grp} value={grp}>
+                      {grp}
+                    </option>
+                  ))}
+                </select>
+              )}
+
               <input
                 type="text"
                 placeholder="Search chapter..."
                 value={searchChapter}
                 onChange={(e) => setSearchChapter(e.target.value)}
-                className="bg-neutral-900 border border-neutral-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 w-36 sm:w-44"
+                className="bg-neutral-900 border border-neutral-700/80 rounded-lg px-2.5 py-1 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 w-32 sm:w-40"
               />
+
               <button
                 type="button"
                 onClick={() => setSortAsc(!sortAsc)}
@@ -454,6 +477,11 @@ export default function SeriesDetailPage() {
                     <span className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 transition">
                       Ch. {ch.chapter_number}
                     </span>
+                    {ch.scan_group && (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400">
+                        {ch.scan_group}
+                      </span>
+                    )}
                     {ch.title && (
                       <span className="text-xs text-neutral-400 truncate max-w-xs hidden sm:inline">
                         - {ch.title}
