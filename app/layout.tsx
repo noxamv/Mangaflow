@@ -10,7 +10,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
-// High-Resolution Character Profile Pictures
 const CHARACTER_AVATARS = [
   { id: 'jinwoo', name: 'Sung Jin-Woo', url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=150&auto=format&fit=crop&q=80' },
   { id: 'gojo', name: 'Satoru Gojo', url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=150&auto=format&fit=crop&q=80' },
@@ -28,6 +27,16 @@ interface SearchResult {
   title: string;
   cover_image_url: string;
   reading_mode: string;
+}
+
+interface NotificationItem {
+  id: string;
+  series_id: string;
+  chapter_id: string;
+  title: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
 }
 
 export default function RootLayout({
@@ -49,6 +58,9 @@ export default function RootLayout({
   // User session state
   const [user, setUser] = useState<any>(null);
 
+  // Notifications State
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+
   // Profile Edit State
   const [displayName, setDisplayName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState(CHARACTER_AVATARS[0].url);
@@ -66,7 +78,7 @@ export default function RootLayout({
   const [loadingSearch, setLoadingSearch] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Handle PWA installation trigger
+  // PWA listener
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -88,6 +100,7 @@ export default function RootLayout({
     setDeferredPrompt(null);
   };
 
+  // Auth listener
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       const u = data.user;
@@ -110,6 +123,40 @@ export default function RootLayout({
     return () => listener.subscription.unsubscribe();
   }, []);
 
+  // Notifications listener
+  useEffect(() => {
+    if (!user) {
+      setNotifications([]);
+      return;
+    }
+
+    async function loadNotifications() {
+      const { data } = await supabase
+        .from('user_notifications')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(15);
+
+      if (data) setNotifications(data);
+    }
+
+    loadNotifications();
+  }, [user]);
+
+  const markAllRead = async () => {
+    if (!user) return;
+    await supabase
+      .from('user_notifications')
+      .update({ is_read: true })
+      .eq('user_id', user.id);
+
+    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+  };
+
+  const unreadCount = notifications.filter((n) => !n.is_read).length;
+
+  // Search debouncing
   useEffect(() => {
     if (!query.trim()) {
       setResults([]);
@@ -131,12 +178,11 @@ export default function RootLayout({
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Handle Strict Gmail Magic Link Auth
+  // Strict Gmail Authentication
   const handleSendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanEmail = authEmail.trim().toLowerCase();
 
-    // Enforce valid @gmail.com pattern
     const isStrictGmail = /^[a-z0-9](\.?[a-z0-9]){5,}@gmail\.com$/.test(cleanEmail);
     if (!isStrictGmail) {
       setAuthError('Only verified personal @gmail.com accounts are permitted.');
@@ -306,7 +352,7 @@ export default function RootLayout({
               )}
             </div>
 
-            {/* Right: Search, Notifications, User Avatar */}
+            {/* Right: Search, Notifications, Avatar */}
             <div className="flex items-center gap-1.5 sm:gap-2">
               <button
                 type="button"
@@ -319,15 +365,19 @@ export default function RootLayout({
                 </svg>
               </button>
 
+              {/* Notification Bell Button with Badge */}
               <button
                 type="button"
                 onClick={() => setNotifOpen(true)}
-                className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/60 rounded-lg transition"
+                className="relative p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/60 rounded-lg transition"
                 aria-label="Notifications"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                 </svg>
+                {unreadCount > 0 && (
+                  <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                )}
               </button>
 
               {user ? (
@@ -422,7 +472,65 @@ export default function RootLayout({
           </div>
         </header>
 
-        {/* Edit Profile Modal with Curated Anime/Manhwa Character Avatars */}
+        {/* Live Notification Drawer */}
+        {notifOpen && (
+          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start justify-center pt-20 px-4">
+            <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-4 shadow-2xl flex flex-col max-h-[75vh]">
+              <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Notifications {unreadCount > 0 && `(${unreadCount})`}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {unreadCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={markAllRead}
+                      className="text-[10px] text-indigo-400 hover:underline font-semibold"
+                    >
+                      Mark all read
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setNotifOpen(false)}
+                    className="text-neutral-400 hover:text-white text-xs px-1"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-y-auto divide-y divide-neutral-800/60 py-2">
+                {notifications.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-neutral-500">
+                    No updates yet. Follow titles with ★ to receive chapter alerts!
+                  </div>
+                ) : (
+                  notifications.map((item) => (
+                    <Link
+                      key={item.id}
+                      href={`/read/${item.chapter_id}`}
+                      onClick={() => setNotifOpen(false)}
+                      className={`block p-2.5 rounded-xl transition ${
+                        item.is_read ? 'hover:bg-neutral-800/40 opacity-70' : 'bg-indigo-600/10 hover:bg-indigo-600/20'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-0.5">
+                        <h4 className="text-xs font-bold text-neutral-200 truncate">{item.title}</h4>
+                        <span className="text-[9px] text-neutral-500 shrink-0">
+                          {new Date(item.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-neutral-400">{item.message}</p>
+                    </Link>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Edit Profile Modal */}
         {editProfileOpen && (
           <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="relative w-full max-w-sm bg-[#141722] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
@@ -487,7 +595,7 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* Strict Gmail Authentication Modal */}
+        {/* Auth Modal */}
         {authOpen && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
