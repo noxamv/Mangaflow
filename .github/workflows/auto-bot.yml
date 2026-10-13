@@ -2,14 +2,17 @@ name: Manga Flow Auto-Updater
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    # Runs automatically every 4 hours
+    - cron: '0 */4 * * *'
+  # Allows you to trigger the sync manually anytime from the Actions tab
   workflow_dispatch:
 
 jobs:
   auto-sync:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -18,10 +21,12 @@ jobs:
           node-version: 22
 
       - name: Install Dependencies
-        run: npm install @supabase/supabase-js axios cheerio
+        run: |
+          npm install @supabase/supabase-js axios
 
-      - name: Run Manga Feed Sync
+      - name: Execute Catalog Sync Engine
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node scripts/sync-feed.js
+        run: |
+          node scripts/sync-feed.js
