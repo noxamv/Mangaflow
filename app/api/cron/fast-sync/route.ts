@@ -9,7 +9,6 @@ export async function GET(request: Request) {
   const secret = searchParams.get('key');
   const userAgent = request.headers.get('user-agent') || '';
 
-  // Allow if secret matches OR if pinged by cron-job.org
   const isAuthorized =
     !process.env.CRON_SECRET ||
     secret === process.env.CRON_SECRET ||
@@ -27,17 +26,15 @@ export async function GET(request: Request) {
     '';
 
   if (!supabaseUrl || !supabaseKey) {
-    return NextResponse.json(
-      { error: 'Supabase credentials missing.' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Supabase credentials missing.' }, { status: 500 });
   }
 
   const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
+    // 1. Fetch 30 most recent global English chapters
     const res = await fetch(
-      'https://api.mangadex.org/chapter?limit=40&translatedLanguage[]=en&order[readableAt]=desc&includes[]=manga',
+      'https://api.mangadex.org/chapter?limit=30&translatedLanguage[]=en&order[readableAt]=desc&includes[]=manga',
       {
         headers: { 'User-Agent': 'MangaFlowFastStream/3.0' },
         cache: 'no-store',
@@ -50,42 +47,77 @@ export async function GET(request: Request) {
 
     const json = await res.json();
     const recentChapters = json.data || [];
-    let added = 0;
+    if (recentChapters.length === 0) {
+      return NextResponse.json({ success: true, added: 0 });
+    }
 
+    // 2. Gather unique MangaDex IDs from incoming feed
+    const mangaIdToChapters = new Map<string, any[]>();
     for (const ch of recentChapters) {
       const mangaRel = ch.relationships?.find((r: any) => r.type === 'manga');
       if (!mangaRel) continue;
 
-      const mangaDexId = mangaRel.id;
-      const rawCh = ch.attributes?.chapter;
-      const chNumber = rawCh ? parseFloat(rawCh) : null;
-      if (chNumber === null || isNaN(chNumber)) continue;
+      const mId = mangaRel.id;
+      if (!mangaIdToChapters.has(mId)) {
+        mangaIdToChapters.set(mId, []);
+      }
+      mangaIdToChapters.get(mId)!.push(ch);
+    }
 
-      const { data: series } = await supabase
-        .from('series')
-        .select('id, title')
-        .eq('source_url', mangaDexId)
-        .maybeSingle();
+    const uniqueMangaIds = Array.from(mangaIdToChapters.keys());
 
-      if (!series) continue;
+    // 3. ONE fast single query to find matching series in our library
+    const { data: matchedSeries } = await supabase
+      .from('series')
+      .select('id, source_url')
+      .in('source_url', uniqueMangaIds);
 
-      const { error: chErr } = await supabase.from('chapters').upsert(
-        {
-          series_id: series.id,
+    if (!matchedSeries || matchedSeries.length === 0) {
+      return NextResponse.json({
+        success: true,
+        checked: recentChapters.length,
+        added: 0,
+        message: 'No active tracked series in this drop.',
+      });
+    }
+
+    // 4. Map series_id and prepare batch upsert payload
+    const seriesMap = new Map(matchedSeries.map((s) => [s.source_url, s.id]));
+    const chapterRows: any[] = [];
+
+    for (const [mangaDexId, chapters] of mangaIdToChapters.entries()) {
+      const seriesId = seriesMap.get(mangaDexId);
+      if (!seriesId) continue;
+
+      for (const ch of chapters) {
+        const rawCh = ch.attributes?.chapter;
+        const chNumber = rawCh ? parseFloat(rawCh) : null;
+        if (chNumber === null || isNaN(chNumber)) continue;
+
+        chapterRows.push({
+          series_id: seriesId,
           chapter_number: chNumber,
           title: ch.attributes?.title || `Chapter ${chNumber}`,
           source: ch.id,
           panel_urls: [],
-        },
-        { onConflict: 'series_id, chapter_number' }
-      );
+        });
+      }
+    }
 
-      if (!chErr) added++;
+    // 5. ONE fast single batch upsert
+    let addedCount = 0;
+    if (chapterRows.length > 0) {
+      const { error: upsertErr } = await supabase.from('chapters').upsert(chapterRows, {
+        onConflict: 'series_id, chapter_number',
+      });
+      if (!upsertErr) {
+        addedCount = chapterRows.length;
+      }
     }
 
     return NextResponse.json({
       success: true,
-      new_chapters_added: added,
+      new_chapters_added: addedCount,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
