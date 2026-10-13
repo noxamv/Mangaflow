@@ -1,16 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-
-const supabase = createClient(supabaseUrl, supabaseKey);
-
 export const dynamic = 'force-dynamic';
 export const maxDuration = 15; // 15s serverless execution window
 
 export async function GET(request: Request) {
-  // 1. Security Check: Protect the endpoint with a secret query token
+  // 1. Security Check: Protect endpoint with a query key token
   const { searchParams } = new URL(request.url);
   const secret = searchParams.get('key');
 
@@ -18,13 +13,29 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // 2. Initialize Supabase dynamically inside the request handler
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+  const supabaseKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    '';
+
+  if (!supabaseUrl || !supabaseKey) {
+    return NextResponse.json(
+      { error: 'Supabase credentials not configured in environment variables.' },
+      { status: 500 }
+    );
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
   try {
-    // 2. Fetch the 40 most recently published English chapters globally
+    // 3. Query the 40 most recently published English chapters globally
     const res = await fetch(
       'https://api.mangadex.org/chapter?limit=40&translatedLanguage[]=en&order[readableAt]=desc&includes[]=manga',
       {
         headers: { 'User-Agent': 'MangaFlowFastStream/2.0' },
-        cache: 'no-store'
+        cache: 'no-store',
       }
     );
 
@@ -45,7 +56,7 @@ export async function GET(request: Request) {
       const chNumber = rawCh ? parseFloat(rawCh) : null;
       if (chNumber === null || isNaN(chNumber)) continue;
 
-      // 3. Check if we have this series in our Supabase library
+      // Check if this series is in our Supabase library
       const { data: series } = await supabase
         .from('series')
         .select('id, title')
@@ -54,14 +65,14 @@ export async function GET(request: Request) {
 
       if (!series) continue;
 
-      // 4. Upsert the fresh chapter into Supabase
+      // Upsert fresh chapter
       const { error: chErr } = await supabase.from('chapters').upsert(
         {
           series_id: series.id,
           chapter_number: chNumber,
           title: ch.attributes?.title || `Chapter ${chNumber}`,
           source: ch.id,
-          panel_urls: []
+          panel_urls: [],
         },
         { onConflict: 'series_id, chapter_number' }
       );
@@ -72,7 +83,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       new_chapters_added: added,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
