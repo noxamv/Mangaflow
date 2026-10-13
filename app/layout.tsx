@@ -28,7 +28,6 @@ export default function RootLayout({
   const [notifOpen, setNotifOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
 
-  // Instant Live Search state
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
@@ -50,7 +49,7 @@ export default function RootLayout({
 
       setResults(data || []);
       setLoadingSearch(false);
-    }, 200);
+    }, 180);
 
     return () => clearTimeout(timer);
   }, [query]);
@@ -71,11 +70,14 @@ export default function RootLayout({
       </head>
       <body className="bg-[#0b0c10] text-neutral-100 antialiased min-h-screen flex flex-col selection:bg-indigo-600 selection:text-white">
 
-        {/* Global Click-to-Close Backdrop for Menu */}
-        {menuOpen && (
+        {/* Global Click-to-Close Backdrop */}
+        {(menuOpen || searchOpen) && (
           <div
-            onClick={() => setMenuOpen(false)}
-            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px]"
+            onClick={() => {
+              setMenuOpen(false);
+              setSearchOpen(false);
+            }}
+            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-[2px]"
           />
         )}
 
@@ -88,7 +90,7 @@ export default function RootLayout({
               <button
                 type="button"
                 onClick={() => setMenuOpen(!menuOpen)}
-                className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/60 rounded-lg transition select-none flex items-center justify-center"
+                className="p-1.5 text-neutral-400 hover:text-white hover:bg-neutral-800/60 rounded-lg transition"
                 aria-label="Toggle Navigation"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -105,9 +107,9 @@ export default function RootLayout({
                 </span>
               </Link>
 
-              {/* Compact MangaFire-Style Popover Menu (< half screen width) */}
+              {/* Compact Popover Menu (< half screen width) */}
               {menuOpen && (
-                <div className="absolute top-12 left-0 w-48 bg-[#151822] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                <div className="absolute top-12 left-0 w-48 bg-[#151822] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50">
                   <Link
                     href="/"
                     onClick={() => setMenuOpen(false)}
@@ -154,7 +156,6 @@ export default function RootLayout({
                     Random Series
                   </Link>
                   <div className="my-1 border-t border-neutral-700/60"></div>
-                  {/* Standalone Filter Entry */}
                   <Link
                     href="/filter"
                     onClick={() => setMenuOpen(false)}
@@ -167,11 +168,11 @@ export default function RootLayout({
               )}
             </div>
 
-            {/* Right: Search, Notification, Sign Up */}
+            {/* Right: Search, Notifications, Sign Up */}
             <div className="flex items-center gap-1 sm:gap-2">
               <button
                 type="button"
-                onClick={() => setSearchOpen(true)}
+                onClick={() => setSearchOpen(!searchOpen)}
                 className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/60 rounded-lg transition"
                 aria-label="Search"
               >
@@ -203,81 +204,78 @@ export default function RootLayout({
           </div>
         </header>
 
-        {/* ================= INSTANT LIVE SEARCH MODAL (MangaFire-style) ================= */}
+        {/* ================= COMPACT MANGAFIRE-STYLE SEARCH FLOATING BAR ================= */}
         {searchOpen && (
-          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-start justify-center pt-16 px-4">
-            <div className="relative w-full max-w-md bg-[#13151f] border border-neutral-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+          <div className="sticky top-14 z-50 w-full px-3 sm:px-6 max-w-lg mx-auto animate-in fade-in duration-150">
+            <div className="bg-[#151824] border border-neutral-700 rounded-xl shadow-2xl overflow-hidden mt-2">
               
-              {/* Input header */}
-              <div className="p-3 border-b border-neutral-800 flex items-center gap-2">
+              {/* Compact Input */}
+              <div className="flex items-center px-3 py-2 gap-2 border-b border-neutral-800 bg-[#12141d]">
                 <svg className="w-4 h-4 text-neutral-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
                 <input
                   ref={searchInputRef}
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Type title (e.g. One piece, Lookism)..."
-                  className="flex-1 bg-transparent border-none text-xs text-white placeholder-neutral-500 focus:outline-none"
+                  placeholder="Search series title, author..."
+                  className="flex-1 bg-transparent text-xs text-white placeholder-neutral-500 focus:outline-none"
                 />
-                <button
-                  type="button"
-                  onClick={() => setSearchOpen(false)}
-                  className="text-neutral-400 hover:text-white text-xs px-2 py-1 rounded bg-neutral-800"
-                >
-                  ✕
-                </button>
-              </div>
-
-              {/* Instant Results List */}
-              <div className="max-h-80 overflow-y-auto divide-y divide-neutral-800/60">
-                {loadingSearch && (
-                  <div className="p-4 text-center text-xs text-neutral-500">Searching catalog...</div>
-                )}
-
-                {!loadingSearch && results.length > 0 && results.map((item) => (
-                  <Link
-                    key={item.id}
-                    href={`/series/${item.slug}`}
-                    onClick={() => setSearchOpen(false)}
-                    className="flex items-center gap-3 p-2.5 hover:bg-neutral-800/60 transition group"
-                  >
-                    <div className="w-10 h-14 rounded overflow-hidden bg-neutral-900 shrink-0">
-                      <img
-                        src={item.cover_image_url}
-                        alt={item.title}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h4 className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 truncate">
-                        {item.title}
-                      </h4>
-                      <span className="text-[10px] text-neutral-500 uppercase font-semibold">
-                        {item.reading_mode === 'webtoon' ? 'Webtoon' : 'Manga'}
-                      </span>
-                    </div>
-                  </Link>
-                ))}
-
-                {!loadingSearch && query && results.length === 0 && (
-                  <div className="p-6 text-center text-xs text-neutral-500">
-                    No matching series found for &quot;{query}&quot;
-                  </div>
+                {query && (
+                  <button onClick={() => setQuery('')} className="text-neutral-400 hover:text-white text-xs px-1">
+                    ✕
+                  </button>
                 )}
               </div>
 
-              {/* Bottom footer button to full filter */}
+              {/* Instant compact results list */}
               {query && (
-                <Link
-                  href={`/filter?q=${encodeURIComponent(query)}`}
-                  onClick={() => setSearchOpen(false)}
-                  className="p-2.5 text-center text-xs font-semibold text-indigo-400 hover:bg-neutral-800/80 border-t border-neutral-800 transition"
-                >
-                  View all matching titles →
-                </Link>
+                <div className="max-h-72 overflow-y-auto divide-y divide-neutral-800/60 bg-[#151824]">
+                  {loadingSearch && (
+                    <div className="p-3 text-center text-xs text-neutral-400">Searching...</div>
+                  )}
+
+                  {!loadingSearch && results.length > 0 && results.map((item) => (
+                    <Link
+                      key={item.id}
+                      href={`/series/${item.slug}`}
+                      onClick={() => setSearchOpen(false)}
+                      className="flex items-center gap-3 px-3 py-2 hover:bg-neutral-800/60 transition group"
+                    >
+                      <div className="w-9 h-12 rounded overflow-hidden bg-neutral-900 shrink-0">
+                        <img
+                          src={item.cover_image_url}
+                          alt={item.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 truncate">
+                          {item.title}
+                        </h4>
+                        <span className="text-[10px] text-neutral-400 uppercase font-medium">
+                          {item.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
+                        </span>
+                      </div>
+                    </Link>
+                  ))}
+
+                  {!loadingSearch && results.length === 0 && (
+                    <div className="p-4 text-center text-xs text-neutral-400">
+                      No titles found.
+                    </div>
+                  )}
+
+                  <Link
+                    href={`/filter?q=${encodeURIComponent(query)}`}
+                    onClick={() => setSearchOpen(false)}
+                    className="block text-center py-2 text-xs font-semibold text-indigo-400 hover:bg-neutral-800/80 border-t border-neutral-800"
+                  >
+                    View all matching results →
+                  </Link>
+                </div>
               )}
             </div>
           </div>
