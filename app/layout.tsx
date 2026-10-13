@@ -1,8 +1,22 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import './globals.css';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+);
+
+interface SearchResult {
+  id: string;
+  slug: string;
+  title: string;
+  cover_image_url: string;
+  reading_mode: string;
+}
 
 export default function RootLayout({
   children,
@@ -13,6 +27,42 @@ export default function RootLayout({
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+
+  // Instant Live Search state
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [loadingSearch, setLoadingSearch] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setLoadingSearch(true);
+      const { data } = await supabase
+        .from('series')
+        .select('id, slug, title, cover_image_url, reading_mode')
+        .ilike('title', `%${query.trim()}%`)
+        .limit(6);
+
+      setResults(data || []);
+      setLoadingSearch(false);
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    if (searchOpen) {
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    } else {
+      setQuery('');
+      setResults([]);
+    }
+  }, [searchOpen]);
 
   return (
     <html lang="en">
@@ -55,7 +105,7 @@ export default function RootLayout({
                 </span>
               </Link>
 
-              {/* Compact MangaFire-Style Popover Menu (Width under half mobile screen) */}
+              {/* Compact MangaFire-Style Popover Menu (< half screen width) */}
               {menuOpen && (
                 <div className="absolute top-12 left-0 w-48 bg-[#151822] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50 animate-in fade-in zoom-in-95 duration-100">
                   <Link
@@ -67,57 +117,57 @@ export default function RootLayout({
                     Home
                   </Link>
                   <Link
-                    href="/browse?type=manga"
+                    href="/category/trending"
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                   >
-                    <span>🔥</span> Trending Manga
+                    <span>🔥</span> Trending Series
                   </Link>
                   <Link
-                    href="/browse?type=webtoon"
+                    href="/category/popular"
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                   >
-                    <span>⚡</span> Trending Webtoon
+                    <span>⭐</span> Popular Series
                   </Link>
                   <Link
-                    href="/browse?sort=latest"
+                    href="/category/views"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
+                  >
+                    <span>👁</span> Most Viewed
+                  </Link>
+                  <Link
+                    href="/category/latest"
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                   >
                     <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    Recently Updated
+                    Latest Releases
                   </Link>
                   <Link
-                    href="/browse?sort=newest"
-                    onClick={() => setMenuOpen(false)}
-                    className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
-                  >
-                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"/></svg>
-                    Recently Added
-                  </Link>
-                  <div className="my-1 border-t border-neutral-700/60"></div>
-                  <Link
-                    href="/browse"
-                    onClick={() => setMenuOpen(false)}
-                    className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
-                  >
-                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/></svg>
-                    Browse All Titles
-                  </Link>
-                  <Link
-                    href="/browse?sort=random"
+                    href="/category/random"
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                   >
                     <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
                     Random Series
                   </Link>
+                  <div className="my-1 border-t border-neutral-700/60"></div>
+                  {/* Standalone Filter Entry */}
+                  <Link
+                    href="/filter"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 hover:bg-neutral-800/70 transition"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
+                    Filter & Browse
+                  </Link>
                 </div>
               )}
             </div>
 
-            {/* Right: Search, Notifications, Sign Up Buttons */}
+            {/* Right: Search, Notification, Sign Up */}
             <div className="flex items-center gap-1 sm:gap-2">
               <button
                 type="button"
@@ -153,34 +203,90 @@ export default function RootLayout({
           </div>
         </header>
 
-        {/* ================= SEARCH MODAL ================= */}
+        {/* ================= INSTANT LIVE SEARCH MODAL (MangaFire-style) ================= */}
         {searchOpen && (
-          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start justify-center pt-20 px-4">
-            <div className="relative w-full max-w-lg bg-[#141721] border border-neutral-700/80 rounded-2xl p-4 shadow-2xl z-10">
-              <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
-                <span className="text-xs font-bold uppercase tracking-wider text-neutral-400">Search Catalog</span>
-                <button type="button" onClick={() => setSearchOpen(false)} className="text-neutral-400 hover:text-white text-sm">✕</button>
-              </div>
-              <form action="/browse" method="GET" className="mt-3 flex gap-2">
+          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-start justify-center pt-16 px-4">
+            <div className="relative w-full max-w-md bg-[#13151f] border border-neutral-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+              
+              {/* Input header */}
+              <div className="p-3 border-b border-neutral-800 flex items-center gap-2">
+                <svg className="w-4 h-4 text-neutral-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
                 <input
+                  ref={searchInputRef}
                   type="text"
-                  name="q"
-                  placeholder="Search series title, author, genre..."
-                  autoFocus
-                  className="flex-1 bg-neutral-900 border border-neutral-700 focus:border-indigo-500 focus:outline-none rounded-xl px-4 py-2 text-xs text-white"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Type title (e.g. One piece, Lookism)..."
+                  className="flex-1 bg-transparent border-none text-xs text-white placeholder-neutral-500 focus:outline-none"
                 />
-                <button type="submit" className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl transition">
-                  Search
+                <button
+                  type="button"
+                  onClick={() => setSearchOpen(false)}
+                  className="text-neutral-400 hover:text-white text-xs px-2 py-1 rounded bg-neutral-800"
+                >
+                  ✕
                 </button>
-              </form>
+              </div>
+
+              {/* Instant Results List */}
+              <div className="max-h-80 overflow-y-auto divide-y divide-neutral-800/60">
+                {loadingSearch && (
+                  <div className="p-4 text-center text-xs text-neutral-500">Searching catalog...</div>
+                )}
+
+                {!loadingSearch && results.length > 0 && results.map((item) => (
+                  <Link
+                    key={item.id}
+                    href={`/series/${item.slug}`}
+                    onClick={() => setSearchOpen(false)}
+                    className="flex items-center gap-3 p-2.5 hover:bg-neutral-800/60 transition group"
+                  >
+                    <div className="w-10 h-14 rounded overflow-hidden bg-neutral-900 shrink-0">
+                      <img
+                        src={item.cover_image_url}
+                        alt={item.title}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h4 className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 truncate">
+                        {item.title}
+                      </h4>
+                      <span className="text-[10px] text-neutral-500 uppercase font-semibold">
+                        {item.reading_mode === 'webtoon' ? 'Webtoon' : 'Manga'}
+                      </span>
+                    </div>
+                  </Link>
+                ))}
+
+                {!loadingSearch && query && results.length === 0 && (
+                  <div className="p-6 text-center text-xs text-neutral-500">
+                    No matching series found for &quot;{query}&quot;
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom footer button to full filter */}
+              {query && (
+                <Link
+                  href={`/filter?q=${encodeURIComponent(query)}`}
+                  onClick={() => setSearchOpen(false)}
+                  className="p-2.5 text-center text-xs font-semibold text-indigo-400 hover:bg-neutral-800/80 border-t border-neutral-800 transition"
+                >
+                  View all matching titles →
+                </Link>
+              )}
             </div>
           </div>
         )}
 
-        {/* ================= NOTIFICATIONS MODAL ================= */}
+        {/* Notifications Modal */}
         {notifOpen && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start justify-center pt-24 px-4">
-            <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl z-10 text-center">
+            <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl text-center">
               <div className="flex justify-end">
                 <button type="button" onClick={() => setNotifOpen(false)} className="text-neutral-400 hover:text-white text-sm">✕</button>
               </div>
@@ -195,10 +301,10 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* ================= SIGN UP MODAL ================= */}
+        {/* Sign Up Modal */}
         {authOpen && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl z-10">
+            <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
               <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
                 <h3 className="text-sm font-bold text-white">Create an Account</h3>
                 <button type="button" onClick={() => setAuthOpen(false)} className="text-neutral-400 hover:text-white text-sm">✕</button>
@@ -228,12 +334,8 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* ================= PAGE CHILDREN ================= */}
-        <div className="flex-1">
-          {children}
-        </div>
+        <div className="flex-1">{children}</div>
 
-        {/* ================= FOOTER ================= */}
         <footer className="w-full border-t border-neutral-800/80 bg-[#0a0b0e] py-6 text-center text-xs text-neutral-500 mt-12">
           <p>© {new Date().getFullYear()} MangaFlow. All content indexed on-demand.</p>
         </footer>
