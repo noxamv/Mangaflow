@@ -22,10 +22,11 @@ async function fetchLivePanels(chapterId: string): Promise<string[]> {
     const data = await res.json();
     const baseUrl = data.baseUrl;
     const hash = data.chapter.hash;
-    // Standard quality files, fallback to dataSaver
-    const files = data.chapter.data || data.chapter.dataSaver || [];
+    // dataSaver uses WebP/compressed formats that load smoothly on mobile without rate-limit drops
+    const files = data.chapter.dataSaver || data.chapter.data || [];
+    const folder = data.chapter.dataSaver ? 'data-saver' : 'data';
 
-    return files.map((file: string) => `${baseUrl}/data/${hash}/${file}`);
+    return files.map((file: string) => `${baseUrl}/${folder}/${hash}/${file}`);
   } catch {
     return [];
   }
@@ -129,13 +130,14 @@ export default async function ChapterReaderPage({ params }: PageProps) {
           </div>
         ) : (
           panels.map((url, idx) => (
-            <div key={idx} className="w-full bg-black flex justify-center">
+            <div key={idx} className="w-full bg-black flex justify-center min-h-[200px]">
               <img
                 src={url}
                 alt={`Panel ${idx + 1}`}
                 referrerPolicy="no-referrer"
-                loading={idx < 3 ? 'eager' : 'lazy'}
-                className="w-full h-auto block select-none"
+                loading="lazy"
+                decoding="async"
+                className="w-full h-auto block select-none pointer-events-none"
               />
             </div>
           ))
