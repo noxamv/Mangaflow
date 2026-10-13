@@ -27,6 +27,7 @@ export default function RootLayout({
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   // User session state
   const [user, setUser] = useState<any>(null);
@@ -43,7 +44,6 @@ export default function RootLayout({
   const [loadingSearch, setLoadingSearch] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Listen to Auth State
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
 
@@ -54,7 +54,6 @@ export default function RootLayout({
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  // Search debounce
   useEffect(() => {
     if (!query.trim()) {
       setResults([]);
@@ -85,7 +84,6 @@ export default function RootLayout({
     }
   }, [searchOpen]);
 
-  // Magic Link Submission Handler
   const handleSendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authEmail.trim()) return;
@@ -116,6 +114,7 @@ export default function RootLayout({
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setUser(null);
+    setUserMenuOpen(false);
   };
 
   return (
@@ -124,8 +123,6 @@ export default function RootLayout({
         <meta name="referrer" content="no-referrer" />
       </head>
       <body className="bg-[#0b0c10] text-neutral-100 antialiased min-h-screen flex flex-col selection:bg-indigo-600 selection:text-white">
-
-        {/* Global Click-to-Close Backdrop */}
         {(menuOpen || searchOpen) && (
           <div
             onClick={() => {
@@ -136,11 +133,11 @@ export default function RootLayout({
           />
         )}
 
-        {/* ================= TOP NAVBAR ================= */}
+        {/* TOP NAVBAR */}
         <header className="sticky top-0 z-50 w-full bg-[#0f1117]/95 backdrop-blur-md border-b border-neutral-800/80">
           <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
             
-            {/* Left: Hamburger Menu & Brand */}
+            {/* Left: Brand & Menu */}
             <div className="relative flex items-center gap-2.5">
               <button
                 type="button"
@@ -162,7 +159,7 @@ export default function RootLayout({
                 </span>
               </Link>
 
-              {/* Compact Menu */}
+              {/* Popover Navigation */}
               {menuOpen && (
                 <div className="absolute top-12 left-0 w-48 bg-[#151822] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50">
                   <Link
@@ -170,7 +167,9 @@ export default function RootLayout({
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                   >
-                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+                    </svg>
                     Home
                   </Link>
                   <Link
@@ -188,18 +187,13 @@ export default function RootLayout({
                     <span>⭐</span> Popular Series
                   </Link>
                   <Link
-                    href="/category/views"
-                    onClick={() => setMenuOpen(false)}
-                    className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
-                  >
-                    <span>👁</span> Most Viewed
-                  </Link>
-                  <Link
                     href="/category/latest"
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                   >
-                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
                     Latest Releases
                   </Link>
                   <Link
@@ -207,23 +201,27 @@ export default function RootLayout({
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                   >
-                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+                    <svg className="w-4 h-4 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+                    </svg>
                     Random Series
                   </Link>
-                  <div className="my-1 border-t border-neutral-700/60"></div>
+                  <div className="my-1 border-t border-neutral-700/60" />
                   <Link
                     href="/filter"
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 hover:bg-neutral-800/70 transition"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+                    </svg>
                     Filter & Browse
                   </Link>
                 </div>
               )}
             </div>
 
-            {/* Right: Search, Notifications, Auth Session */}
+            {/* Right: Search, Notifications, Circular Avatar */}
             <div className="flex items-center gap-1.5 sm:gap-2">
               <button
                 type="button"
@@ -248,17 +246,35 @@ export default function RootLayout({
               </button>
 
               {user ? (
-                <div className="flex items-center gap-2 bg-neutral-900/90 border border-neutral-700/60 py-1 px-2.5 rounded-lg">
-                  <span className="text-[11px] font-semibold text-neutral-300 max-w-[90px] sm:max-w-[130px] truncate">
-                    {user.email?.split('@')[0]}
-                  </span>
+                <div className="relative">
                   <button
                     type="button"
-                    onClick={handleSignOut}
-                    className="text-[10px] font-bold text-rose-400 hover:text-rose-300 transition"
+                    onClick={() => setUserMenuOpen(!userMenuOpen)}
+                    className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-500 text-white font-bold text-xs flex items-center justify-center border border-indigo-400/40 shadow-sm hover:scale-105 transition"
+                    aria-label="User Account"
                   >
-                    Log Out
+                    {user.email ? user.email[0].toUpperCase() : 'U'}
                   </button>
+
+                  {userMenuOpen && (
+                    <div className="absolute top-10 right-0 w-44 bg-[#141722] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50 animate-in fade-in duration-100">
+                      <div className="px-3.5 py-1.5 border-b border-neutral-800">
+                        <p className="text-[10px] text-neutral-400 font-semibold uppercase tracking-wider">Account</p>
+                        <p className="text-xs font-bold text-white truncate">{user.email?.split('@')[0]}</p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleSignOut}
+                        className="w-full text-left flex items-center gap-2 px-3.5 py-2 text-xs font-bold text-rose-400 hover:bg-rose-500/10 transition mt-1"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                        </svg>
+                        Log Out
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <button
@@ -278,7 +294,7 @@ export default function RootLayout({
           </div>
         </header>
 
-        {/* Search Floating Bar */}
+        {/* Instant Search Bar */}
         {searchOpen && (
           <div className="sticky top-14 z-50 w-full px-3 sm:px-6 max-w-lg mx-auto animate-in fade-in duration-150">
             <div className="bg-[#151824] border border-neutral-700 rounded-xl shadow-2xl overflow-hidden mt-2">
@@ -370,7 +386,7 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* Functional Authentication Modal (Magic Link) */}
+        {/* Magic Link Auth Modal */}
         {authOpen && (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="relative w-full max-w-sm bg-[#141721] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
@@ -439,7 +455,7 @@ export default function RootLayout({
                   <button
                     type="submit"
                     disabled={authLoading}
-                    className="w-full mt-2 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-bold text-xs text-white rounded-lg transition shadow-md"
+                    className="w-full mt-2 py-2 bg-indigo-600 hover:bg-indigo-500 font-bold text-xs text-white rounded-lg transition shadow-md"
                   >
                     {authLoading ? 'Sending link...' : 'Send Magic Link'}
                   </button>
@@ -454,7 +470,6 @@ export default function RootLayout({
         <footer className="w-full border-t border-neutral-800/80 bg-[#0a0b0e] py-6 text-center text-xs text-neutral-500 mt-12">
           <p>© {new Date().getFullYear()} MangaFlow. All content indexed on-demand.</p>
         </footer>
-
       </body>
     </html>
   );
