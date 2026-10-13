@@ -2,8 +2,9 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Manga Flow - Read Manga, Manhwa & Webtoons',
-  description: 'Fast, automated Manga and Webtoon reader with continuous scroll.',
+  title: 'Manga Flow - Automated Cloud Reader',
+  description: 'Fast, ad-supported manga and manhwa reader',
+  referrer: 'no-referrer',
 };
 
 export default function RootLayout({
@@ -13,7 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-neutral-950 text-neutral-100 antialiased selection:bg-indigo-600 selection:text-white">
+      <head>
+        <meta name="referrer" content="no-referrer" />
+      </head>
+      <body className="bg-[#0a0a0c] text-neutral-100 antialiased min-h-screen">
         {children}
       </body>
     </html>
