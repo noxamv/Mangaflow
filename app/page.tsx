@@ -1,10 +1,15 @@
 import Link from 'next/link';
 import Image from 'next/image';
-import { supabase } from '@/lib/supabase';
-import SpotlightSlider from '@/components/SpotlightSlider';
+import { createClient } from '@supabase/supabase-js';
+import SpotlightSlider from '../components/SpotlightSlider';
 
-// Revalidate page in the background every 60 seconds (zero cold starts for users)
+// Revalidate in the background every 60 seconds (stops "Loading library..." delays)
 export const revalidate = 60;
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+);
 
 interface Series {
   id: string;
@@ -15,17 +20,18 @@ interface Series {
 }
 
 async function getFeaturedSeries(): Promise<Series[]> {
-  const { data, error } = await supabase
-    .from('series')
-    .select('id, title, slug, cover_url, description')
-    .order('created_at', { ascending: false })
-    .limit(30);
+  try {
+    const { data, error } = await supabase
+      .from('series')
+      .select('id, title, slug, cover_url, description')
+      .order('created_at', { ascending: false })
+      .limit(30);
 
-  if (error || !data) {
+    if (error || !data) return [];
+    return data;
+  } catch {
     return [];
   }
-
-  return data;
 }
 
 export default async function HomePage() {
