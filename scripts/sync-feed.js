@@ -14,20 +14,24 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 const api = axios.create({
   baseURL: 'https://api.mangadex.org',
   timeout: 15000,
-  headers: { 'User-Agent': 'MangaFlowAutoSync/3.0' }
+  headers: { 'User-Agent': 'MangaFlowEngine/4.0' }
 });
 
-async function runExpandedSync() {
-  console.log('⚡ Starting multi-page ingestion (Manga, Manhwa, Manhua)...');
+// Helper: pause between requests to prevent MangaDex 429 rate-limiting
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  // Loop through 2 pages of 25 titles each (50 total per run)
-  for (let offset = 0; offset <= 25; offset += 25) {
+async function runMassiveSync() {
+  console.log('⚡ Starting Mass Ingestion (Manga, Manhwa & Manhua)...');
+
+  // Pull 60 series across two 30-title pages
+  for (let offset = 0; offset <= 30; offset += 30) {
     try {
+      console.log(`\n📦 Fetching series batch with offset: ${offset}...`);
       const { data: res } = await api.get('/manga', {
         params: {
-          limit: 25,
+          limit: 30,
           offset: offset,
-          'originalLanguage[]': ['ja', 'ko', 'zh'], // Manga, Manhwa & Manhua
+          'originalLanguage[]': ['ja', 'ko', 'zh'], // All three formats
           'order[followedCount]': 'desc',
           'includes[]': ['cover_art'],
           'contentRating[]': ['safe', 'suggestive'],
@@ -35,10 +39,19 @@ async function runExpandedSync() {
         }
       });
 
-      for (const item of res.data) {
+      const mangaList = res.data || [];
+
+      for (const item of mangaList) {
         const mangaId = item.id;
-        const title = item.attributes.title.en || Object.values(item.attributes.title)[0] || 'Untitled';
-        const synopsis = item.attributes.description.en || 'Read online on Manga Flow.';
+        const title =
+          item.attributes.title.en ||
+          Object.values(item.attributes.title)[0] ||
+          'Untitled Series';
+        
+        const synopsis =
+          item.attributes.description?.en ||
+          'Read manga and manhwa online on Manga Flow.';
+        
         const slug = (item.attributes.title.en || mangaId)
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, '-')
@@ -46,16 +59,16 @@ async function runExpandedSync() {
           .slice(0, 60);
 
         const origLang = item.attributes.originalLanguage;
-        const readingMode = (origLang === 'ko' || origLang === 'zh') ? 'webtoon' : 'manga';
+        const readingMode = origLang === 'ko' || origLang === 'zh' ? 'webtoon' : 'manga';
 
         // Extract Cover
         let coverUrl = '';
-        const coverRel = item.relationships.find((r) => r.type === 'cover_art');
-        if (coverRel && coverRel.attributes && coverRel.attributes.fileName) {
+        const coverRel = item.relationships?.find((r) => r.type === 'cover_art');
+        if (coverRel?.attributes?.fileName) {
           coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${coverRel.attributes.fileName}.512.jpg`;
         }
 
-        // Upsert Series
+        // 1. Upsert Series
         const { data: seriesRow, error: sErr } = await supabase
           .from('series')
           .upsert(
@@ -73,45 +86,64 @@ async function runExpandedSync() {
           .select()
           .single();
 
-        if (sErr || !seriesRow) continue;
+        if (sErr || !seriesRow) {
+          console.warn(`Skipped series ${title}:`, sErr?.message);
+          continue;
+        }
 
-        // Fetch up to 50 English chapters
+        console.log(`✅ Series Saved: ${title}`);
+        await sleep(250); // Respect rate-limit
+
+        // 2. Fetch Chapters (English, sorted ascending Ch. 1 -> latest)
         const { data: feed } = await api.get(`/manga/${mangaId}/feed`, {
           params: {
-            limit: 50,
+            limit: 60,
             'translatedLanguage[]': ['en'],
-            'order[chapter]': 'asc'
+            'order[chapter]': 'asc',
+            includeEmptyPages: 0
           }
         });
 
         const chapters = feed.data || [];
         const chapterRows = [];
+        const seenChapters = new Set();
 
         for (const ch of chapters) {
-          const chNumber = parseFloat(ch.attributes.chapter);
-          if (isNaN(chNumber)) continue;
+          // Fallback parsing for chapter numbers
+          const rawNum = ch.attributes.chapter;
+          const chNumber = rawNum ? parseFloat(rawNum) : null;
+
+          if (chNumber === null || isNaN(chNumber)) continue;
+          if (seenChapters.has(chNumber)) continue; // Avoid duplicate translations of same chapter
+          seenChapters.add(chNumber);
 
           chapterRows.push({
             series_id: seriesRow.id,
             chapter_number: chNumber,
             title: ch.attributes.title || `Chapter ${chNumber}`,
             source: ch.id,
-            panel_urls: []
+            panel_urls: [] // Hybrid zero-storage footprint
           });
         }
 
+        // 3. Save all chapters to Supabase
         if (chapterRows.length > 0) {
           await supabase.from('chapters').upsert(chapterRows, {
             onConflict: 'series_id, chapter_number'
           });
+          console.log(`   └─ Indexed ${chapterRows.length} chapters.`);
+        } else {
+          console.log(`   └─ No translated English chapters available.`);
         }
+
+        await sleep(300);
       }
     } catch (err) {
-      console.error(`Error on offset ${offset}:`, err.message);
+      console.error(`Batch offset ${offset} failed:`, err.message);
     }
   }
 
-  console.log('✅ Multi-page sync complete.');
+  console.log('\n🚀 Mass ingestion completed successfully.');
 }
 
-runExpandedSync();
+runMassiveSync();
