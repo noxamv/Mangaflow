@@ -41,7 +41,7 @@ jobs:
       - name: Trigger Next Run (Auto-Loop)
         if: success() && (github.event.inputs.auto_loop != 'false') && (steps.scraper.outputs.has_more == 'true')
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           echo "New chapters were inserted. Pausing 15 seconds, then queueing next batch..."
           sleep 15
