@@ -184,7 +184,7 @@ export default function SeriesDetailsPage() {
         </div>
       </div>
 
-      {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
     </main>
   );
 }
