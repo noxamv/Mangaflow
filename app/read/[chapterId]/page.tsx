@@ -1,16 +1,18 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
 
-interface ChapterData {
+interface ChapterRecord {
   id: string;
   chapter_number: number;
   title: string | null;
   series_id: string;
-  pages: string[];
+  pages?: any;
+  images?: any;
+  page_urls?: any;
 }
 
 export default function ReaderPage() {
@@ -18,7 +20,8 @@ export default function ReaderPage() {
   const router = useRouter();
   const chapterId = params?.chapterId as string;
 
-  const [chapter, setChapter] = useState<ChapterData | null>(null);
+  const [chapter, setChapter] = useState<ChapterRecord | null>(null);
+  const [pageList, setPageList] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [useProxy, setUseProxy] = useState(true);
   const [nextChapterId, setNextChapterId] = useState<string | null>(null);
@@ -42,7 +45,27 @@ export default function ReaderPage() {
 
       setChapter(data);
 
-      // Fetch adjacent chapters for navigation
+      // Extract image list across various possible database column names
+      let rawPages = data.pages || data.images || data.page_urls || [];
+      if (typeof rawPages === 'string') {
+        try {
+          rawPages = JSON.parse(rawPages);
+        } catch {
+          rawPages = [rawPages];
+        }
+      }
+
+      if (Array.isArray(rawPages)) {
+        // Flatten or map if items are objects like { url: '...' }
+        const parsed = rawPages
+          .map((item: any) => (typeof item === 'string' ? item : item?.url || item?.src || ''))
+          .filter(Boolean);
+        setPageList(parsed);
+      } else {
+        setPageList([]);
+      }
+
+      // Fetch adjacent chapters
       const { data: siblings } = await supabase
         .from('chapters')
         .select('id, chapter_number')
@@ -51,28 +74,8 @@ export default function ReaderPage() {
 
       if (siblings && siblings.length > 0) {
         const currentIndex = siblings.findIndex((c) => c.id === chapterId);
-        if (currentIndex > 0) {
-          setPrevChapterId(siblings[currentIndex - 1].id);
-        } else {
-          setPrevChapterId(null);
-        }
-
-        if (currentIndex < siblings.length - 1) {
-          setNextChapterId(siblings[currentIndex + 1].id);
-        } else {
-          setNextChapterId(null);
-        }
-      }
-
-      // Record reading history if user is logged in
-      const { data: userData } = await supabase.auth.getUser();
-      if (userData?.user) {
-        await supabase.from('reading_history').upsert({
-          user_id: userData.user.id,
-          series_id: data.series_id,
-          last_chapter_id: data.id,
-          updated_at: new Date().toISOString(),
-        });
+        setPrevChapterId(currentIndex > 0 ? siblings[currentIndex - 1].id : null);
+        setNextChapterId(currentIndex < siblings.length - 1 ? siblings[currentIndex + 1].id : null);
       }
 
       setLoading(false);
@@ -123,10 +126,10 @@ export default function ReaderPage() {
         </button>
       </header>
 
-      {/* Chapter Reader Pages */}
+      {/* Reader Body */}
       <main className="mx-auto flex max-w-3xl flex-col items-center px-2 py-6">
-        {chapter.pages && chapter.pages.length > 0 ? (
-          chapter.pages.map((pageUrl, idx) => (
+        {pageList.length > 0 ? (
+          pageList.map((pageUrl, idx) => (
             <div key={idx} className="relative mb-2 w-full">
               <img
                 src={getImageSrc(pageUrl)}
@@ -134,8 +137,8 @@ export default function ReaderPage() {
                 loading="lazy"
                 className="w-full rounded shadow-md"
                 onError={(e) => {
-                  // Fallback to direct URL if proxy fails or vice versa
                   const target = e.currentTarget;
+                  // If proxy fails, try direct URL; if direct fails, try proxy
                   if (target.src.includes('/api/proxy')) {
                     target.src = pageUrl;
                   }
@@ -144,10 +147,15 @@ export default function ReaderPage() {
             </div>
           ))
         ) : (
-          <p className="py-20 text-gray-500">No images available for this chapter.</p>
+          <div className="py-20 text-center">
+            <p className="text-gray-400">No images available for this chapter.</p>
+            <p className="mt-2 text-xs text-gray-600">
+              Run your GitHub Actions scraper workflow to sync chapter panels into Supabase.
+            </p>
+          </div>
         )}
 
-        {/* Bottom Navigation Buttons */}
+        {/* Bottom Nav */}
         <div className="mt-8 flex w-full justify-between gap-4 border-t border-gray-800 pt-6">
           {prevChapterId ? (
             <button
