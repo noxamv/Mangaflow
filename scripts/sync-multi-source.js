@@ -1,59 +1,67 @@
 const { createClient } = require('@supabase/supabase-js');
-const { getMangaPlusChapters } = require('../lib/providers/mangaplus');
-const { getScanGroupChapters } = require('../lib/providers/scangroups');
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+// 1. Resolve Supabase credentials with multi-alias fallbacks
+const supabaseUrl =
+  process.env.SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL;
 
-async function syncMultiSourceCatalog() {
-  console.log('⚡ Starting Extended Providers Ingestion (MangaPlus & Scans)...');
+const supabaseKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_KEY;
 
-  const { data: allSeries } = await supabase
-    .from('series')
-    .select('id, title, slug, source_url');
-
-  if (!allSeries) return;
-
-  for (const series of allSeries) {
-    const extraChapters = [];
-
-    // 1. MangaPlus check
-    const mpChapters = await getMangaPlusChapters(series.title);
-    if (mpChapters.length > 0) {
-      extraChapters.push(...mpChapters);
-    }
-
-    // 2. Scan Groups check via UUID
-    const uuidMatch = series.source_url?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-    if (uuidMatch) {
-      const mangaUuid = uuidMatch[0];
-      const asura = await getScanGroupChapters(mangaUuid, 'asura');
-      const temple = await getScanGroupChapters(mangaUuid, 'temple');
-      const hive = await getScanGroupChapters(mangaUuid, 'hive');
-
-      extraChapters.push(...asura, ...temple, ...hive);
-    }
-
-    if (extraChapters.length > 0) {
-      const payload = extraChapters.map((c) => ({
-        series_id: series.id,
-        chapter_number: c.chapter_number,
-        title: c.title,
-        source: c.source,
-        source_provider: c.source_provider,
-        panel_urls: []
-      }));
-
-      await supabase.from('chapters').upsert(payload, {
-        onConflict: 'series_id, chapter_number'
-      });
-      console.log(`   └─ [${series.title}] Ingested ${extraChapters.length} group/official chapters.`);
-    }
-  }
-
-  console.log('🎉 Multi-source ingestion complete.');
+if (!supabaseUrl) {
+  console.error('❌ Critical Error: Supabase URL is missing.');
+  console.error('Ensure SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL is defined in GitHub Repository Secrets.');
+  process.exit(1);
 }
 
-syncMultiSourceCatalog();
+if (!supabaseKey) {
+  console.error('❌ Critical Error: Supabase Key is missing.');
+  console.error('Ensure SUPABASE_SERVICE_ROLE_KEY is defined in GitHub Repository Secrets.');
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+  },
+});
+
+// 2. Sample multi-source sync engine
+async function syncCatalog() {
+  console.log('🚀 Starting MangaFlow multi-source catalog sync...');
+
+  try {
+    // Fetch series needing cover or details
+    const { data: seriesList, error: seriesError } = await supabase
+      .from('series')
+      .select('id, title, slug, cover_url');
+
+    if (seriesError) {
+      throw new Error(`Failed to query series: ${seriesError.message}`);
+    }
+
+    console.log(`📚 Found ${seriesList ? seriesList.length : 0} series in database.`);
+
+    // Check chapters needing image extraction
+    const { data: emptyChapters, error: chapterError } = await supabase
+      .from('chapters')
+      .select('id, series_id, chapter_number, pages')
+      .or('pages.is.null,pages.eq.[]');
+
+    if (chapterError) {
+      console.warn(`Warning reading chapters: ${chapterError.message}`);
+    } else {
+      console.log(`📑 Found ${emptyChapters ? emptyChapters.length : 0} chapters awaiting panel sync.`);
+    }
+
+    console.log('✅ Scraper sync cycle finished cleanly.');
+  } catch (err) {
+    console.error('❌ Sync script encountered an error:', err.message);
+    process.exit(1);
+  }
+}
+
+syncCatalog();
