@@ -1,19 +1,13 @@
-name: 4-Hour Automated Scraper & Chapter Sync
+name: MangaFlow Multi-Source Scraper
 
 on:
   schedule:
-    # Runs at minute 0 of every 4th hour: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
-    - cron: '0 */4 * * *'
-  workflow_dispatch: # Allows manual trigger directly from GitHub Actions tab
-
-concurrency:
-  group: scraper-sync
-  cancel-in-progress: true
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 jobs:
   scrape-and-update:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
       - name: Checkout Repository
@@ -22,7 +16,7 @@ jobs:
       - name: Setup Node.js Runtime
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
       - name: Install Dependencies
         run: npm install
@@ -31,11 +25,4 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          if [ -f "scripts/scraper.js" ]; then
-            node scripts/scraper.js
-          elif [ -f "scripts/scrape.ts" ]; then
-            npx tsx scripts/scrape.ts
-          else
-            echo "No custom scraper script detected in scripts/. Ensure your scraping entry point is correctly configured."
-          fi
+        run: node scripts/sync-multi-source.js
