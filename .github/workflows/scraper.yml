@@ -1,54 +1,24 @@
-name: Manga Sync Scraper
+name: Enrich Series Metadata
 
 on:
-  schedule:
-    - cron: '0 */6 * * *'
-  workflow_dispatch:
-    inputs:
-      auto_loop:
-        description: 'Auto-trigger next run upon completion?'
-        required: true
-        default: 'true'
-        type: boolean
-
-permissions:
-  actions: write
-  contents: read
+  workflow_dispatch: # Allows you to click "Run workflow" manually
 
 jobs:
-  sync:
+  enrich:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
 
       - name: Install Dependencies
-        run: npm install
+        run: npm install @supabase/supabase-js
 
-      - name: Run Chapter & Series Scraper
-        id: scraper
+      - name: Run Enrichment Script
         env:
-          SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node scripts/sync-multi-source.js
-
-      - name: Trigger Next Run (Auto-Loop)
-        if: success() && (github.event.inputs.auto_loop != 'false') && (steps.scraper.outputs.has_more == 'true')
-        env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-        run: |
-          echo "Chapters inserted or backlog pending. Waiting 15s then dispatching next run..."
-          sleep 15
-          gh workflow run "${{ github.workflow }}" -f auto_loop=true
-
-      - name: Auto-Loop Complete
-        if: success() && (steps.scraper.outputs.has_more != 'true')
-        run: |
-          echo "All series and backlogs caught up! Auto-loop successfully finished."
+        run: node scripts/enrich-all.js
