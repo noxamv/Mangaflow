@@ -1,3 +1,12 @@
+// Provide WebSocket polyfill for Node.js < 22 environments
+try {
+  if (typeof global.WebSocket === 'undefined') {
+    global.WebSocket = require('ws');
+  }
+} catch {
+  // Continue if ws is not present
+}
+
 const { createClient } = require('@supabase/supabase-js');
 
 // 1. Resolve Supabase credentials
@@ -20,14 +29,11 @@ if (!supabaseKey) {
   process.exit(1);
 }
 
-// 2. Initialize client without realtime WebSockets to prevent Node 20 ws crashes
+// 2. Initialize Supabase client
 const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
-  },
-  realtime: {
-    transport: null, // Disables WebSocket connection entirely
   },
 });
 
@@ -36,7 +42,6 @@ async function syncCatalog() {
   console.log('🚀 Starting MangaFlow multi-source catalog sync...');
 
   try {
-    // Check series needing metadata/covers
     const { data: seriesList, error: seriesError } = await supabase
       .from('series')
       .select('id, title, slug, cover_url');
@@ -47,7 +52,6 @@ async function syncCatalog() {
 
     console.log(`📚 Found ${seriesList ? seriesList.length : 0} series in database.`);
 
-    // Check chapters needing image panel extraction
     const { data: chaptersList, error: chapterError } = await supabase
       .from('chapters')
       .select('id, series_id, chapter_number, pages')
