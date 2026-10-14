@@ -1,32 +1,54 @@
-name: MangaFlow Multi-Source Scraper
+name: Manga Sync Scraper
 
 on:
   schedule:
     - cron: '0 */6 * * *'
   workflow_dispatch:
+    inputs:
+      auto_loop:
+        description: 'Auto-trigger next run upon completion?'
+        required: true
+        default: 'true'
+        type: boolean
+
+permissions:
+  actions: write
 
 jobs:
-  scrape-and-update:
+  sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js Runtime
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
+          cache: 'npm'
 
       - name: Install Dependencies
-        run: |
-          npm install
-          npm install ws
+        run: npm ci
 
       - name: Run Chapter & Series Scraper
+        id: scraper
         env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node scripts/sync-multi-source.js
+
+      - name: Trigger Next Run (Auto-Loop)
+        if: success() && (github.event.inputs.auto_loop != 'false') && (steps.scraper.outputs.has_more == 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "New chapters were inserted. Pausing 15 seconds, then queueing next batch..."
+          sleep 15
+          gh workflow run scraper.yml -f auto_loop=true
+
+      - name: Auto-Loop Stopped
+        if: success() && (steps.scraper.outputs.has_more != 'true')
+        run: |
+          echo "All 25 series in this batch had zero missing chapters. The catalog is fully caught up! Stopping auto-loop."
