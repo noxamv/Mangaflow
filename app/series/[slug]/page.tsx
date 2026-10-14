@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import Image from 'next/image';
 import { supabase } from '../../../lib/supabase';
 import AuthModal from '../../../components/AuthModal';
 import ShareBar from '../../../components/ShareBar';
@@ -19,7 +18,9 @@ interface Series {
   id: string;
   title: string;
   slug: string;
-  cover_url: string;
+  cover_url?: string;
+  cover_image?: string;
+  image?: string;
   description: string;
   status: string;
   author: string;
@@ -106,6 +107,12 @@ export default function SeriesDetailsPage() {
     }
   };
 
+  const getCoverUrl = () => {
+    const raw = series?.cover_url || series?.cover_image || series?.image || '';
+    if (!raw) return '';
+    return `/api/proxy?url=${encodeURIComponent(raw)}`;
+  };
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#0d0d12] text-white">
@@ -129,20 +136,31 @@ export default function SeriesDetailsPage() {
     <main className="min-h-screen bg-[#0d0d12] px-4 py-8 text-white sm:px-8">
       <div className="mx-auto max-w-5xl">
         <div className="flex flex-col gap-8 md:flex-row">
-          <div className="relative h-72 w-52 flex-shrink-0 overflow-hidden rounded-lg shadow-lg">
-            <Image
-              src={series.cover_url || '/placeholder.png'}
-              alt={series.title}
-              fill
-              className="object-cover"
-            />
+          <div className="relative h-72 w-52 flex-shrink-0 overflow-hidden rounded-lg bg-[#16161f] shadow-lg">
+            {getCoverUrl() ? (
+              <img
+                src={getCoverUrl()}
+                alt={series.title}
+                className="h-full w-full object-cover"
+                onError={(e) => {
+                  const raw = series?.cover_url || series?.cover_image || series?.image;
+                  if (raw && e.currentTarget.src.includes('/api/proxy')) {
+                    e.currentTarget.src = raw;
+                  }
+                }}
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-xs text-gray-500">
+                No Cover Art
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col justify-center">
             <h1 className="text-3xl font-extrabold sm:text-4xl">{series.title}</h1>
             <p className="mt-2 text-sm text-gray-400">Author: {series.author || 'Unknown'}</p>
             <p className="mt-1 text-sm text-gray-400">Status: {series.status || 'Ongoing'}</p>
-            <p className="mt-4 text-gray-300">{series.description}</p>
+            <p className="mt-4 text-gray-300">{series.description || 'No description provided.'}</p>
 
             <div className="mt-6 flex flex-wrap items-center gap-4">
               <button
