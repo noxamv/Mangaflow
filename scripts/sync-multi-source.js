@@ -9,14 +9,14 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   process.exit(1);
 }
 
-// Disable auth session persistence and realtime websockets for CLI scraper runners
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
   realtime: { createClient: () => null },
 });
 
-const BATCH_SIZE = 25;
-const MAX_NEW_CHAPTERS_PER_SERIES = 10;
+const BATCH_SIZE = 15;
+// Increased to backfill all backlog chapters without capping at 10
+const MAX_CHAPTERS_PER_SERIES = 60;
 const MANGADEX_API = 'https://api.mangadex.org';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -27,21 +27,18 @@ async function fetchJsonWithRetry(url, options = {}, retries = 3) {
       const res = await fetch(url, {
         ...options,
         headers: {
-          'User-Agent': 'MangaFlow/2.0 (aggregator-sync)',
+          'User-Agent': 'MangaFlow/2.0 (production-sync)',
           ...(options.headers || {}),
         },
       });
 
       if (res.status === 429) {
-        console.warn(`[Rate Limited 429] Waiting 3s on ${url}`);
-        await delay(3000);
+        console.warn(`[429 Rate Limit] Waiting 3.5s on ${url}`);
+        await delay(3500);
         continue;
       }
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-      }
-
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       return await res.json();
     } catch (err) {
       if (attempt === retries) throw err;
@@ -52,9 +49,19 @@ async function fetchJsonWithRetry(url, options = {}, retries = 3) {
 
 async function findMangaDexSeries(title) {
   try {
-    const cleanTitle = title.replace(/[^\w\s]/gi, ' ').trim();
-    const queryUrl = `${MANGADEX_API}/manga?title=${encodeURIComponent(cleanTitle)}&limit=1&includes[]=cover_art`;
-    const res = await fetchJsonWithRetry(queryUrl);
+    const cleanTitle = title
+      .replace(/\[.*?\]|\(.*?\)/g, '')
+      .replace(/[^\w\s]/gi, ' ')
+      .trim();
+
+    let queryUrl = `${MANGADEX_API}/manga?title=${encodeURIComponent(cleanTitle)}&limit=5&includes[]=cover_art`;
+    let res = await fetchJsonWithRetry(queryUrl);
+
+    if ((!res.data || res.data.length === 0) && title.includes(' - ')) {
+      const simplified = title.split(' - ')[0].trim();
+      queryUrl = `${MANGADEX_API}/manga?title=${encodeURIComponent(simplified)}&limit=5&includes[]=cover_art`;
+      res = await fetchJsonWithRetry(queryUrl);
+    }
 
     if (!res.data || res.data.length === 0) return null;
 
@@ -62,15 +69,23 @@ async function findMangaDexSeries(title) {
     const mangaId = manga.id;
     const desc = manga.attributes?.description?.en || '';
 
+    // Prefer official English title if current title is raw romanized
+    const enTitle = manga.attributes?.altTitles?.find((t) => t.en)?.en || manga.attributes?.title?.en;
+
+    // Grab the best available cover art file
     let coverUrl = null;
-    const coverRel = manga.relationships?.find((r) => r.type === 'cover_art');
-    if (coverRel?.attributes?.fileName) {
-      coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${coverRel.attributes.fileName}`;
+    const coverRels = manga.relationships?.filter((r) => r.type === 'cover_art') || [];
+    if (coverRels.length > 0) {
+      const bestCover = coverRels[coverRels.length - 1];
+      const fileName = bestCover.attributes?.fileName;
+      if (fileName) {
+        coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${fileName}`;
+      }
     }
 
-    return { mangaId, coverUrl, description: desc };
+    return { mangaId, coverUrl, description: desc, enTitle };
   } catch (err) {
-    console.error(`Error resolving MangaDex ID for "${title}":`, err.message);
+    console.error(`Error resolving MangaDex metadata for "${title}":`, err.message);
     return null;
   }
 }
@@ -81,16 +96,15 @@ async function fetchChapterPages(chapterId) {
     const host = res.baseUrl;
     const hash = res.chapter.hash;
     const files = res.chapter.data || [];
-
-    return files.map((fileName) => `${host}/data/${hash}/${fileName}`);
+    return files.map((f) => `${host}/data/${hash}/${f}`);
   } catch (err) {
-    console.error(`Failed to fetch pages for chapter ${chapterId}:`, err.message);
+    console.error(`Failed to load panels for chapter ${chapterId}:`, err.message);
     return [];
   }
 }
 
 async function syncBatch() {
-  console.log(`Starting sync batch of ${BATCH_SIZE} series...`);
+  console.log(`Starting deep backfill batch of ${BATCH_SIZE} series...`);
 
   const { data: seriesList, error: sErr } = await supabase
     .from('series')
@@ -99,7 +113,7 @@ async function syncBatch() {
     .limit(BATCH_SIZE);
 
   if (sErr || !seriesList || seriesList.length === 0) {
-    console.error('Failed to load series batch or table is empty:', sErr);
+    console.error('No series queued for backfill:', sErr);
     setGithubOutput('has_more', 'false');
     return;
   }
@@ -107,56 +121,62 @@ async function syncBatch() {
   let totalInsertedAcrossBatch = 0;
 
   for (const s of seriesList) {
-    console.log(`\n--- [Series: "${s.title}"] ---`);
+    console.log(`\n========================================`);
+    console.log(`Processing: "${s.title}"`);
+    console.log(`========================================`);
 
     const mdData = await findMangaDexSeries(s.title);
     await delay(350);
 
     if (!mdData?.mangaId) {
-      console.warn(`Could not match "${s.title}" on MangaDex. Skipping.`);
+      console.warn(`No match found on MangaDex for "${s.title}".`);
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
       continue;
     }
 
+    // Refresh cover art, description, and title
     const updatePayload = {};
-    if (!s.cover_url || s.cover_url.includes('placeholder')) {
-      if (mdData.coverUrl) updatePayload.cover_url = mdData.coverUrl;
+    if (mdData.coverUrl && (!s.cover_url || s.cover_url.includes('placeholder') || s.cover_url.includes('mangadex.org/covers/null'))) {
+      updatePayload.cover_url = mdData.coverUrl;
     }
-    if (!s.description && mdData.description) {
+    if (mdData.description && !s.description) {
       updatePayload.description = mdData.description;
     }
 
     if (Object.keys(updatePayload).length > 0) {
       await supabase.from('series').update(updatePayload).eq('id', s.id);
-      console.log(`Updated cover/description for "${s.title}".`);
+      console.log(`Updated metadata and cover image for "${s.title}"`);
     }
 
+    // Load existing chapters in database
     const { data: existingChapters } = await supabase
       .from('chapters')
       .select('chapter_number')
       .eq('series_id', s.id);
 
     const existingSet = new Set((existingChapters || []).map((c) => String(c.chapter_number)));
+    console.log(`Current chapters in database: ${existingSet.size}`);
 
-    const feedUrl = `${MANGADEX_API}/manga/${mdData.mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=100`;
+    // Query all available English chapters up to limit 500
+    const feedUrl = `${MANGADEX_API}/manga/${mdData.mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500`;
     let feedRes;
     try {
       feedRes = await fetchJsonWithRetry(feedUrl);
       await delay(350);
     } catch {
-      console.warn(`Could not pull feed for "${s.title}".`);
+      console.warn(`Failed to pull feed for "${s.title}".`);
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
       continue;
     }
 
-    const availableChapters = feedRes?.data || [];
+    const available = feedRes?.data || [];
     let seriesInserted = 0;
 
-    for (const ch of availableChapters) {
-      if (seriesInserted >= MAX_NEW_CHAPTERS_PER_SERIES) break;
+    for (const ch of available) {
+      if (seriesInserted >= MAX_CHAPTERS_PER_SERIES) break;
 
-      const chNum = ch.attributes?.chapter;
-      if (!chNum || existingSet.has(String(chNum))) continue;
+      const chNum = ch.attributes?.chapter || (ch.attributes?.title?.toLowerCase().includes('oneshot') ? '1' : null) || '1';
+      if (existingSet.has(String(chNum))) continue;
 
       const chapterId = ch.id;
       const chapterTitle = ch.attributes?.title || `Chapter ${chNum}`;
@@ -176,7 +196,7 @@ async function syncBatch() {
         existingSet.add(String(chNum));
         seriesInserted++;
         totalInsertedAcrossBatch++;
-        console.log(`Inserted Ch. ${chNum} (${pages.length} panels) for "${s.title}"`);
+        console.log(`+ Inserted Ch. ${chNum} (${pages.length} panels)`);
       }
     }
 
@@ -185,11 +205,11 @@ async function syncBatch() {
       .update({ updated_at: new Date().toISOString() })
       .eq('id', s.id);
 
-    console.log(`Finished "${s.title}": added ${seriesInserted} new chapters.`);
+    console.log(`Completed "${s.title}": added ${seriesInserted} chapters.`);
   }
 
   console.log(`\n========================================`);
-  console.log(`Batch complete. Total new chapters inserted: ${totalInsertedAcrossBatch}`);
+  console.log(`Batch finished. New chapters inserted: ${totalInsertedAcrossBatch}`);
   console.log(`========================================`);
 
   const hasMore = totalInsertedAcrossBatch > 0 ? 'true' : 'false';
@@ -203,6 +223,6 @@ function setGithubOutput(key, value) {
 }
 
 syncBatch().catch((err) => {
-  console.error('Fatal sync error:', err);
+  console.error('Fatal batch sync error:', err);
   process.exit(1);
 });
