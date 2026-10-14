@@ -53,7 +53,6 @@ export default function SeriesDetailsPage() {
 
       setSeries(seriesData);
 
-      // Check if user is following this series
       const { data: userData } = await supabase.auth.getUser();
       if (userData?.user) {
         const { data: followRecord } = await supabase
@@ -66,7 +65,6 @@ export default function SeriesDetailsPage() {
         if (followRecord) setIsFollowing(true);
       }
 
-      // Fetch chapters
       const { data: chapterData } = await supabase
         .from('chapters')
         .select('id, chapter_number, title, created_at')
@@ -146,7 +144,6 @@ export default function SeriesDetailsPage() {
             <p className="mt-1 text-sm text-gray-400">Status: {series.status || 'Ongoing'}</p>
             <p className="mt-4 text-gray-300">{series.description}</p>
 
-            {/* Action buttons */}
             <div className="mt-6 flex flex-wrap items-center gap-4">
               <button
                 onClick={handleFollowToggle}
@@ -159,12 +156,11 @@ export default function SeriesDetailsPage() {
                 {isFollowing ? '✓ Bookmarked' : '+ Bookmark Series'}
               </button>
 
-              <ShareBar title={series.title} />
+              <ShareBar />
             </div>
           </div>
         </div>
 
-        {/* Chapter list */}
         <div className="mt-12">
           <h2 className="border-b border-gray-800 pb-2 text-2xl font-bold">Chapters</h2>
           <div className="mt-4 flex flex-col gap-2">
@@ -188,7 +184,6 @@ export default function SeriesDetailsPage() {
         </div>
       </div>
 
-      {/* Auth Modal Trigger */}
       {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
     </main>
   );
