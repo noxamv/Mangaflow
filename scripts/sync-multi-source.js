@@ -9,7 +9,11 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// Disable auth session persistence and realtime websockets for CLI scraper runners
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: false },
+  realtime: { createClient: () => null },
+});
 
 const BATCH_SIZE = 25;
 const MAX_NEW_CHAPTERS_PER_SERIES = 10;
@@ -188,7 +192,6 @@ async function syncBatch() {
   console.log(`Batch complete. Total new chapters inserted: ${totalInsertedAcrossBatch}`);
   console.log(`========================================`);
 
-  // If 0 chapters were inserted, catalog has caught up
   const hasMore = totalInsertedAcrossBatch > 0 ? 'true' : 'false';
   setGithubOutput('has_more', hasMore);
 }
