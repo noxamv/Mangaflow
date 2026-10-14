@@ -42,35 +42,53 @@ const mdHttp = axios.create({
   headers: { 'User-Agent': 'MangaFlowCollector/1.0' },
 });
 
-// Helper: Convert MangaDex chapter UUID to full array of panel image URLs
+// Polite sleep helper with auto-retry support on 429
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function safeGet(url, params = {}) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await sleep(250);
+      const res = await mdHttp.get(url, { params });
+      return res.data;
+    } catch (err) {
+      if (err.response?.status === 429) {
+        console.warn(`⏳ Rate-limited by MangaDex. Cooling down for 3s (Attempt ${attempt}/3)...`);
+        await sleep(3000);
+      } else {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+// Convert chapter UUID to panel image URLs
 async function fetchChapterPages(chapterUuid) {
   try {
-    const res = await mdHttp.get(`/at-home/server/${chapterUuid}`);
-    const host = res.data?.baseUrl;
-    const hash = res.data?.chapter?.hash;
-    const files = res.data?.chapter?.data || [];
+    const data = await safeGet(`/at-home/server/${chapterUuid}`);
+    const host = data?.baseUrl;
+    const hash = data?.chapter?.hash;
+    const files = data?.chapter?.data || [];
 
     if (!host || !hash || !files.length) return [];
-
     return files.map((fileName) => `${host}/data/${hash}/${fileName}`);
-  } catch (err) {
+  } catch {
     return [];
   }
 }
 
-// Helper: Search MangaDex for a manga title to obtain UUID and official cover
+// Search MangaDex for UUID, high-res cover, and synopsis
 async function searchMangaDex(title) {
   try {
     const cleanTitle = title.replace(/[\[\(\]\)]/g, ' ').trim();
-    const res = await mdHttp.get('/manga', {
-      params: {
-        title: cleanTitle,
-        limit: 1,
-        'includes[]': 'cover_art',
-      },
+    const data = await safeGet('/manga', {
+      title: cleanTitle,
+      limit: 1,
+      'includes[]': 'cover_art',
     });
 
-    const manga = res.data?.data?.[0];
+    const manga = data?.data?.[0];
     if (!manga) return null;
 
     const coverRel = manga.relationships?.find((r) => r.type === 'cover_art');
@@ -79,27 +97,28 @@ async function searchMangaDex(title) {
       ? `https://uploads.mangadex.org/covers/${manga.id}/${fileName}.512.jpg`
       : null;
 
+    const desc = manga.attributes?.description?.en || null;
+
     return {
       uuid: manga.id,
       coverUrl,
+      description: desc,
     };
   } catch {
     return null;
   }
 }
 
-// Helper: Get English chapters from any active group if specific scan groups return empty
+// Get up to 100 recent English chapters from MangaDex
 async function getGeneralEnglishChapters(mangaUuid) {
   try {
-    const res = await mdHttp.get(`/manga/${mangaUuid}/feed`, {
-      params: {
-        translatedLanguage: ['en'],
-        order: { chapter: 'desc' },
-        limit: 100,
-      },
+    const data = await safeGet(`/manga/${mangaUuid}/feed`, {
+      translatedLanguage: ['en'],
+      order: { chapter: 'desc' },
+      limit: 100,
     });
 
-    const items = res.data?.data || [];
+    const items = data?.data || [];
     return items.map((ch) => ({
       chapter_number: parseFloat(ch.attributes?.chapter) || 0,
       title: ch.attributes?.title || `Chapter ${ch.attributes?.chapter}`,
@@ -110,88 +129,117 @@ async function getGeneralEnglishChapters(mangaUuid) {
   }
 }
 
-async function runSync() {
-  console.log('🚀 Starting MangaFlow multi-source sync engine...');
+async function runMaxSync() {
+  console.log('🚀 Launching MangaFlow High-Capacity Sync Engine...');
 
   try {
-    // 1. Fetch series from database
+    // Process 120 series per run (scales through all 471 in ~4 runs)
     const { data: seriesList, error: sErr } = await supabase
       .from('series')
-      .select('id, title, slug, cover_url')
-      .limit(10);
+      .select('id, title, slug, cover_url, description')
+      .order('updated_at', { ascending: true, nullsFirst: true })
+      .limit(120);
 
     if (sErr) throw sErr;
-    console.log(`📚 Found ${seriesList.length} series to evaluate.`);
+    console.log(`📚 Processing ${seriesList.length} series in this run batch...`);
 
-    for (const series of seriesList) {
-      console.log(`\n🔍 Checking: "${series.title}"`);
+    let totalPanelsSynced = 0;
+    let totalChaptersCreated = 0;
+
+    for (let i = 0; i < seriesList.length; i++) {
+      const series = seriesList[i];
+      console.log(`\n[${i + 1}/${seriesList.length}] 🔍 "${series.title}"`);
       const mdInfo = await searchMangaDex(series.title);
 
       if (!mdInfo?.uuid) {
-        console.log(`⚠️ No match found for "${series.title}"`);
+        console.log(`  ⚠️ No match found for "${series.title}"`);
+        // Touch updated_at so unmatchable series rotate to the back of the queue
+        await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', series.id);
         continue;
       }
 
-      // Update real cover art if missing or currently a placeholder
+      // 1. Update cover art & description if missing or demo placeholder
+      const updates = { updated_at: new Date().toISOString() };
       if (mdInfo.coverUrl && (!series.cover_url || series.cover_url.includes('picsum'))) {
-        await supabase
-          .from('series')
-          .update({ cover_url: mdInfo.coverUrl })
-          .eq('id', series.id);
-        console.log(`🖼️ Updated real cover art for: ${series.title}`);
+        updates.cover_url = mdInfo.coverUrl;
       }
+      if (mdInfo.description && !series.description) {
+        updates.description = mdInfo.description;
+      }
+      await supabase.from('series').update(updates).eq('id', series.id);
 
-      // First check target scan groups (Asura, Temple, Hive)
+      // 2. Discover available chapters from groups or general feed
       let providerChapters = [];
       for (const group of ['asura', 'temple', 'hive']) {
         const chapters = await getScanGroupChapters(mdInfo.uuid, group);
         if (chapters.length > 0) {
           providerChapters = chapters;
-          console.log(`📡 Discovered ${chapters.length} chapters from scan group: ${group}`);
           break;
         }
       }
 
-      // If specific groups have no upload for this series, fall back to general English feed
       if (providerChapters.length === 0) {
         providerChapters = await getGeneralEnglishChapters(mdInfo.uuid);
-        if (providerChapters.length > 0) {
-          console.log(`📡 Discovered ${providerChapters.length} chapters from general feed`);
-        }
       }
 
-      // Fetch pending chapters from your Supabase table for this series
+      if (providerChapters.length === 0) {
+        providerChapters = await getMangaPlusChapters(series.title);
+      }
+
+      // 3. Fetch existing chapters in DB
       const { data: dbChapters } = await supabase
         .from('chapters')
         .select('id, chapter_number, pages')
-        .eq('series_id', series.id)
-        .limit(10);
+        .eq('series_id', series.id);
 
-      if (!dbChapters || dbChapters.length === 0) continue;
+      const existingMap = new Map();
+      (dbChapters || []).forEach((c) => existingMap.set(c.chapter_number, c));
 
-      for (const ch of dbChapters) {
+      // 4. Fill empty or broken pages on existing chapters
+      for (const ch of dbChapters || []) {
+        const hasValidPages = Array.isArray(ch.pages) && ch.pages.length > 0 && !ch.pages[0].includes('picsum');
+        if (hasValidPages) continue;
+
         const matched = providerChapters.find(
           (pc) => Math.abs(pc.chapter_number - ch.chapter_number) < 0.01
         );
 
-        if (matched?.source) {
+        if (matched?.source && !matched.source.startsWith('mangaplus_')) {
           const pages = await fetchChapterPages(matched.source);
           if (pages.length > 0) {
-            await supabase
-              .from('chapters')
-              .update({ pages })
-              .eq('id', ch.id);
-            console.log(`✅ Synced ${pages.length} real panels into Ch. ${ch.chapter_number}`);
+            await supabase.from('chapters').update({ pages }).eq('id', ch.id);
+            totalPanelsSynced += pages.length;
+            console.log(`  ✅ Synced ${pages.length} panels into Ch. ${ch.chapter_number}`);
           }
+        }
+      }
+
+      // 5. Insert up to 50 missing chapters per series
+      const missingChapters = providerChapters
+        .filter((pc) => !existingMap.has(pc.chapter_number) && !pc.source.startsWith('mangaplus_'))
+        .slice(0, 50);
+
+      for (const newCh of missingChapters) {
+        const pages = await fetchChapterPages(newCh.source);
+        if (pages.length > 0) {
+          await supabase.from('chapters').insert({
+            series_id: series.id,
+            chapter_number: newCh.chapter_number,
+            title: newCh.title,
+            pages,
+            scan_group: 'MangaDex',
+          });
+          totalChaptersCreated++;
+          console.log(`  ✨ Added missing Ch. ${newCh.chapter_number} (${pages.length} panels)`);
         }
       }
     }
 
-    console.log('\n🏁 MangaFlow sync cycle completed cleanly.');
+    console.log(`\n🎉 Sync finished! Created ${totalChaptersCreated} new chapters and synced ${totalPanelsSynced} panels.`);
   } catch (err) {
     console.error('❌ Sync script encountered an error:', err.message);
     process.exit(1);
   }
 }
 
-runSync();
+runMaxSync();
