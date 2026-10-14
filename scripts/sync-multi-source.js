@@ -9,8 +9,21 @@ try {
 
 const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
-const { getScanGroupChapters } = require('../lib/providers/scangroups');
-const { getMangaPlusChapters } = require('../lib/providers/mangaplus');
+
+let getScanGroupChapters = null;
+let getMangaPlusChapters = null;
+
+try {
+  ({ getScanGroupChapters } = require('../lib/providers/scangroups'));
+} catch {
+  getScanGroupChapters = async () => [];
+}
+
+try {
+  ({ getMangaPlusChapters } = require('../lib/providers/mangaplus'));
+} catch {
+  getMangaPlusChapters = async () => [];
+}
 
 // 1. Resolve and sanitize Supabase credentials
 let rawUrl =
@@ -42,7 +55,6 @@ const mdHttp = axios.create({
   headers: { 'User-Agent': 'MangaFlowCollector/1.0' },
 });
 
-// Polite sleep helper with auto-retry support on 429
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function safeGet(url, params = {}) {
@@ -53,7 +65,7 @@ async function safeGet(url, params = {}) {
       return res.data;
     } catch (err) {
       if (err.response?.status === 429) {
-        console.warn(`⏳ Rate-limited by MangaDex. Cooling down for 3s (Attempt ${attempt}/3)...`);
+        console.warn(`⏳ Rate-limited. Cooling down for 3s (Attempt ${attempt}/3)...`);
         await sleep(3000);
       } else {
         return null;
@@ -78,7 +90,7 @@ async function fetchChapterPages(chapterUuid) {
   }
 }
 
-// Search MangaDex for UUID, high-res cover, and synopsis
+// Search MangaDex for UUID, official high-res cover, and synopsis
 async function searchMangaDex(title) {
   try {
     const cleanTitle = title.replace(/[\[\(\]\)]/g, ' ').trim();
@@ -133,11 +145,10 @@ async function runMaxSync() {
   console.log('🚀 Launching MangaFlow High-Capacity Sync Engine...');
 
   try {
-    // Process 120 series per run (scales through all 471 in ~4 runs)
+    // 1. Fetch batch of 120 series safely without throwing if updated_at is fresh
     const { data: seriesList, error: sErr } = await supabase
       .from('series')
       .select('id, title, slug, cover_url, description')
-      .order('updated_at', { ascending: true, nullsFirst: true })
       .limit(120);
 
     if (sErr) throw sErr;
@@ -153,26 +164,27 @@ async function runMaxSync() {
 
       if (!mdInfo?.uuid) {
         console.log(`  ⚠️ No match found for "${series.title}"`);
-        // Touch updated_at so unmatchable series rotate to the back of the queue
-        await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', series.id);
         continue;
       }
 
       // 1. Update cover art & description if missing or demo placeholder
-      const updates = { updated_at: new Date().toISOString() };
+      const updates = {};
       if (mdInfo.coverUrl && (!series.cover_url || series.cover_url.includes('picsum'))) {
         updates.cover_url = mdInfo.coverUrl;
       }
       if (mdInfo.description && !series.description) {
         updates.description = mdInfo.description;
       }
-      await supabase.from('series').update(updates).eq('id', series.id);
 
-      // 2. Discover available chapters from groups or general feed
+      if (Object.keys(updates).length > 0) {
+        await supabase.from('series').update(updates).eq('id', series.id);
+      }
+
+      // 2. Discover available chapters from scan groups or general feed
       let providerChapters = [];
       for (const group of ['asura', 'temple', 'hive']) {
         const chapters = await getScanGroupChapters(mdInfo.uuid, group);
-        if (chapters.length > 0) {
+        if (chapters && chapters.length > 0) {
           providerChapters = chapters;
           break;
         }
@@ -186,7 +198,7 @@ async function runMaxSync() {
         providerChapters = await getMangaPlusChapters(series.title);
       }
 
-      // 3. Fetch existing chapters in DB
+      // 3. Fetch existing chapters in DB for this series
       const { data: dbChapters } = await supabase
         .from('chapters')
         .select('id, chapter_number, pages')
@@ -235,7 +247,7 @@ async function runMaxSync() {
       }
     }
 
-    console.log(`\n🎉 Sync finished! Created ${totalChaptersCreated} new chapters and synced ${totalPanelsSynced} panels.`);
+    console.log(`\n🎉 Batch complete: Added ${totalChaptersCreated} chapters and synced ${totalPanelsSynced} panels.`);
   } catch (err) {
     console.error('❌ Sync script encountered an error:', err.message);
     process.exit(1);
