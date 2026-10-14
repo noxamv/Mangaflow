@@ -26,7 +26,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install Dependencies
         run: npm install
@@ -50,4 +50,4 @@ jobs:
       - name: Auto-Loop Stopped
         if: success() && (steps.scraper.outputs.has_more != 'true')
         run: |
-          echo "All series up to date! Stopping auto-loop."
+          echo "Catalog is fully up to date! Stopping auto-loop."
