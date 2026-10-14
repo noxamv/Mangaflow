@@ -10,15 +10,24 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
+  realtime: { transport: null },
 });
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function fetchAniListMetadata(title) {
-  const cleanTitle = title
-    .replace(/\[.*?\]|\(.*?\)/g, '')
-    .replace(/[^\w\s]/gi, ' ')
+async function fetchAniListMetadata(rawTitle) {
+  // Candidate cleanups:
+  // 1. Remove brackets like 【 】, [ ], ( )
+  const noBrackets = rawTitle
+    .replace(/[【】\[\]\(\)]/g, ' ')
+    .replace(/["'""'']/g, '')
     .trim();
+
+  // 2. Strip subtitles after "~", ":", or "-"
+  const baseTitle = noBrackets.split(/[~:–—\-]/)[0].trim();
+
+  // Try queries in order of specificity
+  const searchCandidates = [...new Set([noBrackets, baseTitle])].filter((t) => t.length >= 2);
 
   const query = `
     query ($search: String) {
@@ -38,29 +47,41 @@ async function fetchAniListMetadata(title) {
     }
   `;
 
-  try {
-    const res = await fetch('https://graphql.anilist.co', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({
-        query,
-        variables: { search: cleanTitle },
-      }),
-    });
+  for (const term of searchCandidates) {
+    try {
+      const res = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          variables: { search: term },
+        }),
+      });
 
-    if (!res.ok) return null;
-    const json = await res.json();
-    return json?.data?.Media || null;
-  } catch {
-    return null;
+      if (res.status === 429) {
+        console.warn('Rate limited. Waiting 60s...');
+        await delay(60000);
+        continue;
+      }
+
+      if (!res.ok) continue;
+      const json = await res.json();
+      const media = json?.data?.Media;
+      if (media) return media;
+    } catch {
+      continue;
+    }
+    await delay(350);
   }
+
+  return null;
 }
 
 async function runEnrichment() {
-  console.log('Querying series lacking English or Native titles...');
+  console.log('Querying series needing metadata enrichment...');
 
   const { data: list, error } = await supabase
     .from('series')
@@ -68,11 +89,11 @@ async function runEnrichment() {
     .or('english_title.is.null,native_title.is.null');
 
   if (error || !list || list.length === 0) {
-    console.log('No series require enrichment.');
+    console.log('All series metadata is complete.');
     return;
   }
 
-  console.log(`Found ${list.length} titles to enrich with AniList data.\n`);
+  console.log(`Processing ${list.length} titles...\n`);
 
   let successCount = 0;
   let failCount = 0;
@@ -82,7 +103,7 @@ async function runEnrichment() {
     console.log(`[${i + 1}/${list.length}] Searching: "${item.title}"...`);
 
     const media = await fetchAniListMetadata(item.title);
-    await delay(750); // Respect AniList rate limit (90 requests/minute)
+    await delay(750);
 
     if (media) {
       const payload = {
@@ -92,7 +113,6 @@ async function runEnrichment() {
         synonyms: media.synonyms || [],
       };
 
-      // If the series still doesn't have a valid cover, fill it in too
       if (!item.cover_url && (media.coverImage?.extraLarge || media.coverImage?.large)) {
         payload.cover_url = media.coverImage.extraLarge || media.coverImage.large;
       }
@@ -103,24 +123,19 @@ async function runEnrichment() {
         .eq('id', item.id);
 
       if (!updateErr) {
-        console.log(`  ✓ Origin: [${payload.country_of_origin || '?'}] | EN: "${payload.english_title || 'N/A'}" | Native: "${payload.native_title || 'N/A'}"`);
+        console.log(`  ✓ Found: [${payload.country_of_origin}] EN: "${payload.english_title || 'N/A'}"`);
         successCount++;
       } else {
         console.error(`  ✗ DB Error: ${updateErr.message}`);
         failCount++;
       }
     } else {
-      console.warn(`  ✗ Not found on AniList: "${item.title}"`);
+      console.warn(`  ✗ Unmatched: "${item.title}"`);
       failCount++;
     }
   }
 
-  console.log('\n========================================');
-  console.log(`Enrichment complete: ${successCount} updated, ${failCount} skipped/not found.`);
-  console.log('========================================');
+  console.log(`\nDone: ${successCount} updated, ${failCount} unmatched.`);
 }
 
-runEnrichment().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+runEnrichment().catch(console.error);
