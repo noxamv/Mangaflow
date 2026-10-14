@@ -1,3 +1,4 @@
+import fs from 'fs';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -95,10 +96,11 @@ async function syncBatch() {
 
   if (sErr || !seriesList || seriesList.length === 0) {
     console.error('Failed to load series batch or table is empty:', sErr);
+    setGithubOutput('has_more', 'false');
     return;
   }
 
-  console.log(`Loaded ${seriesList.length} series for processing.`);
+  let totalInsertedAcrossBatch = 0;
 
   for (const s of seriesList) {
     console.log(`\n--- [Series: "${s.title}"] ---`);
@@ -144,10 +146,10 @@ async function syncBatch() {
     }
 
     const availableChapters = feedRes?.data || [];
-    let insertedCount = 0;
+    let seriesInserted = 0;
 
     for (const ch of availableChapters) {
-      if (insertedCount >= MAX_NEW_CHAPTERS_PER_SERIES) break;
+      if (seriesInserted >= MAX_NEW_CHAPTERS_PER_SERIES) break;
 
       const chNum = ch.attributes?.chapter;
       if (!chNum || existingSet.has(String(chNum))) continue;
@@ -168,7 +170,8 @@ async function syncBatch() {
 
       if (!insErr) {
         existingSet.add(String(chNum));
-        insertedCount++;
+        seriesInserted++;
+        totalInsertedAcrossBatch++;
         console.log(`Inserted Ch. ${chNum} (${pages.length} panels) for "${s.title}"`);
       }
     }
@@ -178,10 +181,22 @@ async function syncBatch() {
       .update({ updated_at: new Date().toISOString() })
       .eq('id', s.id);
 
-    console.log(`Finished "${s.title}": added ${insertedCount} new chapters.`);
+    console.log(`Finished "${s.title}": added ${seriesInserted} new chapters.`);
   }
 
-  console.log('\nBatch sync finished successfully.');
+  console.log(`\n========================================`);
+  console.log(`Batch complete. Total new chapters inserted: ${totalInsertedAcrossBatch}`);
+  console.log(`========================================`);
+
+  // If 0 chapters were inserted, catalog has caught up
+  const hasMore = totalInsertedAcrossBatch > 0 ? 'true' : 'false';
+  setGithubOutput('has_more', hasMore);
+}
+
+function setGithubOutput(key, value) {
+  if (process.env.GITHUB_OUTPUT) {
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
+  }
 }
 
 syncBatch().catch((err) => {
