@@ -27,10 +27,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci
+        run: npm install
 
       - name: Run Chapter & Series Scraper
         id: scraper
@@ -51,4 +50,4 @@ jobs:
       - name: Auto-Loop Stopped
         if: success() && (steps.scraper.outputs.has_more != 'true')
         run: |
-          echo "All 25 series in this batch had zero missing chapters. The catalog is fully caught up! Stopping auto-loop."
+          echo "All series up to date! Stopping auto-loop."
