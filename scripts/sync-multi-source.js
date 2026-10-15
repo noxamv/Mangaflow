@@ -14,8 +14,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   realtime: { createClient: () => null },
 });
 
-const BATCH_SIZE = 15;
-const MAX_CHAPTERS_PER_SERIES = 30; // 30 per pass prevents runner execution timeouts
+// Tuned for high volume without exceeding GitHub Actions run limits
+const BATCH_SIZE = 20; 
+const MAX_CHAPTERS_PER_SERIES = 250; 
 const MANGADEX_API = 'https://api.mangadex.org';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -30,20 +31,20 @@ function setGithubOutput(key, value) {
   }
 }
 
-async function fetchJsonWithRetry(url, options = {}, retries = 3) {
+async function fetchJsonWithRetry(url, options = {}, retries = 4) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, {
         ...options,
         headers: {
-          'User-Agent': 'MangaFlow/2.0 (aggregator-sync)',
+          'User-Agent': 'MangaFlow/3.0 (universal-panel-sync)',
           ...(options.headers || {}),
         },
       });
 
       if (res.status === 429) {
-        console.warn(`[429 Rate Limit] Backing off 3.5s on ${url}`);
-        await delay(3500);
+        console.warn(`[429 Rate Limit] MangaDex backoff on ${url}. Waiting ${attempt * 3}s...`);
+        await delay(3000 * attempt);
         continue;
       }
 
@@ -54,6 +55,7 @@ async function fetchJsonWithRetry(url, options = {}, retries = 3) {
       await delay(1200 * attempt);
     }
   }
+  return null;
 }
 
 async function findMangaDexSeries(title) {
@@ -66,13 +68,13 @@ async function findMangaDexSeries(title) {
     let queryUrl = `${MANGADEX_API}/manga?title=${encodeURIComponent(cleanTitle)}&limit=5&includes[]=cover_art`;
     let res = await fetchJsonWithRetry(queryUrl);
 
-    if ((!res.data || res.data.length === 0) && title.includes(' - ')) {
+    if ((!res?.data || res.data.length === 0) && title.includes(' - ')) {
       const simplified = title.split(' - ')[0].trim();
       queryUrl = `${MANGADEX_API}/manga?title=${encodeURIComponent(simplified)}&limit=5&includes[]=cover_art`;
       res = await fetchJsonWithRetry(queryUrl);
     }
 
-    if (!res.data || res.data.length === 0) return null;
+    if (!res?.data || res.data.length === 0) return null;
 
     const manga = res.data[0];
     const mangaId = manga.id;
@@ -98,6 +100,7 @@ async function findMangaDexSeries(title) {
 async function fetchChapterPages(chapterId) {
   try {
     const res = await fetchJsonWithRetry(`${MANGADEX_API}/at-home/server/${chapterId}`);
+    if (!res?.baseUrl || !res?.chapter?.hash) return [];
     const host = res.baseUrl;
     const hash = res.chapter.hash;
     const files = res.chapter.data || [];
@@ -108,9 +111,10 @@ async function fetchChapterPages(chapterId) {
   }
 }
 
-async function syncBatch() {
-  console.log(`Pulling batch of ${BATCH_SIZE} series with oldest timestamps...`);
+async function syncAllSeries() {
+  console.log(`Starting Universal Panel Sync: Fetching batch of ${BATCH_SIZE} series...`);
 
+  // Grab series that have not been updated recently
   const { data: seriesList, error: sErr } = await supabase
     .from('series')
     .select('id, title, slug, cover_url, description, updated_at')
@@ -118,29 +122,29 @@ async function syncBatch() {
     .limit(BATCH_SIZE);
 
   if (sErr || !seriesList || seriesList.length === 0) {
-    console.error('No series queued for sync:', sErr?.message);
+    console.log('All series are up-to-date.');
     setGithubOutput('has_more', 'false');
     return;
   }
 
-  let totalInsertedAcrossBatch = 0;
+  let totalUpdatedAcrossBatch = 0;
 
   for (const s of seriesList) {
-    console.log(`\n========================================`);
-    console.log(`Syncing: "${s.title}"`);
-    console.log(`========================================`);
+    console.log(`\n==================================================`);
+    console.log(`Checking Series: "${s.title}"`);
+    console.log(`==================================================`);
 
     try {
       const mdData = await findMangaDexSeries(s.title);
-      await delay(350);
+      await delay(300);
 
       if (!mdData?.mangaId) {
-        console.warn(`[Skip] No match on MangaDex for "${s.title}". Updating timestamp.`);
+        console.warn(`[Skip] "${s.title}" not indexed on MangaDex. Marking updated.`);
         await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
         continue;
       }
 
-      // Metadata & cover update
+      // Update missing cover or description if needed
       const updatePayload = {};
       const needsCover = !s.cover_url || 
         s.cover_url.includes('placeholder') || 
@@ -151,34 +155,37 @@ async function syncBatch() {
 
       if (Object.keys(updatePayload).length > 0) {
         await supabase.from('series').update(updatePayload).eq('id', s.id);
-        console.log(`Updated cover/metadata for "${s.title}"`);
+        console.log(`Updated cover/description for "${s.title}"`);
       }
 
-      // Fetch existing chapters and verify which already have images loaded
+      // Check all chapters currently in DB for this series
       const { data: existingChapters } = await supabase
         .from('chapters')
         .select('id, chapter_number, pages')
         .eq('series_id', s.id);
 
-      // Track chapters that already have a non-empty pages array
+      // Chapters that already have working panels
       const completedSet = new Set(
         (existingChapters || [])
           .filter((c) => Array.isArray(c.pages) && c.pages.length > 0)
           .map((c) => String(c.chapter_number))
       );
 
-      console.log(`Chapters with images in DB: ${completedSet.size} / ${(existingChapters || []).length}`);
+      console.log(`Status: ${completedSet.size} chapters have panels out of ${(existingChapters || []).length} total rows.`);
 
-      // Safe limit of 100 per request
-      const feedUrl = `${MANGADEX_API}/manga/${mdData.mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=100`;
+      // Pull available English chapters from MangaDex (up to 500)
+      const feedUrl = `${MANGADEX_API}/manga/${mdData.mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500`;
       const feedRes = await fetchJsonWithRetry(feedUrl);
-      await delay(350);
+      await delay(300);
 
       const available = feedRes?.data || [];
-      let seriesInserted = 0;
+      let seriesUpdatedCount = 0;
 
       for (const ch of available) {
-        if (seriesInserted >= MAX_CHAPTERS_PER_SERIES) break;
+        if (seriesUpdatedCount >= MAX_CHAPTERS_PER_SERIES) {
+          console.log(`Reached limit of ${MAX_CHAPTERS_PER_SERIES} chapters for "${s.title}" this pass.`);
+          break;
+        }
 
         const rawChNum = ch.attributes?.chapter;
         let parsedNum;
@@ -191,17 +198,17 @@ async function syncBatch() {
           parsedNum = 1;
         }
 
-        // Only skip if panels are already loaded in database
+        // Skip if panels are already stored
         if (completedSet.has(String(parsedNum))) continue;
 
         const chapterId = ch.id;
         const chapterTitle = ch.attributes?.title || `Chapter ${parsedNum}`;
         const pages = await fetchChapterPages(chapterId);
-        await delay(350);
+        await delay(300);
 
-        if (pages.length === 0) continue;
+        if (!pages || pages.length === 0) continue;
 
-        // Upsert allows updating the empty pages column on existing chapter rows
+        // Upsert writes panel image URLs directly into the chapter row
         const { error: insErr } = await supabase.from('chapters').upsert(
           {
             series_id: s.id,
@@ -214,37 +221,39 @@ async function syncBatch() {
 
         if (!insErr) {
           completedSet.add(String(parsedNum));
-          seriesInserted++;
-          totalInsertedAcrossBatch++;
-          console.log(`+ Synced panels for Ch. ${parsedNum} (${pages.length} pages)`);
+          seriesUpdatedCount++;
+          totalUpdatedAcrossBatch++;
+          console.log(`✓ Ch. ${parsedNum}: Synced ${pages.length} panels`);
         } else {
-          console.warn(`Could not sync Ch. ${parsedNum}:`, insErr.message);
+          console.warn(`Failed saving Ch. ${parsedNum}:`, insErr.message);
         }
       }
 
-      console.log(`Finished "${s.title}": +${seriesInserted} chapters.`);
+      console.log(`Finished "${s.title}": Synced ${seriesUpdatedCount} chapters with images.`);
     } catch (seriesError) {
-      console.error(`Error processing "${s.title}":`, seriesError.message);
+      console.error(`Error processing series "${s.title}":`, seriesError.message);
     } finally {
+      // Touch timestamp so other series get processed on the next pass
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
     }
   }
 
+  // Check how many series are still queued for a pass
   const { count: remainingUnsynced } = await supabase
     .from('series')
     .select('id', { count: 'exact', head: true })
     .lte('updated_at', '2001-01-01T00:00:00Z');
 
-  console.log(`\n========================================`);
-  console.log(`Batch Summary: Chapters updated/added = ${totalInsertedAcrossBatch}`);
-  console.log(`Backlog series remaining = ${remainingUnsynced || 0}`);
-  console.log(`========================================`);
+  console.log(`\n==================================================`);
+  console.log(`Batch Complete: Total chapters with panels synced = ${totalUpdatedAcrossBatch}`);
+  console.log(`Remaining unindexed series = ${remainingUnsynced || 0}`);
+  console.log(`==================================================`);
 
-  const hasMore = (totalInsertedAcrossBatch > 0 || (remainingUnsynced && remainingUnsynced > 0)) ? 'true' : 'false';
+  const hasMore = (totalUpdatedAcrossBatch > 0 || (remainingUnsynced && remainingUnsynced > 0)) ? 'true' : 'false';
   setGithubOutput('has_more', hasMore);
 }
 
-syncBatch().catch((err) => {
+syncAllSeries().catch((err) => {
   console.error('Fatal sync failure:', err);
   setGithubOutput('has_more', 'false');
   process.exit(1);
