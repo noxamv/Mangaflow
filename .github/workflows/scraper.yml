@@ -1,17 +1,31 @@
-name: Auto Chapter Release Bot
+name: MangaFlow Unified Bot & Catalog Repair
 
 on:
   schedule:
-    # Runs at minute 0 of every hour
+    # Runs the lightweight latest release check every hour
     - cron: '0 * * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Choose Execution Mode'
+        required: true
+        default: 'full-repair-and-sync'
+        type: choice
+        options:
+          - full-repair-and-sync
+          - latest-hourly-only
 
 jobs:
-  scrape:
+  # -------------------------------------------------------------
+  # JOB 1: Quick 1-Hour Release Bot
+  # Runs on schedule OR when selected manually
+  # -------------------------------------------------------------
+  hourly-latest-sync:
+    if: github.event_name == 'schedule' || github.event.inputs.mode == 'latest-hourly-only'
+    name: Quick Latest Release Check
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Setup Node.js 22
@@ -22,8 +36,39 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Run Chapter Bot
+      - name: Fetch Latest Chapter Releases
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node scripts/scrape-latest-and-popular.js
+
+  # -------------------------------------------------------------
+  # JOB 2: Full Catalog Repair & 3-Pass High-Volume Sync
+  # Runs when manually triggered with "full-repair-and-sync"
+  # -------------------------------------------------------------
+  full-catalog-sync-and-repair:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full-repair-and-sync'
+    name: Repair & Sync Pass ${{ matrix.pass }} of 3
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1 # Ensures passes run one after another in order
+      matrix:
+        pass: [1, 2, 3]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Run Unified Sync & Repair Pass ${{ matrix.pass }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/sync-multi-source.js
