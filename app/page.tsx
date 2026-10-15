@@ -9,6 +9,9 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
+const FALLBACK_COVER =
+  'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=400&q=80';
+
 interface SeriesItem {
   id: string;
   slug: string;
@@ -16,6 +19,7 @@ interface SeriesItem {
   synopsis: string | null;
   cover_image_url: string | null;
   reading_mode: string | null;
+  total_chapters?: number;
 }
 
 interface ContinueItem {
@@ -36,6 +40,15 @@ interface RecentComment {
   };
 }
 
+// Helper to reliably resolve cover image regardless of column naming
+function getCoverUrl(item: any): string {
+  const url = item?.cover_image_url || item?.cover_url;
+  if (!url || typeof url !== 'string' || url.trim() === '' || url.includes('placeholder')) {
+    return FALLBACK_COVER;
+  }
+  return url;
+}
+
 function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const [index, setIndex] = useState(0);
 
@@ -43,21 +56,20 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
     if (items.length <= 1) return;
     const interval = setInterval(() => {
       setIndex((prev) => (prev + 1) % items.length);
-    }, 3200);
+    }, 3500);
     return () => clearInterval(interval);
   }, [items.length]);
 
   if (!items || items.length === 0) return null;
   const current = items[index];
+  const coverUrl = getCoverUrl(current);
 
   return (
     <div className="relative w-full aspect-[16/9] max-h-[280px] sm:max-h-[340px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-xl group">
-      {current.cover_image_url && (
-        <div
-          className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700"
-          style={{ backgroundImage: `url(${current.cover_image_url})` }}
-        />
-      )}
+      <div
+        className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700"
+        style={{ backgroundImage: `url(${coverUrl})` }}
+      />
       <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-black via-black/85 to-black/30 z-10" />
 
       <div className="relative z-20 w-full h-full p-4 sm:p-6 flex items-center justify-between gap-4">
@@ -90,25 +102,21 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
         </div>
 
         <div className="shrink-0 w-24 sm:w-32 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900">
-          {current.cover_image_url ? (
-            <img
-              src={current.cover_image_url}
-              alt={current.title}
-              referrerPolicy="no-referrer"
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-600">
-              No Image
-            </div>
-          )}
+          <img
+            src={coverUrl}
+            alt={current.title}
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover"
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = FALLBACK_COVER;
+            }}
+          />
         </div>
       </div>
     </div>
   );
 }
 
-// Focused Social Share Bar
 function ShareBar() {
   const [copied, setCopied] = useState(false);
   const siteUrl = 'https://mangaflow-psi.vercel.app';
@@ -209,54 +217,82 @@ export default function HomePage() {
 
   useEffect(() => {
     async function loadData() {
-      const [trendingRes, popRes, latestRes, randomRes, commRes] = await Promise.all([
-        supabase
-          .from('series')
-          .select('id, slug, title, synopsis, cover_image_url, reading_mode')
-          .order('rating', { ascending: false, nullsFirst: false })
-          .limit(12),
-        supabase
-          .from('series')
-          .select('id, slug, title, synopsis, cover_image_url, reading_mode')
-          .order('followed_count', { ascending: false, nullsFirst: false })
-          .limit(12),
-        supabase
-          .from('series')
-          .select('id, slug, title, synopsis, cover_image_url, reading_mode')
-          .order('created_at', { ascending: false })
-          .limit(12),
-        supabase
-          .from('series')
-          .select('id, slug, title, synopsis, cover_image_url, reading_mode')
-          .limit(30),
-        supabase
-          .from('series_comments')
-          .select('id, username, content, created_at, series (title, slug)')
-          .order('created_at', { ascending: false })
-          .limit(6),
-      ]);
+      // Query series with an inner join on chapters to strictly hide empty shell series
+      const baseSelect = `
+        id, 
+        slug, 
+        title, 
+        synopsis, 
+        cover_image_url, 
+        reading_mode,
+        chapters!inner (id)
+      `;
 
-      setTrendingList(trendingRes.data || []);
-      setPopularList(popRes.data || []);
-      setLatestList(latestRes.data || []);
-      setRandomList((randomRes.data || []).sort(() => 0.5 - Math.random()).slice(0, 12));
-      setRecentComments((commRes.data as any) || []);
+      try {
+        const [trendingRes, popRes, latestRes, randomRes, commRes] = await Promise.all([
+          supabase
+            .from('series')
+            .select(baseSelect)
+            .order('rating', { ascending: false, nullsFirst: false })
+            .limit(12),
+          supabase
+            .from('series')
+            .select(baseSelect)
+            .order('followed_count', { ascending: false, nullsFirst: false })
+            .limit(12),
+          supabase
+            .from('series')
+            .select(baseSelect)
+            .order('created_at', { ascending: false })
+            .limit(12),
+          supabase
+            .from('series')
+            .select(baseSelect)
+            .limit(30),
+          supabase
+            .from('series_comments')
+            .select('id, username, content, created_at, series (title, slug)')
+            .order('created_at', { ascending: false })
+            .limit(6),
+        ]);
 
-      const { data: authData } = await supabase.auth.getUser();
-      if (authData?.user) {
-        const { data: historyData } = await supabase
-          .from('reading_history')
-          .select('series_id, chapter_id, chapter_number, series (id, slug, title, cover_image_url, reading_mode)')
-          .eq('user_id', authData.user.id)
-          .order('updated_at', { ascending: false })
-          .limit(12);
+        const sanitize = (list: any[]): SeriesItem[] =>
+          (list || []).map((s) => ({
+            id: s.id,
+            slug: s.slug || s.id,
+            title: s.title,
+            synopsis: s.synopsis,
+            cover_image_url: s.cover_image_url,
+            reading_mode: s.reading_mode,
+            total_chapters: Array.isArray(s.chapters) ? s.chapters.length : 0,
+          }));
 
-        if (historyData) {
-          setContinueList(historyData as any);
+        setTrendingList(sanitize(trendingRes.data || []));
+        setPopularList(sanitize(popRes.data || []));
+        setLatestList(sanitize(latestRes.data || []));
+        setRandomList(sanitize(randomRes.data || []).sort(() => 0.5 - Math.random()).slice(0, 12));
+        setRecentComments((commRes.data as any) || []);
+
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData?.user) {
+          const { data: historyData } = await supabase
+            .from('reading_history')
+            .select('series_id, chapter_id, chapter_number, series (id, slug, title, cover_image_url, reading_mode)')
+            .eq('user_id', authData.user.id)
+            .order('updated_at', { ascending: false })
+            .limit(12);
+
+          if (historyData) {
+            setContinueList(historyData as any);
+          }
         }
+      } catch (err) {
+        console.error('Error fetching home feeds:', err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
+
     loadData();
   }, []);
 
@@ -272,6 +308,7 @@ export default function HomePage() {
     badgeColor: string;
   }) => {
     if (items.length === 0) return null;
+
     return (
       <section className="space-y-3">
         <div className="flex items-center justify-between px-3 sm:px-0">
@@ -284,37 +321,37 @@ export default function HomePage() {
           </Link>
         </div>
 
-        {/* Standardized Title Card Sizing */}
         <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 px-3 sm:px-0 scroll-smooth">
-          {items.map((item) => (
-            <Link
-              key={item.id}
-              href={`/series/${item.slug}`}
-              className="shrink-0 w-28 sm:w-36 flex flex-col group"
-            >
-              <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition">
-                {item.cover_image_url ? (
+          {items.map((item) => {
+            const cover = getCoverUrl(item);
+
+            return (
+              <Link
+                key={item.id}
+                href={`/series/${item.slug}`}
+                className="shrink-0 w-28 sm:w-36 flex flex-col group"
+              >
+                <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition">
                   <img
-                    src={item.cover_image_url}
+                    src={cover}
                     alt={item.title}
                     referrerPolicy="no-referrer"
                     loading="lazy"
                     className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = FALLBACK_COVER;
+                    }}
                   />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-600">
-                    No Cover
-                  </div>
-                )}
-                <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-md text-neutral-200 border border-white/10">
-                  {item.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
-                </span>
-              </div>
-              <h3 className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition">
-                {item.title}
-              </h3>
-            </Link>
-          ))}
+                  <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-md text-neutral-200 border border-white/10">
+                    {item.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
+                  </span>
+                </div>
+                <h3 className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition">
+                  {item.title}
+                </h3>
+              </Link>
+            );
+          })}
         </div>
       </section>
     );
@@ -338,7 +375,6 @@ export default function HomePage() {
         <ShareBar />
       </div>
 
-      {/* Continue Reading (Identical Card Dimensions as Catalog Titles) */}
       {continueList.length > 0 && (
         <section className="space-y-3">
           <div className="flex items-center justify-between px-3 sm:px-0">
@@ -351,38 +387,63 @@ export default function HomePage() {
           </div>
 
           <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 px-3 sm:px-0">
-            {continueList.map((entry) => (
-              <Link
-                key={entry.series_id}
-                href={`/read/${entry.chapter_id}`}
-                className="shrink-0 w-28 sm:w-36 flex flex-col group"
-              >
-                <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition">
-                  {entry.series?.cover_image_url && (
+            {continueList.map((entry) => {
+              const cover = getCoverUrl(entry.series);
+
+              return (
+                <Link
+                  key={entry.series_id}
+                  href={`/read/${entry.chapter_id}`}
+                  className="shrink-0 w-28 sm:w-36 flex flex-col group"
+                >
+                  <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition">
                     <img
-                      src={entry.series.cover_image_url}
-                      alt={entry.series.title}
+                      src={cover}
+                      alt={entry.series?.title || 'Series'}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = FALLBACK_COVER;
+                      }}
                     />
-                  )}
-                  <span className="absolute bottom-1.5 right-1.5 text-[8px] font-black px-1.5 py-0.5 rounded bg-black/90 text-emerald-400 border border-emerald-500/30">
-                    Ch. {entry.chapter_number}
-                  </span>
-                </div>
-                <h3 className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition">
-                  {entry.series?.title}
-                </h3>
-              </Link>
-            ))}
+                    <span className="absolute bottom-1.5 right-1.5 text-[8px] font-black px-1.5 py-0.5 rounded bg-black/90 text-emerald-400 border border-emerald-500/30">
+                      Ch. {entry.chapter_number}
+                    </span>
+                  </div>
+                  <h3 className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition">
+                    {entry.series?.title}
+                  </h3>
+                </Link>
+              );
+            })}
           </div>
         </section>
       )}
 
-      <HorizontalRow title="Trending Series" viewAllHref="/category/trending" items={trendingList} badgeColor="bg-amber-500" />
-      <HorizontalRow title="Popular Series" viewAllHref="/category/popular" items={popularList} badgeColor="bg-indigo-500" />
-      <HorizontalRow title="Random Picks" viewAllHref="/category/random" items={randomList} badgeColor="bg-emerald-500" />
-      <HorizontalRow title="Latest Releases" viewAllHref="/category/latest" items={latestList} badgeColor="bg-cyan-500" />
+      <HorizontalRow
+        title="Trending Series"
+        viewAllHref="/category/trending"
+        items={trendingList}
+        badgeColor="bg-amber-500"
+      />
+      <HorizontalRow
+        title="Popular Series"
+        viewAllHref="/category/popular"
+        items={popularList}
+        badgeColor="bg-indigo-500"
+      />
+      <HorizontalRow
+        title="Random Picks"
+        viewAllHref="/category/random"
+        items={randomList}
+        badgeColor="bg-emerald-500"
+      />
+      <HorizontalRow
+        title="Latest Releases"
+        viewAllHref="/category/latest"
+        items={latestList}
+        badgeColor="bg-cyan-500"
+      />
 
       {/* Community Discussion Board */}
       <section className="space-y-3 px-3 sm:px-0 pt-6 border-t border-neutral-800/60">
