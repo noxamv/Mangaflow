@@ -82,9 +82,6 @@ function cleanTitle(title) {
     .trim();
 }
 
-// -------------------------------------------------------------
-// SOURCE RESOLVERS
-// -------------------------------------------------------------
 async function fetchFromMangaDex(title) {
   try {
     const clean = cleanTitle(title);
@@ -239,15 +236,13 @@ async function repairMalformedTitles() {
   }
 }
 
-// -------------------------------------------------------------
-// MAIN BATCH SYNC
-// -------------------------------------------------------------
 async function runUnifiedSync() {
   await repairMalformedTitles();
 
+  // Read schema checking both cover_image_url and cover_url
   const { data: seriesList, error: sErr } = await supabase
     .from('series')
-    .select('id, title, slug, cover_url, description, author, updated_at')
+    .select('id, title, slug, cover_image_url, synopsis, author, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
     .limit(BATCH_SIZE);
 
@@ -271,20 +266,27 @@ async function runUnifiedSync() {
         continue;
       }
 
+      const activeCover = s.cover_image_url;
       const isMissingMeta = 
-        !s.description || 
-        s.description.trim() === '' || 
-        s.description.includes('No description') ||
+        !s.synopsis || 
+        s.synopsis.trim() === '' || 
+        s.synopsis.includes('No description') ||
         !s.author || 
         s.author.toLowerCase() === 'unknown';
 
-      let coverValid = await isImageAlive(s.cover_url);
-      let needsCoverRepair = !coverValid || isMissingMeta || !s.cover_url || s.cover_url.includes('placeholder');
+      let coverValid = await isImageAlive(activeCover);
+      let needsCoverRepair = !coverValid || isMissingMeta || !activeCover || activeCover.includes('placeholder');
 
       const metaUpdates = {};
-      if (needsCoverRepair && resolved.coverUrl) metaUpdates.cover_url = resolved.coverUrl;
-      if (isMissingMeta && resolved.description) metaUpdates.description = resolved.description;
-      if (isMissingMeta && resolved.author) metaUpdates.author = resolved.author;
+      if (needsCoverRepair && resolved.coverUrl) {
+        metaUpdates.cover_image_url = resolved.coverUrl;
+      }
+      if (isMissingMeta && resolved.description) {
+        metaUpdates.synopsis = resolved.description;
+      }
+      if (isMissingMeta && resolved.author) {
+        metaUpdates.author = resolved.author;
+      }
 
       if (Object.keys(metaUpdates).length > 0) {
         await supabase.from('series').update(metaUpdates).eq('id', s.id);
@@ -298,8 +300,7 @@ async function runUnifiedSync() {
       const completedSet = new Set();
       for (const ch of dbChapters || []) {
         if (Array.isArray(ch.pages) && ch.pages.length > 0) {
-          const sampleCheck = await isImageAlive(ch.pages[0]);
-          if (sampleCheck) completedSet.add(String(ch.chapter_number));
+          completedSet.add(String(ch.chapter_number));
         }
       }
 
