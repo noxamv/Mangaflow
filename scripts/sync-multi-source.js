@@ -14,6 +14,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   realtime: { createClient: () => null },
 });
 
+// Process 20 series and up to 300 chapters per series per relay pass
 const BATCH_SIZE = 20;
 const MAX_CHAPTERS_PER_SERIES = 300;
 const MANGADEX_API = 'https://api.mangadex.org';
@@ -125,7 +126,9 @@ async function fetchChapterPages(chapterId) {
   }
 }
 
+// -------------------------------------------------------------
 // 1. REPAIR MALFORMED TITLES
+// -------------------------------------------------------------
 async function repairMalformedTitles() {
   console.log('\n--- Auditing & Repairing Malformed Chapter Titles ---');
   const { data: badChapters } = await supabase
@@ -144,7 +147,9 @@ async function repairMalformedTitles() {
   }
 }
 
+// -------------------------------------------------------------
 // 2. UNIFIED COVER REPAIR & CHAPTER PANEL SYNC
+// -------------------------------------------------------------
 async function runUnifiedSyncAndRepair() {
   await repairMalformedTitles();
 
@@ -178,9 +183,14 @@ async function runUnifiedSyncAndRepair() {
         continue;
       }
 
-      // Check & repair broken, missing, or 404 covers
+      // Check and repair missing, broken, or dead 404 covers
       let needsCoverRepair = false;
-      if (!s.cover_url || s.cover_url.trim() === '' || !s.cover_url.startsWith('http') || s.cover_url.includes('placeholder')) {
+      if (
+        !s.cover_url ||
+        s.cover_url.trim() === '' ||
+        !s.cover_url.startsWith('http') ||
+        s.cover_url.includes('placeholder')
+      ) {
         needsCoverRepair = true;
       } else {
         const alive = await isImageAlive(s.cover_url);
@@ -280,6 +290,7 @@ async function runUnifiedSyncAndRepair() {
     }
   }
 
+  // Count remaining series that need their initial pass
   const { count: remainingUnsynced } = await supabase
     .from('series')
     .select('id', { count: 'exact', head: true })
@@ -290,8 +301,10 @@ async function runUnifiedSyncAndRepair() {
   console.log(`Backlog series remaining for pass = ${remainingUnsynced || 0}`);
   console.log(`==================================================`);
 
+  // Signal the GitHub Action token relay whether more runs are needed
   const hasMore = (totalUpdatedAcrossBatch > 0 || (remainingUnsynced && remainingUnsynced > 0)) ? 'true' : 'false';
   setGithubOutput('has_more', hasMore);
+  console.log(`[Relay Engine] has_more=${hasMore}`);
 }
 
 runUnifiedSyncAndRepair().catch((err) => {
