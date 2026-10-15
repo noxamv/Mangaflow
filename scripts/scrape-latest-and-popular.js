@@ -15,256 +15,195 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Priority targets and their direct scanlation sources
 const PRIORITY_SERIES = [
   {
     title: 'Lookism',
-    sources: [
-      { name: 'Hive Scans', type: 'hive', slug: 'lookism' },
-      { name: 'Consumet', type: 'consumet', query: 'Lookism' },
-    ],
+    hiveSlug: 'lookism',
+    asuraSlug: null,
   },
   {
     title: "Omniscient Reader's Viewpoint",
-    sources: [
-      { name: 'Asura Scans', type: 'asura', slug: 'omniscient-readers-viewpoint' },
-      { name: 'Consumet', type: 'consumet', query: 'Omniscient Reader' },
-    ],
+    hiveSlug: null,
+    asuraSlug: 'omniscient-readers-viewpoint',
   },
   {
     title: 'The Beginning After the End',
-    sources: [
-      { name: 'Temple Scan', type: 'temple', slug: 'the-beginning-after-the-end' },
-      { name: 'Consumet', type: 'consumet', query: 'The Beginning After the End' },
-    ],
+    hiveSlug: null,
+    asuraSlug: 'the-beginning-after-the-end',
   },
   {
     title: 'Lord of the Mysteries',
-    sources: [
-      { name: 'Consumet', type: 'consumet', query: 'Lord of the Mysteries' },
-    ],
+    hiveSlug: null,
+    asuraSlug: null,
   },
   {
     title: 'Shadow Slave',
-    sources: [
-      { name: 'Consumet', type: 'consumet', query: 'Shadow Slave' },
-    ],
+    hiveSlug: null,
+    asuraSlug: null,
   },
 ];
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'application/json, text/html, */*',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 };
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
+// 1. Hive Toon Scraper (.org domain)
+async function fetchHiveToon(slug) {
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal, headers: HEADERS });
-    clearTimeout(id);
-    return res;
-  } catch {
-    clearTimeout(id);
-    return null;
-  }
-}
+    const res = await fetch(`https://hivetoons.org/series/${slug}`, { headers: HEADERS });
+    if (!res.ok) return [];
+    const html = await res.text();
 
-// 1. Hive Scans Direct Chapter Fetcher
-async function fetchHiveChapters(slug) {
-  try {
-    // Hive Scans public chapter list API endpoint
-    const url = `https://api.hivetoons.com/api/series/${slug}/chapters`;
-    const res = await fetchWithTimeout(url);
-    if (res && res.ok) {
-      const data = await res.json();
-      const list = data?.chapters || data?.data || (Array.isArray(data) ? data : []);
-      if (list.length > 0) {
-        return list.map((c) => ({
-          num: parseFloat(c.chapter_number || c.number || c.index),
-          title: c.title || `Chapter ${c.chapter_number || c.number}`,
-          date: c.created_at || c.published_at || new Date().toISOString(),
-        })).filter((c) => !isNaN(c.num));
-      }
-    }
-
-    // HTML fallback if API structure changes
-    const htmlRes = await fetchWithTimeout(`https://hivetoons.com/series/${slug}`);
-    if (htmlRes && htmlRes.ok) {
-      const html = await htmlRes.text();
-      const regex = /href=["'][^"']*\/chapter-(\d+(\.\d+)?)["']/gi;
-      const chaps = [];
-      let m;
-      while ((m = regex.exec(html)) !== null) {
-        chaps.push({
-          num: parseFloat(m[1]),
-          title: `Chapter ${m[1]}`,
-          date: new Date().toISOString(),
+    const regex = /href=["'][^"']*\/chapter-(\d+(\.\d+)?)["']/gi;
+    const chapters = [];
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      const num = parseFloat(match[1]);
+      if (!isNaN(num)) {
+        chapters.push({
+          chapter_number: num,
+          title: `Chapter ${num}`,
+          published_at: new Date().toISOString(),
         });
       }
-      return chaps;
     }
-  } catch (err) {
-    console.warn(`    ⚠️ Hive Scans error:`, err.message);
+    return chapters;
+  } catch {
+    return [];
   }
-  return [];
 }
 
-// 2. Asura Scans Direct Fetcher
-async function fetchAsuraChapters(slug) {
+// 2. Asura Scans Scraper (Active domain)
+async function fetchAsura(slug) {
   try {
-    const url = `https://asuracomic.net/series/${slug}`;
-    const res = await fetchWithTimeout(url);
-    if (!res || !res.ok) return [];
-
+    const res = await fetch(`https://asurascans.com/series/${slug}`, { headers: HEADERS });
+    if (!res.ok) return [];
     const html = await res.text();
+
     const regex = /href=["'][^"']*\/chapter\/(\d+(\.\d+)?)["']/gi;
-    const chaps = [];
+    const chapters = [];
     let match;
     while ((match = regex.exec(html)) !== null) {
-      chaps.push({
-        num: parseFloat(match[1]),
-        title: `Chapter ${match[1]}`,
-        date: new Date().toISOString(),
-      });
+      const num = parseFloat(match[1]);
+      if (!isNaN(num)) {
+        chapters.push({
+          chapter_number: num,
+          title: `Chapter ${num}`,
+          published_at: new Date().toISOString(),
+        });
+      }
     }
-    return chaps;
+    return chapters;
   } catch {
     return [];
   }
 }
 
-// 3. Temple Scan Direct Fetcher
-async function fetchTempleChapters(slug) {
+// 3. MangaNato Direct HTML Mirror (Fallback for missing/cultivation titles)
+async function fetchMangaNato(query) {
   try {
-    const url = `https://templescan.net/comic/${slug}`;
-    const res = await fetchWithTimeout(url);
-    if (!res || !res.ok) return [];
+    const searchUrl = `https://manganato.com/search/story/${encodeURIComponent(query.toLowerCase().replace(/[^a-z0-9]/g, '_'))}`;
+    const searchRes = await fetch(searchUrl, { headers: HEADERS });
+    if (!searchRes.ok) return [];
+    const html = await searchRes.text();
 
-    const html = await res.text();
-    const regex = /href=["'][^"']*\/chapter-(\d+(\.\d+)?)["']/gi;
-    const chaps = [];
-    let match;
-    while ((match = regex.exec(html)) !== null) {
-      chaps.push({
-        num: parseFloat(match[1]),
-        title: `Chapter ${match[1]}`,
-        date: new Date().toISOString(),
-      });
-    }
-    return chaps;
-  } catch {
-    return [];
-  }
-}
+    const linkMatch = html.match(/class=["']item-title["'][^>]*href=["'](https:\/\/[^"']+)["']/i);
+    if (!linkMatch) return [];
 
-// 4. Consumet Fallback Fetcher
-async function fetchConsumetChapters(query) {
-  try {
-    const searchUrl = `https://api.consumet.org/manga/mangakakalot/${encodeURIComponent(query)}`;
-    const searchRes = await fetchWithTimeout(searchUrl);
-    if (!searchRes || !searchRes.ok) return [];
-
-    const searchData = await searchRes.json();
-    const mangaId = searchData?.results?.[0]?.id;
-    if (!mangaId) return [];
-
+    const storyUrl = linkMatch[1];
     await delay(400);
-    const infoUrl = `https://api.consumet.org/manga/mangakakalot/info?id=${encodeURIComponent(mangaId)}`;
-    const infoRes = await fetchWithTimeout(infoUrl);
-    if (!infoRes || !infoRes.ok) return [];
 
-    const infoData = await infoRes.json();
-    const list = infoData?.chapters || [];
+    const storyRes = await fetch(storyUrl, { headers: HEADERS });
+    if (!storyRes.ok) return [];
+    const storyHtml = await storyRes.text();
 
-    return list.map((ch) => {
-      const match = (ch.title || ch.id || '').match(/chapter[^\d]*(\d+(\.\d+)?)/i);
-      const num = match ? parseFloat(match[1]) : null;
-      return {
-        num,
-        title: ch.title || `Chapter ${num}`,
-        date: new Date().toISOString(),
-      };
-    }).filter((c) => c.num !== null && !isNaN(c.num));
+    const chapRegex = /href=["'][^"']*chapter-(\d+(\.\d+)?)["']/gi;
+    const chapters = [];
+    let m;
+    while ((m = chapRegex.exec(storyHtml)) !== null) {
+      const num = parseFloat(m[1]);
+      if (!isNaN(num)) {
+        chapters.push({
+          chapter_number: num,
+          title: `Chapter ${num}`,
+          published_at: new Date().toISOString(),
+        });
+      }
+    }
+    return chapters;
   } catch {
     return [];
   }
 }
 
 async function run() {
-  console.log('=== Scraper: Hive Scans / Asura / Temple / Aggregators ===\n');
+  console.log('=== Checking Scans for Latest Releases ===\n');
 
   for (const item of PRIORITY_SERIES) {
-    console.log(`Checking series: "${item.title}"`);
+    console.log(`Checking "${item.title}"...`);
 
     const { data: s } = await supabase
       .from('series')
-      .select('id, title')
+      .select('id')
       .ilike('title', `%${item.title}%`)
       .limit(1)
       .maybeSingle();
 
     if (!s?.id) {
-      console.warn(`  ✗ Series not found in Supabase: "${item.title}"`);
+      console.warn(`  ✗ Series not found in database: "${item.title}"`);
       continue;
     }
 
-    let rawChapters = [];
+    let foundChapters = [];
 
-    // Try dedicated scan sites first, then fallbacks
-    for (const src of item.sources) {
-      console.log(`  -> Trying source: ${src.name}...`);
-      if (src.type === 'hive') {
-        rawChapters = await fetchHiveChapters(src.slug);
-      } else if (src.type === 'asura') {
-        rawChapters = await fetchAsuraChapters(src.slug);
-      } else if (src.type === 'temple') {
-        rawChapters = await fetchTempleChapters(src.slug);
-      } else if (src.type === 'consumet') {
-        rawChapters = await fetchConsumetChapters(src.query);
-      }
-
-      if (rawChapters.length > 0) {
-        console.log(`  ✓ Received ${rawChapters.length} chapter markers from ${src.name}`);
-        break;
-      }
-      await delay(400);
+    // 1. Hive Toon check
+    if (item.hiveSlug) {
+      console.log(`  -> Polling Hive Toons (${item.hiveSlug})...`);
+      foundChapters = await fetchHiveToon(item.hiveSlug);
     }
 
-    if (rawChapters.length === 0) {
-      console.warn(`  ✗ No chapters returned across any configured sources.`);
+    // 2. Asura check
+    if (foundChapters.length === 0 && item.asuraSlug) {
+      console.log(`  -> Polling Asura Scans (${item.asuraSlug})...`);
+      foundChapters = await fetchAsura(item.asuraSlug);
+    }
+
+    // 3. Fallback mirror
+    if (foundChapters.length === 0) {
+      console.log(`  -> Polling aggregate mirror...`);
+      foundChapters = await fetchMangaNato(item.title);
+    }
+
+    if (foundChapters.length === 0) {
+      console.warn(`  ✗ No new chapters detected.`);
       continue;
     }
 
-    // Format & deduplicate chapters
-    const unique = Array.from(
-      new Map(
-        rawChapters.map((c) => [
-          c.num,
-          {
-            series_id: s.id,
-            chapter_number: c.num,
-            title: c.title,
-            published_at: c.date,
-          },
-        ])
-      ).values()
-    );
+    const rows = foundChapters.map((c) => ({
+      series_id: s.id,
+      chapter_number: c.chapter_number,
+      title: c.title,
+      published_at: c.published_at,
+    }));
 
-    // Batch upsert to database in chunks of 200
+    // Deduplicate
+    const unique = Array.from(new Map(rows.map((r) => [r.chapter_number, r])).values());
+
+    // Upsert into Supabase
     for (let i = 0; i < unique.length; i += 200) {
-      const chunk = unique.slice(i, i + 200);
+      const slice = unique.slice(i, i + 200);
       await supabase
         .from('chapters')
-        .upsert(chunk, { onConflict: 'series_id,chapter_number', ignoreDuplicates: true });
+        .upsert(slice, { onConflict: 'series_id,chapter_number', ignoreDuplicates: true });
     }
 
-    const latest = Math.max(...unique.map((c) => c.chapter_number));
-    console.log(`  ✓ Sync complete for "${item.title}". Highest chapter: ${latest}\n`);
+    const highest = Math.max(...unique.map((r) => r.chapter_number));
+    console.log(`  ✓ Synced ${unique.length} chapters. Current latest: Ch. ${highest}\n`);
     await delay(500);
   }
 
-  console.log('=== All Scanlation Sites Polled Successfully ===');
+  console.log('=== Poll Finished Successfully ===');
 }
 
 run().catch((err) => {
