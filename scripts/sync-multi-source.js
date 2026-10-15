@@ -14,7 +14,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   realtime: { createClient: () => null },
 });
 
-// Tuned for high volume: processes 20 series and up to 300 chapters per series per run
 const BATCH_SIZE = 20;
 const MAX_CHAPTERS_PER_SERIES = 300;
 const MANGADEX_API = 'https://api.mangadex.org';
@@ -126,9 +125,7 @@ async function fetchChapterPages(chapterId) {
   }
 }
 
-// -------------------------------------------------------------
-// PART 1: REPAIR MALFORMED TITLES
-// -------------------------------------------------------------
+// 1. REPAIR MALFORMED TITLES
 async function repairMalformedTitles() {
   console.log('\n--- Auditing & Repairing Malformed Chapter Titles ---');
   const { data: badChapters } = await supabase
@@ -147,9 +144,7 @@ async function repairMalformedTitles() {
   }
 }
 
-// -------------------------------------------------------------
-// PART 2: UNIFIED COVER REPAIR & CHAPTER PANEL SYNC
-// -------------------------------------------------------------
+// 2. UNIFIED COVER REPAIR & CHAPTER PANEL SYNC
 async function runUnifiedSyncAndRepair() {
   await repairMalformedTitles();
 
@@ -281,7 +276,6 @@ async function runUnifiedSyncAndRepair() {
     } catch (seriesErr) {
       console.error(`Error on "${s.title}":`, seriesErr.message);
     } finally {
-      // Touch timestamp so consecutive runs rotate to remaining series
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
     }
   }
