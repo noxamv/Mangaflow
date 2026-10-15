@@ -1,28 +1,27 @@
-name: MangaFlow Unified Bot & Catalog Repair
+name: MangaFlow Auto-Relay Bot & Health Repair
 
 on:
   schedule:
-    # Runs the lightweight latest release check every hour
+    # 1-hour polling for new weekly chapter drops
     - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'Choose Execution Mode'
-        required: true
-        default: 'full-repair-and-sync'
-        type: choice
-        options:
-          - full-repair-and-sync
-          - latest-hourly-only
+      pass_number:
+        description: 'Current relay pass number'
+        required: false
+        default: '1'
+
+permissions:
+  contents: write
+  actions: write
 
 jobs:
-  # -------------------------------------------------------------
-  # JOB 1: Quick 1-Hour Release Bot
-  # Runs on schedule OR when selected manually
-  # -------------------------------------------------------------
+  # -----------------------------------------------------------------
+  # JOB 1: Quick 1-Hour Release Poller (Runs on Hourly Schedule)
+  # -----------------------------------------------------------------
   hourly-latest-sync:
-    if: github.event_name == 'schedule' || github.event.inputs.mode == 'latest-hourly-only'
-    name: Quick Latest Release Check
+    if: github.event_name == 'schedule'
+    name: Hourly Latest Drop Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -36,25 +35,19 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Fetch Latest Chapter Releases
+      - name: Poll Latest Releases
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node scripts/scrape-latest-and-popular.js
 
-  # -------------------------------------------------------------
-  # JOB 2: Full Catalog Repair & 3-Pass High-Volume Sync
-  # Runs when manually triggered with "full-repair-and-sync"
-  # -------------------------------------------------------------
-  full-catalog-sync-and-repair:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'full-repair-and-sync'
-    name: Repair & Sync Pass ${{ matrix.pass }} of 3
+  # -----------------------------------------------------------------
+  # JOB 2: Auto-Chaining Relay Sync (Runs until everything is finished)
+  # -----------------------------------------------------------------
+  relay-sync-and-repair:
+    if: github.event_name == 'workflow_dispatch'
+    name: Token Relay Pass ${{ github.event.inputs.pass_number || '1' }}
     runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 1 # Ensures passes run one after another in order
-      matrix:
-        pass: [1, 2, 3]
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -67,8 +60,20 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Run Unified Sync & Repair Pass ${{ matrix.pass }}
+      - name: Run Unified Sync & Repair Pass
+        id: sync_step
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node scripts/sync-multi-source.js
+
+      - name: Trigger Next Relay Pass (Token Dispatch)
+        if: steps.sync_step.outputs.has_more == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_PASS: ${{ github.event.inputs.pass_number || '1' }}
+        run: |
+          NEXT_PASS=$((CURRENT_PASS + 1))
+          echo "Work remains. Sleeping 20s to prevent API spam, then triggering pass #$NEXT_PASS..."
+          sleep 20
+          gh workflow run scraper.yml -f pass_number="$NEXT_PASS"
