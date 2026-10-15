@@ -154,14 +154,20 @@ async function syncBatch() {
         console.log(`Updated cover/metadata for "${s.title}"`);
       }
 
-      // Fetch existing chapters from DB
+      // Fetch existing chapters and verify which already have images loaded
       const { data: existingChapters } = await supabase
         .from('chapters')
-        .select('chapter_number')
+        .select('id, chapter_number, pages')
         .eq('series_id', s.id);
 
-      const existingSet = new Set((existingChapters || []).map((c) => String(c.chapter_number)));
-      console.log(`Existing chapters in DB: ${existingSet.size}`);
+      // Track chapters that already have a non-empty pages array
+      const completedSet = new Set(
+        (existingChapters || [])
+          .filter((c) => Array.isArray(c.pages) && c.pages.length > 0)
+          .map((c) => String(c.chapter_number))
+      );
+
+      console.log(`Chapters with images in DB: ${completedSet.size} / ${(existingChapters || []).length}`);
 
       // Safe limit of 100 per request
       const feedUrl = `${MANGADEX_API}/manga/${mdData.mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=100`;
@@ -174,7 +180,6 @@ async function syncBatch() {
       for (const ch of available) {
         if (seriesInserted >= MAX_CHAPTERS_PER_SERIES) break;
 
-        // Parse chapter number safely without producing NaN
         const rawChNum = ch.attributes?.chapter;
         let parsedNum;
 
@@ -183,10 +188,11 @@ async function syncBatch() {
         } else if (ch.attributes?.title?.toLowerCase().includes('oneshot')) {
           parsedNum = 1;
         } else {
-          parsedNum = 1; // Fallback for standalone/prologue releases
+          parsedNum = 1;
         }
 
-        if (existingSet.has(String(parsedNum))) continue;
+        // Only skip if panels are already loaded in database
+        if (completedSet.has(String(parsedNum))) continue;
 
         const chapterId = ch.id;
         const chapterTitle = ch.attributes?.title || `Chapter ${parsedNum}`;
@@ -195,7 +201,7 @@ async function syncBatch() {
 
         if (pages.length === 0) continue;
 
-        // Use upsert to guarantee no constraint violations
+        // Upsert allows updating the empty pages column on existing chapter rows
         const { error: insErr } = await supabase.from('chapters').upsert(
           {
             series_id: s.id,
@@ -203,16 +209,16 @@ async function syncBatch() {
             title: chapterTitle,
             pages: pages,
           },
-          { onConflict: 'series_id,chapter_number', ignoreDuplicates: true }
+          { onConflict: 'series_id,chapter_number' }
         );
 
         if (!insErr) {
-          existingSet.add(String(parsedNum));
+          completedSet.add(String(parsedNum));
           seriesInserted++;
           totalInsertedAcrossBatch++;
-          console.log(`+ Added Ch. ${parsedNum} (${pages.length} pages)`);
+          console.log(`+ Synced panels for Ch. ${parsedNum} (${pages.length} pages)`);
         } else {
-          console.warn(`Could not insert Ch. ${parsedNum}:`, insErr.message);
+          console.warn(`Could not sync Ch. ${parsedNum}:`, insErr.message);
         }
       }
 
@@ -220,20 +226,18 @@ async function syncBatch() {
     } catch (seriesError) {
       console.error(`Error processing "${s.title}":`, seriesError.message);
     } finally {
-      // Always update timestamp so the scraper doesn't get stuck in an infinite loop on the same title
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
     }
   }
 
-  // Check if series are still waiting for their first pass
   const { count: remainingUnsynced } = await supabase
     .from('series')
     .select('id', { count: 'exact', head: true })
     .lte('updated_at', '2001-01-01T00:00:00Z');
 
   console.log(`\n========================================`);
-  console.log(`Batch Summary: New chapters added = ${totalInsertedAcrossBatch}`);
-  console.log(`Backlog series remaining (queued for first sync) = ${remainingUnsynced || 0}`);
+  console.log(`Batch Summary: Chapters updated/added = ${totalInsertedAcrossBatch}`);
+  console.log(`Backlog series remaining = ${remainingUnsynced || 0}`);
   console.log(`========================================`);
 
   const hasMore = (totalInsertedAcrossBatch > 0 || (remainingUnsynced && remainingUnsynced > 0)) ? 'true' : 'false';
