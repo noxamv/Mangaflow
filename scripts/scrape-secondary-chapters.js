@@ -8,15 +8,9 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   process.exit(1);
 }
 
-// Disable realtime WebSocket to prevent Node runtime issues
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-  },
-  realtime: {
-    transport: null,
-  },
+  auth: { persistSession: false, autoRefreshToken: false },
+  realtime: { transport: null },
 });
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -25,14 +19,14 @@ async function fetchJson(url) {
   try {
     const res = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'MangaFlow-Bot/2.0 (contact@mangaflow.app)',
         Accept: 'application/json',
       },
     });
 
     if (res.status === 429) {
-      console.warn('  [Comick] Rate limited. Pausing 15s...');
-      await delay(15000);
+      console.warn('  ⚠️ Rate limit hit. Backing off 5s...');
+      await delay(5000);
       return null;
     }
 
@@ -43,44 +37,73 @@ async function fetchJson(url) {
   }
 }
 
-async function findComickComic(series) {
-  // Cascading search: English Title -> Main Title -> Native Title
-  const candidates = [
+// 1. Search MangaDex for the Manga ID
+async function searchMangaDex(series) {
+  const titles = [
     series.english_title,
     series.title,
     series.native_title,
   ].filter(Boolean);
 
-  for (const term of candidates) {
-    const cleanTerm = term
+  for (const raw of titles) {
+    const clean = raw
       .replace(/[【】\[\]\(\)]/g, ' ')
       .replace(/["'""'']/g, '')
       .split(/[~:–—\-]/)[0]
       .trim();
 
-    if (!cleanTerm || cleanTerm.length < 2) continue;
+    if (!clean || clean.length < 2) continue;
 
-    const url = `https://api.comick.io/v1.0/search?q=${encodeURIComponent(cleanTerm)}&t=true`;
-    const results = await fetchJson(url);
-    await delay(500);
+    const url = `https://api.mangadex.org/manga?title=${encodeURIComponent(clean)}&limit=5&includes[]=cover_art`;
+    const data = await fetchJson(url);
+    await delay(350);
 
-    if (Array.isArray(results) && results.length > 0) {
-      return results[0];
+    if (data?.data && data.data.length > 0) {
+      return data.data[0];
     }
   }
-
   return null;
 }
 
-async function fetchComickChapters(hid) {
-  const url = `https://api.comick.io/comic/${hid}/chapters?lang=en&limit=100`;
-  const data = await fetchJson(url);
-  await delay(500);
-  return data?.chapters || [];
+// 2. Fetch English chapters from MangaDex
+async function fetchMangaDexChapters(mangaId) {
+  let allChapters = [];
+  let offset = 0;
+  const limit = 100;
+
+  while (offset < 300) {
+    const url = `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=${offset}`;
+    const data = await fetchJson(url);
+    await delay(350);
+
+    const list = data?.data || [];
+    if (list.length === 0) break;
+
+    allChapters.push(...list);
+    if (list.length < limit) break;
+    offset += limit;
+  }
+
+  return allChapters;
+}
+
+// 3. Fallback: Search Jikan (MyAnimeList open API) to get chapter counts if scans are licensed
+async function fetchJikanManga(series) {
+  const term = series.english_title || series.title;
+  const clean = term.replace(/[【】\[\]\(\)]/g, ' ').split(/[~:–—\-]/)[0].trim();
+  const url = `https://api.jikan.moe/v4/manga?q=${encodeURIComponent(clean)}&limit=1`;
+  const res = await fetchJson(url);
+  await delay(1000); // Jikan rate limits to 3 req/sec
+
+  const manga = res?.data?.[0];
+  if (manga && manga.chapters) {
+    return manga.chapters;
+  }
+  return null;
 }
 
 async function run() {
-  console.log('Querying series from Supabase...');
+  console.log('Querying target series lacking chapters from Supabase...');
 
   const { data: allSeries, error: seriesErr } = await supabase
     .from('series')
@@ -91,7 +114,6 @@ async function run() {
     return;
   }
 
-  // Get all series IDs that already have chapters
   const { data: existingChapters, error: chapErr } = await supabase
     .from('chapters')
     .select('series_id');
@@ -104,80 +126,89 @@ async function run() {
   const populatedIds = new Set((existingChapters || []).map((c) => c.series_id));
   const targets = allSeries.filter((s) => !populatedIds.has(s.id));
 
-  console.log(`Found ${targets.length} target series with 0 chapters.\n`);
-
-  if (targets.length === 0) {
-    console.log('All series have chapters.');
-    return;
-  }
+  console.log(`Found ${targets.length} series needing chapters.\n`);
 
   let resolved = 0;
   let skipped = 0;
 
   for (let i = 0; i < targets.length; i++) {
     const item = targets[i];
-    const displayName = item.english_title || item.title;
-    console.log(`[${i + 1}/${targets.length}] Searching: "${displayName}"...`);
+    const name = item.english_title || item.title;
+    console.log(`[${i + 1}/${targets.length}] Locating: "${name}"...`);
 
-    const comic = await findComickComic(item);
-    if (!comic || !comic.hid) {
-      console.warn(`  ✗ Not found on secondary provider`);
+    let chapterRows = [];
+
+    // Attempt 1: MangaDex
+    const mdManga = await searchMangaDex(item);
+    if (mdManga?.id) {
+      const feed = await fetchMangaDexChapters(mdManga.id);
+      if (feed.length > 0) {
+        chapterRows = feed
+          .filter((ch) => ch.attributes?.chapter !== null && ch.attributes?.chapter !== undefined)
+          .map((ch) => ({
+            series_id: item.id,
+            chapter_number: parseFloat(ch.attributes.chapter) || 0,
+            title: ch.attributes.title || `Chapter ${ch.attributes.chapter}`,
+            external_id: ch.id,
+            published_at: ch.attributes.publishAt || new Date().toISOString(),
+          }));
+      }
+    }
+
+    // Attempt 2: If MangaDex has 0 open scans (licensed), generate placeholders via MAL/Jikan metadata
+    if (chapterRows.length === 0) {
+      console.log(`  ℹ MangaDex empty. Checking official index...`);
+      const totalChaps = await fetchJikanManga(item);
+      if (totalChaps && totalChaps > 0) {
+        const count = Math.min(totalChaps, 50); // Seed up to 50 base chapters
+        for (let num = 1; num <= count; num++) {
+          chapterRows.push({
+            series_id: item.id,
+            chapter_number: num,
+            title: `Chapter ${num}`,
+            external_id: `official-${item.id}-${num}`,
+            published_at: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    if (chapterRows.length === 0) {
+      console.warn(`  ✗ Could not locate chapters for "${name}"`);
       skipped++;
       continue;
     }
 
-    const chapterList = await fetchComickChapters(comic.hid);
-    if (!chapterList || chapterList.length === 0) {
-      console.warn(`  ✗ Found comic "${comic.title}", but no English chapters returned`);
-      skipped++;
-      continue;
+    // Deduplicate by chapter number
+    const uniqueMap = new Map();
+    for (const row of chapterRows) {
+      if (!uniqueMap.has(row.chapter_number)) {
+        uniqueMap.set(row.chapter_number, row);
+      }
     }
+    const finalBatch = Array.from(uniqueMap.values());
 
-    // Format rows for Supabase insertion
-    const rows = chapterList
-      .filter((ch) => ch.chap !== null && ch.chap !== undefined)
-      .map((ch) => ({
-        series_id: item.id,
-        chapter_number: parseFloat(ch.chap) || 0,
-        title: ch.title ? ch.title.trim() : `Chapter ${ch.chap}`.trim(),
-        external_id: ch.hid,
-        published_at: ch.created_at ? new Date(ch.created_at).toISOString() : new Date().toISOString(),
-      }));
-
-    // Deduplicate by chapter_number
-    const uniqueRows = Array.from(
-      new Map(rows.map((r) => [r.chapter_number, r])).values()
-    );
-
-    if (uniqueRows.length === 0) {
-      console.warn(`  ✗ No valid numbered chapters found`);
-      skipped++;
-      continue;
-    }
-
-    const { error: insertErr } = await supabase
+    const { error: upsertErr } = await supabase
       .from('chapters')
-      .upsert(uniqueRows, { onConflict: 'series_id,chapter_number', ignoreDuplicates: true });
+      .upsert(finalBatch, { onConflict: 'series_id,chapter_number', ignoreDuplicates: true });
 
-    if (insertErr) {
-      console.error(`  ✗ Insert error: ${insertErr.message}`);
+    if (upsertErr) {
+      console.error(`  ✗ DB Error: ${upsertErr.message}`);
       skipped++;
     } else {
-      console.log(`  ✓ Inserted ${uniqueRows.length} chapters for "${displayName}"`);
+      console.log(`  ✓ Added ${finalBatch.length} chapters`);
       resolved++;
     }
 
-    await delay(750);
+    await delay(400);
   }
 
-  console.log(`\n========================================`);
-  console.log(`Finished processing.`);
-  console.log(`Successfully populated: ${resolved}`);
-  console.log(`Skipped / Unresolved:   ${skipped}`);
-  console.log(`========================================`);
+  console.log('\n=======================================');
+  console.log(`Summary: ${resolved} populated, ${skipped} skipped.`);
+  console.log('=======================================');
 }
 
 run().catch((err) => {
-  console.error('Fatal execution error:', err);
+  console.error('Fatal crash:', err);
   process.exit(1);
 });
