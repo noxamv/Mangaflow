@@ -40,7 +40,6 @@ interface RecentComment {
   };
 }
 
-// Helper to reliably resolve cover image regardless of column naming
 function getCoverUrl(item: any): string {
   const url = item?.cover_image_url || item?.cover_url;
   if (!url || typeof url !== 'string' || url.trim() === '' || url.includes('placeholder')) {
@@ -217,7 +216,6 @@ export default function HomePage() {
 
   useEffect(() => {
     async function loadData() {
-      // Query series with an inner join on chapters to strictly hide empty shell series
       const baseSelect = `
         id, 
         slug, 
@@ -445,7 +443,6 @@ export default function HomePage() {
         badgeColor="bg-cyan-500"
       />
 
-      {/* Community Discussion Board */}
       <section className="space-y-3 px-3 sm:px-0 pt-6 border-t border-neutral-800/60">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
