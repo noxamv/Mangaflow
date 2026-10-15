@@ -14,10 +14,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   realtime: { createClient: () => null },
 });
 
-// Process 20 series and up to 300 chapters per series per relay pass
-const BATCH_SIZE = 20;
-const MAX_CHAPTERS_PER_SERIES = 300;
+const BATCH_SIZE = 25;
+const MAX_CHAPTERS_PER_SERIES = 350;
 const MANGADEX_API = 'https://api.mangadex.org';
+const COMICK_API = 'https://api.comick.fun';
+const CONSUMET_API = 'https://api.consumet.org/manga/mangahere';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -31,20 +32,19 @@ function setGithubOutput(key, value) {
   }
 }
 
-async function fetchJsonWithRetry(url, options = {}, retries = 4) {
+async function fetchJsonWithRetry(url, options = {}, retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, {
         ...options,
         headers: {
-          'User-Agent': 'MangaFlow/3.0 (universal-sync-and-repair)',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
           ...(options.headers || {}),
         },
       });
 
       if (res.status === 429) {
-        console.warn(`[429 Rate Limit] Backing off ${attempt * 3}s on ${url}`);
-        await delay(3000 * attempt);
+        await delay(2500 * attempt);
         continue;
       }
 
@@ -52,20 +52,21 @@ async function fetchJsonWithRetry(url, options = {}, retries = 4) {
       return await res.json();
     } catch (err) {
       if (attempt === retries) return null;
-      await delay(1200 * attempt);
+      await delay(1000 * attempt);
     }
   }
   return null;
 }
 
 async function isImageAlive(url) {
+  if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), 4000);
     const res = await fetch(url, {
       method: 'HEAD',
       signal: controller.signal,
-      headers: { 'User-Agent': 'MangaFlow/3.0' },
+      headers: { 'User-Agent': 'Mozilla/5.0' },
     });
     clearTimeout(timeout);
     return res.ok;
@@ -74,22 +75,21 @@ async function isImageAlive(url) {
   }
 }
 
-async function findMangaDexSeries(title) {
+function cleanTitle(title) {
+  return title
+    .replace(/\[.*?\]|\(.*?\)/g, '')
+    .replace(/[^\w\s]/gi, ' ')
+    .trim();
+}
+
+// -------------------------------------------------------------
+// SOURCE RESOLVERS
+// -------------------------------------------------------------
+async function fetchFromMangaDex(title) {
   try {
-    const cleanTitle = title
-      .replace(/\[.*?\]|\(.*?\)/g, '')
-      .replace(/[^\w\s]/gi, ' ')
-      .trim();
-
-    let queryUrl = `${MANGADEX_API}/manga?title=${encodeURIComponent(cleanTitle)}&limit=5&includes[]=cover_art`;
-    let res = await fetchJsonWithRetry(queryUrl);
-
-    if ((!res?.data || res.data.length === 0) && title.includes(' - ')) {
-      const simplified = title.split(' - ')[0].trim();
-      queryUrl = `${MANGADEX_API}/manga?title=${encodeURIComponent(simplified)}&limit=5&includes[]=cover_art`;
-      res = await fetchJsonWithRetry(queryUrl);
-    }
-
+    const clean = cleanTitle(title);
+    const url = `${MANGADEX_API}/manga?title=${encodeURIComponent(clean)}&limit=5&includes[]=cover_art&includes[]=author`;
+    const res = await fetchJsonWithRetry(url);
     if (!res?.data || res.data.length === 0) return null;
 
     const manga = res.data[0];
@@ -97,40 +97,135 @@ async function findMangaDexSeries(title) {
     const desc = manga.attributes?.description?.en || '';
 
     let coverUrl = null;
-    const coverRels = manga.relationships?.filter((r) => r.type === 'cover_art') || [];
-    if (coverRels.length > 0) {
-      const bestCover = coverRels[coverRels.length - 1];
-      const fileName = bestCover.attributes?.fileName;
-      if (fileName) {
-        coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${fileName}`;
-      }
+    const coverRel = manga.relationships?.find((r) => r.type === 'cover_art');
+    if (coverRel?.attributes?.fileName) {
+      coverUrl = `https://uploads.mangadex.org/covers/${mangaId}/${coverRel.attributes.fileName}`;
     }
 
-    return { mangaId, coverUrl, description: desc };
-  } catch (err) {
-    console.error(`Error searching MangaDex for "${title}":`, err.message);
+    const authorRel = manga.relationships?.find((r) => r.type === 'author');
+    const author = authorRel?.attributes?.name || null;
+
+    return { source: 'mangadex', id: mangaId, coverUrl, description: desc, author };
+  } catch {
     return null;
   }
 }
 
-async function fetchChapterPages(chapterId) {
+async function fetchMangaDexPanels(chapterId) {
   try {
     const res = await fetchJsonWithRetry(`${MANGADEX_API}/at-home/server/${chapterId}`);
     if (!res?.baseUrl || !res?.chapter?.hash) return [];
-    const host = res.baseUrl;
-    const hash = res.chapter.hash;
-    const files = res.chapter.data || [];
-    return files.map((f) => `${host}/data/${hash}/${f}`);
+    return (res.chapter.data || []).map((f) => `${res.baseUrl}/data/${res.chapter.hash}/${f}`);
   } catch {
     return [];
   }
 }
 
-// -------------------------------------------------------------
-// 1. REPAIR MALFORMED TITLES
-// -------------------------------------------------------------
+async function fetchFromComicK(title) {
+  try {
+    const clean = cleanTitle(title);
+    const searchUrl = `${COMICK_API}/v1.0/search?q=${encodeURIComponent(clean)}&limit=3`;
+    const res = await fetchJsonWithRetry(searchUrl);
+    if (!res || !Array.isArray(res) || res.length === 0) return null;
+
+    const item = res[0];
+    const fullInfo = await fetchJsonWithRetry(`${COMICK_API}/comic/${item.slug}`);
+    
+    let coverUrl = null;
+    if (item.md_covers?.[0]?.b2key) {
+      coverUrl = `https://meo.comick.pictures/${item.md_covers[0].b2key}`;
+    }
+
+    return {
+      source: 'comick',
+      hid: item.hid,
+      slug: item.slug,
+      coverUrl,
+      description: fullInfo?.comic?.desc || item.desc || '',
+      author: fullInfo?.authors?.[0]?.name || item.authors?.[0]?.name || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchComicKChapters(hid) {
+  try {
+    const res = await fetchJsonWithRetry(`${COMICK_API}/comic/${hid}/chapters?lang=en&limit=500`);
+    if (!res?.chapters) return [];
+    return res.chapters.map((c) => ({
+      hid: c.hid,
+      chapter: c.chap ? parseFloat(c.chap) : 1,
+      title: c.title || `Chapter ${c.chap || 1}`,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function fetchComicKPanels(chapterHid) {
+  try {
+    const res = await fetchJsonWithRetry(`${COMICK_API}/chapter/${chapterHid}`);
+    if (!res?.chapter?.images) return [];
+    return res.chapter.images
+      .filter((img) => img.url || img.b2key)
+      .map((img) => (img.url ? img.url : `https://meo.comick.pictures/${img.b2key}`));
+  } catch {
+    return [];
+  }
+}
+
+async function fetchFromUnofficialMirrors(title) {
+  try {
+    const clean = cleanTitle(title);
+    const searchRes = await fetchJsonWithRetry(`${CONSUMET_API}/${encodeURIComponent(clean)}`);
+    if (!searchRes?.results || searchRes.results.length === 0) return null;
+
+    const item = searchRes.results[0];
+    const details = await fetchJsonWithRetry(`${CONSUMET_API}/info?id=${encodeURIComponent(item.id)}`);
+    if (!details) return null;
+
+    return {
+      source: 'mirror',
+      id: details.id,
+      coverUrl: details.image || null,
+      description: details.description || '',
+      author: details.author || null,
+      chapters: (details.chapters || []).map((ch, idx) => ({
+        id: ch.id,
+        chapter: parseFloat(ch.title?.match(/\d+(\.\d+)?/)?.[0] || idx + 1),
+        title: ch.title || `Chapter ${idx + 1}`,
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchMirrorPanels(chapterId) {
+  try {
+    const res = await fetchJsonWithRetry(`${CONSUMET_API}/read?chapterId=${encodeURIComponent(chapterId)}`);
+    if (!Array.isArray(res)) return [];
+    return res.map((item) => item.img).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function resolveAnySource(title) {
+  let data = await fetchFromMangaDex(title);
+  if (data?.id) return data;
+
+  data = await fetchFromComicK(title);
+  if (data?.hid) return data;
+
+  data = await fetchFromUnofficialMirrors(title);
+  if (data?.id) return data;
+
+  return null;
+}
+
 async function repairMalformedTitles() {
-  console.log('\n--- Auditing & Repairing Malformed Chapter Titles ---');
   const { data: badChapters } = await supabase
     .from('chapters')
     .select('id, chapter_number, title')
@@ -140,175 +235,160 @@ async function repairMalformedTitles() {
     for (const ch of badChapters) {
       const fallback = ch.chapter_number === 0 ? 'Prologue' : `Chapter ${ch.chapter_number}`;
       await supabase.from('chapters').update({ title: fallback }).eq('id', ch.id);
-      console.log(`Repaired Ch. ${ch.chapter_number} title -> "${fallback}"`);
     }
-  } else {
-    console.log('✓ All chapter titles are clean.');
   }
 }
 
 // -------------------------------------------------------------
-// 2. UNIFIED COVER REPAIR & CHAPTER PANEL SYNC
+// MAIN BATCH SYNC
 // -------------------------------------------------------------
-async function runUnifiedSyncAndRepair() {
+async function runUnifiedSync() {
   await repairMalformedTitles();
 
-  console.log(`\nPulling batch of ${BATCH_SIZE} series with oldest timestamps...`);
   const { data: seriesList, error: sErr } = await supabase
     .from('series')
-    .select('id, title, slug, cover_url, description, updated_at')
+    .select('id, title, slug, cover_url, description, author, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
     .limit(BATCH_SIZE);
 
   if (sErr || !seriesList || seriesList.length === 0) {
-    console.log('No series queued for sync.');
+    console.log('Catalog completely up-to-date.');
     setGithubOutput('has_more', 'false');
     return;
   }
 
-  let totalUpdatedAcrossBatch = 0;
+  let totalPanelsPopulated = 0;
 
   for (const s of seriesList) {
-    console.log(`\n==================================================`);
-    console.log(`Processing: "${s.title}"`);
-    console.log(`==================================================`);
+    console.log(`Auditing & Repairing: "${s.title}"`);
 
     try {
-      const mdData = await findMangaDexSeries(s.title);
-      await delay(300);
+      const resolved = await resolveAnySource(s.title);
+      await delay(250);
 
-      if (!mdData?.mangaId) {
-        console.warn(`[Skip] "${s.title}" not found on MangaDex. Updating timestamp.`);
+      if (!resolved) {
         await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
         continue;
       }
 
-      // Check and repair missing, broken, or dead 404 covers
-      let needsCoverRepair = false;
-      if (
-        !s.cover_url ||
-        s.cover_url.trim() === '' ||
-        !s.cover_url.startsWith('http') ||
-        s.cover_url.includes('placeholder')
-      ) {
-        needsCoverRepair = true;
-      } else {
-        const alive = await isImageAlive(s.cover_url);
-        if (!alive) needsCoverRepair = true;
-      }
+      const isMissingMeta = 
+        !s.description || 
+        s.description.trim() === '' || 
+        s.description.includes('No description') ||
+        !s.author || 
+        s.author.toLowerCase() === 'unknown';
+
+      let coverValid = await isImageAlive(s.cover_url);
+      let needsCoverRepair = !coverValid || isMissingMeta || !s.cover_url || s.cover_url.includes('placeholder');
 
       const metaUpdates = {};
-      if (needsCoverRepair && mdData.coverUrl) {
-        metaUpdates.cover_url = mdData.coverUrl;
-        console.log(`✓ Repaired cover URL for "${s.title}"`);
-      }
-      if ((!s.description || s.description.trim() === '') && mdData.description) {
-        metaUpdates.description = mdData.description;
-        console.log(`✓ Repaired missing description for "${s.title}"`);
-      }
+      if (needsCoverRepair && resolved.coverUrl) metaUpdates.cover_url = resolved.coverUrl;
+      if (isMissingMeta && resolved.description) metaUpdates.description = resolved.description;
+      if (isMissingMeta && resolved.author) metaUpdates.author = resolved.author;
 
       if (Object.keys(metaUpdates).length > 0) {
         await supabase.from('series').update(metaUpdates).eq('id', s.id);
       }
 
-      // Fetch all chapters currently in database for this title
-      const { data: existingChapters } = await supabase
+      const { data: dbChapters } = await supabase
         .from('chapters')
         .select('id, chapter_number, pages')
         .eq('series_id', s.id);
 
-      // Track chapters that already have comic page images populated
-      const completedSet = new Set(
-        (existingChapters || [])
-          .filter((c) => Array.isArray(c.pages) && c.pages.length > 0)
-          .map((c) => String(c.chapter_number))
-      );
-
-      console.log(`Panels Status: ${completedSet.size} / ${(existingChapters || []).length} chapters populated with images.`);
-
-      // Pull up to 500 chapters from MangaDex
-      const feedUrl = `${MANGADEX_API}/manga/${mdData.mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500`;
-      const feedRes = await fetchJsonWithRetry(feedUrl);
-      await delay(300);
-
-      const available = feedRes?.data || [];
-      let seriesUpdatedCount = 0;
-
-      for (const ch of available) {
-        if (seriesUpdatedCount >= MAX_CHAPTERS_PER_SERIES) {
-          console.log(`Reached per-series limit of ${MAX_CHAPTERS_PER_SERIES} chapters.`);
-          break;
-        }
-
-        const rawChNum = ch.attributes?.chapter;
-        let parsedNum;
-
-        if (rawChNum !== null && rawChNum !== undefined && !isNaN(parseFloat(rawChNum))) {
-          parsedNum = parseFloat(rawChNum);
-        } else if (ch.attributes?.title?.toLowerCase().includes('oneshot')) {
-          parsedNum = 1;
-        } else {
-          parsedNum = 1;
-        }
-
-        // Skip only if the chapter already has image panels stored
-        if (completedSet.has(String(parsedNum))) continue;
-
-        const chapterId = ch.id;
-        const chapterTitle = ch.attributes?.title || `Chapter ${parsedNum}`;
-        const pages = await fetchChapterPages(chapterId);
-        await delay(300);
-
-        if (!pages || pages.length === 0) continue;
-
-        // Upsert writes panel URLs directly to chapters.pages
-        const { error: insErr } = await supabase.from('chapters').upsert(
-          {
-            series_id: s.id,
-            chapter_number: parsedNum,
-            title: chapterTitle,
-            pages: pages,
-          },
-          { onConflict: 'series_id,chapter_number' }
-        );
-
-        if (!insErr) {
-          completedSet.add(String(parsedNum));
-          seriesUpdatedCount++;
-          totalUpdatedAcrossBatch++;
-          console.log(`✓ Ch. ${parsedNum}: Synced ${pages.length} panels`);
-        } else {
-          console.warn(`Could not sync Ch. ${parsedNum}:`, insErr.message);
+      const completedSet = new Set();
+      for (const ch of dbChapters || []) {
+        if (Array.isArray(ch.pages) && ch.pages.length > 0) {
+          const sampleCheck = await isImageAlive(ch.pages[0]);
+          if (sampleCheck) completedSet.add(String(ch.chapter_number));
         }
       }
 
-      console.log(`Finished "${s.title}": Synced ${seriesUpdatedCount} chapters with images.`);
-    } catch (seriesErr) {
-      console.error(`Error on "${s.title}":`, seriesErr.message);
+      let seriesSyncCount = 0;
+
+      if (resolved.source === 'mangadex') {
+        const feed = await fetchJsonWithRetry(
+          `${MANGADEX_API}/manga/${resolved.id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500`
+        );
+        for (const item of feed?.data || []) {
+          if (seriesSyncCount >= MAX_CHAPTERS_PER_SERIES) break;
+          const num = item.attributes?.chapter ? parseFloat(item.attributes.chapter) : 1;
+          if (isNaN(num) || completedSet.has(String(num))) continue;
+
+          const pages = await fetchMangaDexPanels(item.id);
+          await delay(250);
+          if (!pages || pages.length === 0) continue;
+
+          await supabase.from('chapters').upsert({
+            series_id: s.id,
+            chapter_number: num,
+            title: item.attributes?.title || `Chapter ${num}`,
+            pages,
+          }, { onConflict: 'series_id,chapter_number' });
+
+          completedSet.add(String(num));
+          seriesSyncCount++;
+          totalPanelsPopulated++;
+        }
+      } else if (resolved.source === 'comick') {
+        const comickChapters = await fetchComicKChapters(resolved.hid);
+        for (const item of comickChapters) {
+          if (seriesSyncCount >= MAX_CHAPTERS_PER_SERIES) break;
+          if (completedSet.has(String(item.chapter))) continue;
+
+          const pages = await fetchComicKPanels(item.hid);
+          await delay(250);
+          if (!pages || pages.length === 0) continue;
+
+          await supabase.from('chapters').upsert({
+            series_id: s.id,
+            chapter_number: item.chapter,
+            title: item.title,
+            pages,
+          }, { onConflict: 'series_id,chapter_number' });
+
+          completedSet.add(String(item.chapter));
+          seriesSyncCount++;
+          totalPanelsPopulated++;
+        }
+      } else if (resolved.source === 'mirror') {
+        for (const item of resolved.chapters || []) {
+          if (seriesSyncCount >= MAX_CHAPTERS_PER_SERIES) break;
+          if (completedSet.has(String(item.chapter))) continue;
+
+          const pages = await fetchMirrorPanels(item.id);
+          await delay(250);
+          if (!pages || pages.length === 0) continue;
+
+          await supabase.from('chapters').upsert({
+            series_id: s.id,
+            chapter_number: item.chapter,
+            title: item.title,
+            pages,
+          }, { onConflict: 'series_id,chapter_number' });
+
+          completedSet.add(String(item.chapter));
+          seriesSyncCount++;
+          totalPanelsPopulated++;
+        }
+      }
+    } catch (err) {
+      console.error(`Error on "${s.title}":`, err.message);
     } finally {
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
     }
   }
 
-  // Count remaining series that need their initial pass
   const { count: remainingUnsynced } = await supabase
     .from('series')
     .select('id', { count: 'exact', head: true })
     .lte('updated_at', '2001-01-01T00:00:00Z');
 
-  console.log(`\n==================================================`);
-  console.log(`Run Complete: Total chapters with panels synced = ${totalUpdatedAcrossBatch}`);
-  console.log(`Backlog series remaining for pass = ${remainingUnsynced || 0}`);
-  console.log(`==================================================`);
-
-  // Signal the GitHub Action token relay whether more runs are needed
-  const hasMore = (totalUpdatedAcrossBatch > 0 || (remainingUnsynced && remainingUnsynced > 0)) ? 'true' : 'false';
+  const hasMore = (totalPanelsPopulated > 0 || (remainingUnsynced && remainingUnsynced > 0)) ? 'true' : 'false';
   setGithubOutput('has_more', hasMore);
-  console.log(`[Relay Engine] has_more=${hasMore}`);
 }
 
-runUnifiedSyncAndRepair().catch((err) => {
-  console.error('Fatal execution failure:', err);
+runUnifiedSync().catch((err) => {
+  console.error('Fatal crash:', err);
   setGithubOutput('has_more', 'false');
   process.exit(1);
 });
