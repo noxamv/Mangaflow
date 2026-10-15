@@ -1,6 +1,9 @@
-name: Scrape Secondary Chapters
+name: Auto Chapter Release Bot
 
 on:
+  schedule:
+    # Runs at minute 0 of every hour
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -8,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -19,8 +22,8 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Run Chapter Scraper
+      - name: Run Chapter Bot
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node scripts/scrape-secondary-chapters.js
+        run: node scripts/scrape-latest-and-popular.js
