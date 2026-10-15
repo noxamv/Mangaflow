@@ -32,12 +32,12 @@ async function fetchJson(url) {
 
     if (!res.ok) return null;
     return await res.json();
-  } catch (err) {
+  } catch {
     return null;
   }
 }
 
-// 1. Search MangaDex for the Manga ID
+// 1. Search MangaDex for Manga ID
 async function searchMangaDex(series) {
   const titles = [
     series.english_title,
@@ -54,7 +54,7 @@ async function searchMangaDex(series) {
 
     if (!clean || clean.length < 2) continue;
 
-    const url = `https://api.mangadex.org/manga?title=${encodeURIComponent(clean)}&limit=5&includes[]=cover_art`;
+    const url = `https://api.mangadex.org/manga?title=${encodeURIComponent(clean)}&limit=5`;
     const data = await fetchJson(url);
     await delay(350);
 
@@ -87,13 +87,13 @@ async function fetchMangaDexChapters(mangaId) {
   return allChapters;
 }
 
-// 3. Fallback: Search Jikan (MyAnimeList open API) to get chapter counts if scans are licensed
+// 3. Fallback: Search Jikan
 async function fetchJikanManga(series) {
   const term = series.english_title || series.title;
   const clean = term.replace(/[【】\[\]\(\)]/g, ' ').split(/[~:–—\-]/)[0].trim();
   const url = `https://api.jikan.moe/v4/manga?q=${encodeURIComponent(clean)}&limit=1`;
   const res = await fetchJson(url);
-  await delay(1000); // Jikan rate limits to 3 req/sec
+  await delay(1000);
 
   const manga = res?.data?.[0];
   if (manga && manga.chapters) {
@@ -138,7 +138,7 @@ async function run() {
 
     let chapterRows = [];
 
-    // Attempt 1: MangaDex
+    // MangaDex search
     const mdManga = await searchMangaDex(item);
     if (mdManga?.id) {
       const feed = await fetchMangaDexChapters(mdManga.id);
@@ -149,24 +149,22 @@ async function run() {
             series_id: item.id,
             chapter_number: parseFloat(ch.attributes.chapter) || 0,
             title: ch.attributes.title || `Chapter ${ch.attributes.chapter}`,
-            external_id: ch.id,
             published_at: ch.attributes.publishAt || new Date().toISOString(),
           }));
       }
     }
 
-    // Attempt 2: If MangaDex has 0 open scans (licensed), generate placeholders via MAL/Jikan metadata
+    // Jikan fallback
     if (chapterRows.length === 0) {
       console.log(`  ℹ MangaDex empty. Checking official index...`);
       const totalChaps = await fetchJikanManga(item);
       if (totalChaps && totalChaps > 0) {
-        const count = Math.min(totalChaps, 50); // Seed up to 50 base chapters
+        const count = Math.min(totalChaps, 50);
         for (let num = 1; num <= count; num++) {
           chapterRows.push({
             series_id: item.id,
             chapter_number: num,
             title: `Chapter ${num}`,
-            external_id: `official-${item.id}-${num}`,
             published_at: new Date().toISOString(),
           });
         }
@@ -188,6 +186,7 @@ async function run() {
     }
     const finalBatch = Array.from(uniqueMap.values());
 
+    // Insert only standard columns: series_id, chapter_number, title, published_at
     const { error: upsertErr } = await supabase
       .from('chapters')
       .upsert(finalBatch, { onConflict: 'series_id,chapter_number', ignoreDuplicates: true });
