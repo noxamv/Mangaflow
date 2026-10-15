@@ -1,12 +1,10 @@
-name: Enrich Series Metadata
+name: Scrape Secondary Chapters
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'
 
 jobs:
-  enrich:
+  scrape:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,9 +20,9 @@ jobs:
         run: |
           npm ci || npm install
 
-      - name: Run Enrichment Script
+      - name: Run Chapter Scraper
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          node scripts/enrich-all.js
+          node scripts/scrape-secondary-chapters.js
