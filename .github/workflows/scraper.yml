@@ -19,25 +19,8 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Verify Secret Presence
-        env:
-          URL_CHECK: ${{ secrets.SUPABASE_URL }}
-          KEY_CHECK: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          if [ -z "$URL_CHECK" ]; then
-            echo "❌ SUPABASE_URL is EMPTY or NOT FOUND in GitHub Secrets"
-          else
-            echo "✅ SUPABASE_URL is detected"
-          fi
-
-          if [ -z "$KEY_CHECK" ]; then
-            echo "❌ SUPABASE_SERVICE_ROLE_KEY is EMPTY or NOT FOUND in GitHub Secrets"
-          else
-            echo "✅ SUPABASE_SERVICE_ROLE_KEY is detected"
-          fi
-
       - name: Run Chapter Scraper
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node scripts/scrape-secondary-chapters.js
