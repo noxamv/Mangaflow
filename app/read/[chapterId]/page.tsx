@@ -5,14 +5,17 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
 
-interface ChapterRecord {
+interface Chapter {
   id: string;
+  series_id: string;
   chapter_number: number;
   title: string | null;
-  series_id: string;
-  pages?: any;
-  images?: any;
-  page_urls?: any;
+  pages: string[] | null;
+  series?: {
+    id: string;
+    title: string;
+    slug: string;
+  };
 }
 
 export default function ReaderPage() {
@@ -20,166 +23,209 @@ export default function ReaderPage() {
   const router = useRouter();
   const chapterId = params?.chapterId as string;
 
-  const [chapter, setChapter] = useState<ChapterRecord | null>(null);
-  const [pageList, setPageList] = useState<string[]>([]);
+  const [chapter, setChapter] = useState<Chapter | null>(null);
+  const [allChapters, setAllChapters] = useState<{ id: string; chapter_number: number }[]>([]);
   const [loading, setLoading] = useState(true);
-  const [useProxy, setUseProxy] = useState(true);
-  const [nextChapterId, setNextChapterId] = useState<string | null>(null);
-  const [prevChapterId, setPrevChapterId] = useState<string | null>(null);
 
   useEffect(() => {
-    async function fetchChapter() {
+    async function loadChapter() {
       if (!chapterId) return;
       setLoading(true);
 
-      const { data, error } = await supabase
-        .from('chapters')
-        .select('*')
-        .eq('id', chapterId)
-        .single();
+      try {
+        // 1. Fetch current chapter and associated series info
+        const { data: chData, error: chErr } = await supabase
+          .from('chapters')
+          .select(`
+            id,
+            series_id,
+            chapter_number,
+            title,
+            pages,
+            series (id, title, slug)
+          `)
+          .eq('id', chapterId)
+          .maybeSingle();
 
-      if (error || !data) {
-        setLoading(false);
-        return;
-      }
-
-      setChapter(data);
-
-      // Extract image list across various possible database column names
-      let rawPages = data.pages || data.images || data.page_urls || [];
-      if (typeof rawPages === 'string') {
-        try {
-          rawPages = JSON.parse(rawPages);
-        } catch {
-          rawPages = [rawPages];
+        if (chErr || !chData) {
+          setLoading(false);
+          return;
         }
+
+        const seriesObj = Array.isArray(chData.series) ? chData.series[0] : chData.series;
+        const currentChapter: Chapter = {
+          ...chData,
+          series: seriesObj,
+        };
+
+        setChapter(currentChapter);
+
+        // 2. Fetch list of sister chapters for navigation
+        const { data: siblings } = await supabase
+          .from('chapters')
+          .select('id, chapter_number')
+          .eq('series_id', currentChapter.series_id)
+          .not('pages', 'is', null)
+          .order('chapter_number', { ascending: true });
+
+        if (siblings) setAllChapters(siblings);
+
+        // 3. Record to Reading History for "Continue Reading"
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData?.user) {
+          await supabase.from('reading_history').upsert(
+            {
+              user_id: authData.user.id,
+              series_id: currentChapter.series_id,
+              chapter_id: currentChapter.id,
+              chapter_number: currentChapter.chapter_number,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'user_id,series_id' }
+          );
+        }
+      } catch (err) {
+        console.error('Error loading reader:', err);
+      } finally {
+        setLoading(false);
       }
-
-      if (Array.isArray(rawPages)) {
-        // Flatten or map if items are objects like { url: '...' }
-        const parsed = rawPages
-          .map((item: any) => (typeof item === 'string' ? item : item?.url || item?.src || ''))
-          .filter(Boolean);
-        setPageList(parsed);
-      } else {
-        setPageList([]);
-      }
-
-      // Fetch adjacent chapters
-      const { data: siblings } = await supabase
-        .from('chapters')
-        .select('id, chapter_number')
-        .eq('series_id', data.series_id)
-        .order('chapter_number', { ascending: true });
-
-      if (siblings && siblings.length > 0) {
-        const currentIndex = siblings.findIndex((c) => c.id === chapterId);
-        setPrevChapterId(currentIndex > 0 ? siblings[currentIndex - 1].id : null);
-        setNextChapterId(currentIndex < siblings.length - 1 ? siblings[currentIndex + 1].id : null);
-      }
-
-      setLoading(false);
     }
 
-    fetchChapter();
+    loadChapter();
   }, [chapterId]);
-
-  const getImageSrc = (url: string) => {
-    if (!useProxy) return url;
-    return `/api/proxy?url=${encodeURIComponent(url)}`;
-  };
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#0d0d12] text-white">
+      <div className="min-h-screen bg-[#0a0a0f] text-neutral-400 flex items-center justify-center text-xs">
         Loading chapter...
       </div>
     );
   }
 
-  if (!chapter) {
+  if (!chapter || !chapter.pages || chapter.pages.length === 0) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-[#0d0d12] text-white">
-        <h1 className="text-2xl font-bold">Chapter Not Found</h1>
-        <Link href="/" className="mt-4 text-purple-400 hover:underline">
-          Return Home
+      <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col items-center justify-center px-4 space-y-4">
+        <p className="text-sm font-semibold">No images available for this chapter yet.</p>
+        <Link
+          href="/"
+          className="px-4 py-2 bg-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-500 transition"
+        >
+          Return to Home
         </Link>
       </div>
     );
   }
 
+  const currentIndex = allChapters.findIndex((c) => c.id === chapter.id);
+  const prevChapter = currentIndex > 0 ? allChapters[currentIndex - 1] : null;
+  const nextChapter = currentIndex < allChapters.length - 1 ? allChapters[currentIndex + 1] : null;
+
   return (
-    <div className="min-h-screen bg-[#0d0d12] text-white">
-      {/* Top Floating Control Bar */}
-      <header className="sticky top-0 z-50 flex items-center justify-between border-b border-gray-800 bg-[#16161f]/90 px-4 py-3 backdrop-blur-md">
-        <Link href="/" className="text-sm font-semibold text-gray-300 hover:text-white">
-          ← Back
-        </Link>
-        <span className="text-sm font-medium">Chapter {chapter.chapter_number}</span>
-        <button
-          onClick={() => setUseProxy((prev) => !prev)}
-          className={`rounded px-2.5 py-1 text-xs font-medium transition ${
-            useProxy ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-400'
-          }`}
-        >
-          {useProxy ? 'Proxy ON' : 'Proxy OFF'}
-        </button>
-      </header>
-
-      {/* Reader Body */}
-      <main className="mx-auto flex max-w-3xl flex-col items-center px-2 py-6">
-        {pageList.length > 0 ? (
-          pageList.map((pageUrl, idx) => (
-            <div key={idx} className="relative mb-2 w-full">
-              <img
-                src={getImageSrc(pageUrl)}
-                alt={`Page ${idx + 1}`}
-                loading="lazy"
-                className="w-full rounded shadow-md"
-                onError={(e) => {
-                  const target = e.currentTarget;
-                  // If proxy fails, try direct URL; if direct fails, try proxy
-                  if (target.src.includes('/api/proxy')) {
-                    target.src = pageUrl;
-                  }
-                }}
-              />
-            </div>
-          ))
-        ) : (
-          <div className="py-20 text-center">
-            <p className="text-gray-400">No images available for this chapter.</p>
-            <p className="mt-2 text-xs text-gray-600">
-              Run your GitHub Actions scraper workflow to sync chapter panels into Supabase.
-            </p>
-          </div>
-        )}
-
-        {/* Bottom Nav */}
-        <div className="mt-8 flex w-full justify-between gap-4 border-t border-gray-800 pt-6">
-          {prevChapterId ? (
-            <button
-              onClick={() => router.push(`/read/${prevChapterId}`)}
-              className="flex-1 rounded-lg bg-gray-800 px-4 py-3 text-center text-sm font-semibold hover:bg-gray-700"
+    <div className="min-h-screen bg-[#0a0a0f] text-white flex flex-col">
+      {/* Sticky Reader Header */}
+      <header className="sticky top-0 z-50 bg-[#0e1017]/95 backdrop-blur border-b border-neutral-800 px-3 py-2 flex items-center justify-between">
+        <div className="flex items-center gap-2 min-w-0">
+          <Link
+            href="/"
+            className="px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 rounded-md text-xs font-semibold text-neutral-300 transition shrink-0"
+          >
+            ← Home
+          </Link>
+          {chapter.series && (
+            <Link
+              href={`/series/${chapter.series.slug || chapter.series.id}`}
+              className="text-xs font-bold text-neutral-200 truncate hover:text-indigo-400 transition"
             >
-              ← Previous Chapter
-            </button>
+              {chapter.series.title}
+            </Link>
+          )}
+          <span className="text-xs text-neutral-500 shrink-0">
+            / Ch. {chapter.chapter_number}
+          </span>
+        </div>
+
+        {/* Quick Chapter Selector */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {prevChapter ? (
+            <Link
+              href={`/read/${prevChapter.id}`}
+              className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-xs rounded transition"
+            >
+              Prev
+            </Link>
           ) : (
-            <div className="flex-1" />
+            <span className="px-2 py-1 bg-neutral-900 text-neutral-600 text-xs rounded cursor-not-allowed">
+              Prev
+            </span>
           )}
 
-          {nextChapterId ? (
-            <button
-              onClick={() => router.push(`/read/${nextChapterId}`)}
-              className="flex-1 rounded-lg bg-purple-600 px-4 py-3 text-center text-sm font-semibold hover:bg-purple-500"
+          <select
+            value={chapter.id}
+            onChange={(e) => router.push(`/read/${e.target.value}`)}
+            className="bg-neutral-900 border border-neutral-700 text-neutral-200 text-xs rounded px-2 py-1 outline-none"
+          >
+            {allChapters.map((ch) => (
+              <option key={ch.id} value={ch.id}>
+                Ch. {ch.chapter_number}
+              </option>
+            ))}
+          </select>
+
+          {nextChapter ? (
+            <Link
+              href={`/read/${nextChapter.id}`}
+              className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-xs rounded transition"
             >
-              Next Chapter →
-            </button>
+              Next
+            </Link>
           ) : (
-            <div className="flex-1" />
+            <span className="px-2 py-1 bg-neutral-900 text-neutral-600 text-xs rounded cursor-not-allowed">
+              Next
+            </span>
           )}
         </div>
+      </header>
+
+      {/* Comic Panels Container */}
+      <main className="flex-1 flex flex-col items-center w-full max-w-3xl mx-auto py-2">
+        {chapter.pages.map((imgUrl, idx) => (
+          <img
+            key={idx}
+            src={imgUrl}
+            alt={`Page ${idx + 1}`}
+            referrerPolicy="no-referrer"
+            loading={idx < 3 ? 'eager' : 'lazy'}
+            decoding="async"
+            className="w-full h-auto block select-none bg-neutral-950"
+            onError={(e) => {
+              const target = e.currentTarget;
+              if (!target.src.includes('/api/proxy')) {
+                target.src = `/api/proxy?url=${encodeURIComponent(imgUrl)}`;
+              }
+            }}
+          />
+        ))}
       </main>
+
+      {/* Reader Bottom Navigation */}
+      <footer className="bg-[#0e1017] border-t border-neutral-800 p-4 flex items-center justify-center gap-4">
+        {prevChapter && (
+          <Link
+            href={`/read/${prevChapter.id}`}
+            className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-xs font-semibold rounded-lg transition"
+          >
+            ← Previous Chapter
+          </Link>
+        )}
+        {nextChapter && (
+          <Link
+            href={`/read/${nextChapter.id}`}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-bold rounded-lg transition"
+          >
+            Next Chapter →
+          </Link>
+        )}
+      </footer>
     </div>
   );
 }
