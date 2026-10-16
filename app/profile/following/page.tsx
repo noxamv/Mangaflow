@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { supabase } from '../../lib/supabase';
-import AuthModal from '../../components/AuthModal';
+import { supabase } from '../../../lib/supabase';
+import AuthModal from '../../../components/AuthModal';
 
 const FALLBACK_COVER =
   'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=400&q=80';
@@ -22,7 +22,7 @@ interface BookmarkedSeries {
   };
 }
 
-export default function ProfilePage() {
+export default function ProfileFollowingPage() {
   const [bookmarks, setBookmarks] = useState<BookmarkedSeries[]>([]);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
@@ -71,7 +71,7 @@ export default function ProfilePage() {
 
       setBookmarks(formatted as any);
     } catch (err) {
-      console.error('Failed to load profile library:', err);
+      console.error('Failed to load following library:', err);
     } finally {
       setLoading(false);
     }
@@ -84,7 +84,7 @@ export default function ProfilePage() {
   const handleRemoveBookmark = async (seriesId: string) => {
     if (!user) return;
 
-    // Optimistically remove from state so it disappears instantly
+    // Optimistically remove from UI state so it disappears instantly
     setBookmarks((prev) => prev.filter((b) => b.series_id !== seriesId));
 
     try {
@@ -111,7 +111,7 @@ export default function ProfilePage() {
   if (loading) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center text-xs text-neutral-500">
-        Loading profile...
+        Loading followed series...
       </div>
     );
   }
@@ -119,7 +119,7 @@ export default function ProfilePage() {
   if (!user) {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center px-4 text-center">
-        <h1 className="text-xl font-bold text-white mb-2">User Profile</h1>
+        <h1 className="text-xl font-bold text-white mb-2">My Following</h1>
         <p className="text-xs text-neutral-400 mb-4">
           Sign in to view your bookmarks, reading library, and account preferences.
         </p>
