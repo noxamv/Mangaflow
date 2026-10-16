@@ -32,7 +32,7 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-// 1. Resolver with Flagship Locks
+// 1. Resolve Series Source with Flagship Locks
 async function resolveAnySource(title, slug) {
   const lower = (slug || title).toLowerCase();
 
@@ -145,7 +145,7 @@ async function runWorker() {
     return;
   }
 
-  // Partition queue across workers using modulo
+  // Partition queue across workers
   const assignedSeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
   console.log(`Worker ${WORKER_ID} processing ${assignedSeries.length} series.`);
 
@@ -159,58 +159,15 @@ async function runWorker() {
       continue;
     }
 
-    // Query empty chapters needing panel backfilling
-    const { data: emptyChapters } = await supabase
+    // Fetch chapters and safely identify empty rows in JavaScript
+    const { data: rawChapters } = await supabase
       .from('chapters')
-      .select('id, chapter_number')
+      .select('id, chapter_number, pages')
       .eq('series_id', s.id)
-      .or('pages.is.null,pages.eq.[]')
-      .order('chapter_number', { ascending: true })
-      .limit(40);
+      .order('chapter_number', { ascending: true });
 
-    if (!emptyChapters?.length) {
-      console.log(`No empty chapters for "${s.title}". Marking updated.`);
-      await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
-      continue;
-    }
+    const emptyChapters = (rawChapters || [])
+      .filter((ch) => !ch.pages || ch.pages.length === 0)
+      .slice(0, 40);
 
-    console.log(`Found ${emptyChapters.length} empty chapters. Backfilling in parallel chunks...`);
-
-    // Concurrently process in chunks of 4 chapters
-    const CHUNK_SIZE = 4;
-    for (let i = 0; i < emptyChapters.length; i += CHUNK_SIZE) {
-      const chunk = emptyChapters.slice(i, i + CHUNK_SIZE);
-
-      await Promise.all(
-        chunk.map(async (ch) => {
-          let pages = null;
-          if (sourceInfo.source === 'mangadex') {
-            pages = await getMangaDexPages(sourceInfo.id, ch.chapter_number);
-          } else if (sourceInfo.source === 'comick') {
-            pages = await getComicKPages(sourceInfo.hid, ch.chapter_number);
-          }
-
-          if (pages && pages.length > 0) {
-            await supabase
-              .from('chapters')
-              .update({ pages: pages })
-              .eq('id', ch.id);
-            console.log(`✓ [Worker ${WORKER_ID}] Filled "${s.title}" Ch. ${ch.chapter_number} (${pages.length} panels)`);
-          }
-        })
-      );
-
-      await delay(250);
-    }
-
-    // Advance timestamp so next cycle takes the next series
-    await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
-  }
-
-  console.log(`Worker ${WORKER_ID} complete.`);
-}
-
-runWorker().catch((err) => {
-  console.error('Fatal worker crash:', err);
-  process.exit(1);
-});
+    if (!
