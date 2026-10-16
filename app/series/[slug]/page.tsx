@@ -34,7 +34,7 @@ interface Series {
 
 export default function SeriesDetailsPage() {
   const params = useParams();
-  const slug = params?.slug as string;
+  const rawSlug = params?.slug as string;
 
   const [series, setSeries] = useState<Series | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -44,15 +44,25 @@ export default function SeriesDetailsPage() {
 
   useEffect(() => {
     async function fetchSeriesData() {
-      if (!slug) return;
+      if (!rawSlug) return;
       setLoading(true);
 
       try {
-        const { data: seriesData, error: seriesError } = await supabase
-          .from('series')
-          .select('*')
-          .or(`slug.eq.${slug},id.eq.${slug}`)
-          .maybeSingle();
+        const decodedSlug = decodeURIComponent(rawSlug).trim();
+        const isUUID =
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            decodedSlug
+          );
+
+        // Fetch Series Meta without UUID casting errors on string slugs
+        let query = supabase.from('series').select('*');
+        if (isUUID) {
+          query = query.or(`slug.eq."${decodedSlug}",id.eq."${decodedSlug}"`);
+        } else {
+          query = query.eq('slug', decodedSlug);
+        }
+
+        const { data: seriesData, error: seriesError } = await query.maybeSingle();
 
         if (seriesError || !seriesData) {
           setLoading(false);
@@ -61,6 +71,7 @@ export default function SeriesDetailsPage() {
 
         setSeries(seriesData);
 
+        // Fetch User Follow/Bookmark Status
         const { data: userData } = await supabase.auth.getUser();
         if (userData?.user) {
           const { data: followRecord } = await supabase
@@ -73,6 +84,7 @@ export default function SeriesDetailsPage() {
           if (followRecord) setIsFollowing(true);
         }
 
+        // Fetch populated chapters
         const { data: chapterData, error: chError } = await supabase
           .from('chapters')
           .select('id, chapter_number, title, pages, created_at')
@@ -93,7 +105,7 @@ export default function SeriesDetailsPage() {
     }
 
     fetchSeriesData();
-  }, [slug]);
+  }, [rawSlug]);
 
   const handleFollowToggle = async () => {
     const { data: userData } = await supabase.auth.getUser();
@@ -177,6 +189,7 @@ export default function SeriesDetailsPage() {
   return (
     <main className="min-h-screen bg-[#0d0d12] px-4 py-8 text-white sm:px-8">
       <div className="mx-auto max-w-5xl space-y-10">
+        {/* Banner Card */}
         <div className="relative overflow-hidden rounded-2xl border border-neutral-800/80 bg-[#12141c] p-6 shadow-2xl sm:p-8">
           <div
             className="absolute inset-0 scale-125 bg-cover bg-center opacity-10 blur-2xl filter"
@@ -185,6 +198,7 @@ export default function SeriesDetailsPage() {
           <div className="absolute inset-0 bg-gradient-to-t from-[#12141c] via-[#12141c]/80 to-transparent" />
 
           <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-start md:gap-8">
+            {/* Cover Poster */}
             <div className="mx-auto aspect-[3/4.2] w-48 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-neutral-900 shadow-2xl md:mx-0 md:w-56">
               <img
                 src={getCoverUrl()}
@@ -207,6 +221,7 @@ export default function SeriesDetailsPage() {
               />
             </div>
 
+            {/* Title & Metadata */}
             <div className="flex flex-1 flex-col justify-between space-y-4">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -238,6 +253,7 @@ export default function SeriesDetailsPage() {
                 </p>
               </div>
 
+              {/* Action Buttons */}
               <div className="space-y-4 pt-4 border-t border-neutral-800/80">
                 <div className="flex flex-wrap items-center gap-3">
                   {firstChapter && (
@@ -276,6 +292,7 @@ export default function SeriesDetailsPage() {
           </div>
         </div>
 
+        {/* Chapters Grid */}
         <div className="space-y-4">
           <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
             <h2 className="text-lg font-bold text-white sm:text-xl">Available Chapters</h2>
