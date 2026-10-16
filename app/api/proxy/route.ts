@@ -1,44 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export const dynamic = 'force-dynamic';
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const targetUrl = searchParams.get('url');
 
-export async function GET(req: NextRequest) {
-  const url = req.nextUrl.searchParams.get('url');
-
-  if (!url) {
-    return new NextResponse('Missing url parameter', { status: 400 });
+  if (!targetUrl || !targetUrl.startsWith('http')) {
+    return new NextResponse('Invalid target URL', { status: 400 });
   }
 
   try {
-    const upstreamRes = await fetch(url, {
+    const res = await fetch(targetUrl, {
       headers: {
         'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        Referer: '',
-        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        Referer: 'https://mangadex.org/',
       },
-      cache: 'no-store',
     });
 
-    if (!upstreamRes.ok) {
-      return new NextResponse(`Upstream returned ${upstreamRes.status}`, {
-        status: upstreamRes.status,
-      });
+    if (!res.ok) {
+      return new NextResponse(`Failed to fetch upstream: ${res.status}`, { status: res.status });
     }
 
-    const contentType = upstreamRes.headers.get('content-type') || 'image/jpeg';
-    const buffer = await upstreamRes.arrayBuffer();
+    const contentType = res.headers.get('content-type') || 'image/jpeg';
+    const buffer = await res.arrayBuffer();
 
     return new NextResponse(buffer, {
+      status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=86400, stale-while-revalidate=43200',
-        'Access-Control-Allow-Origin': '*',
+        // Cache images on browser and CDN for 7 days to eliminate repeated slow fetching
+        'Cache-Control': 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400',
       },
     });
   } catch (err: any) {
-    return new NextResponse(err?.message || 'Failed to proxy image', {
-      status: 502,
-    });
+    return new NextResponse(`Proxy error: ${err.message}`, { status: 500 });
   }
 }
