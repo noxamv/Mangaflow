@@ -1,152 +1,243 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../../lib/supabase';
+import AuthModal from '../../components/AuthModal';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-);
+const FALLBACK_COVER =
+  'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=400&q=80';
 
-interface BookmarkItem {
+interface BookmarkedSeries {
   id: string;
+  series_id: string;
+  created_at: string;
   series: {
     id: string;
     slug: string;
     title: string;
-    cover_image_url: string;
-    reading_mode: string;
+    cover_image_url: string | null;
+    reading_mode: string | null;
+    status: string | null;
   };
 }
 
-export default function FollowingPage() {
-  const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([]);
+export default function ProfilePage() {
+  const [bookmarks, setBookmarks] = useState<BookmarkedSeries[]>([]);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
-  useEffect(() => {
-    async function loadBookmarks() {
-      setLoading(true);
+  async function loadUserData() {
+    setLoading(true);
+    try {
       const { data: authData } = await supabase.auth.getUser();
-      setUser(authData?.user || null);
-
-      if (authData?.user) {
-        const { data } = await supabase
-          .from('user_bookmarks')
-          .select('id, series (id, slug, title, cover_image_url, reading_mode)')
-          .eq('user_id', authData.user.id)
-          .order('created_at', { ascending: false });
-
-        setBookmarks((data as any) || []);
+      if (!authData?.user) {
+        setUser(null);
+        setBookmarks([]);
+        setLoading(false);
+        return;
       }
+
+      setUser(authData.user);
+
+      // Fetch user bookmarked series
+      const { data, error } = await supabase
+        .from('user_follows')
+        .select(`
+          id,
+          series_id,
+          created_at,
+          series (
+            id,
+            slug,
+            title,
+            cover_image_url,
+            reading_mode,
+            status
+          )
+        `)
+        .eq('user_id', authData.user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      const formatted = (data || [])
+        .filter((item) => item.series)
+        .map((item) => ({
+          ...item,
+          series: Array.isArray(item.series) ? item.series[0] : item.series,
+        }));
+
+      setBookmarks(formatted as any);
+    } catch (err) {
+      console.error('Failed to load profile library:', err);
+    } finally {
       setLoading(false);
     }
-    loadBookmarks();
+  }
+
+  useEffect(() => {
+    loadUserData();
   }, []);
 
-  const handleExportJSON = () => {
-    const exportData = bookmarks.map((b) => ({
-      title: b.series.title,
-      slug: b.series.slug,
-    }));
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `mangaflow-library-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
+  const handleRemoveBookmark = async (seriesId: string) => {
+    if (!user) return;
+
+    // Optimistically remove from state so it disappears instantly
+    setBookmarks((prev) => prev.filter((b) => b.series_id !== seriesId));
+
+    try {
+      const { error } = await supabase
+        .from('user_follows')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('series_id', seriesId);
+
+      if (error) throw error;
+    } catch (err) {
+      console.error('Failed to remove bookmark:', err);
+      // Reload on failure to sync back
+      loadUserData();
+    }
   };
 
-  const removeBookmark = async (bookmarkId: string) => {
-    await supabase.from('user_bookmarks').delete().eq('id', bookmarkId);
-    setBookmarks(bookmarks.filter((b) => b.id !== bookmarkId));
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setBookmarks([]);
   };
 
   if (loading) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center text-xs text-neutral-500">
-        Loading followed titles...
+        Loading profile...
       </div>
     );
   }
 
   if (!user) {
     return (
-      <div className="min-h-[60vh] flex flex-col items-center justify-center gap-3">
-        <h2 className="text-sm font-bold text-white">Sign In Required</h2>
-        <p className="text-xs text-neutral-400">Please sign in to view your followed titles.</p>
-        <Link href="/" className="px-4 py-2 bg-indigo-600 rounded-lg text-xs font-bold text-white">
-          Back to Home
-        </Link>
+      <div className="min-h-[60vh] flex flex-col items-center justify-center px-4 text-center">
+        <h1 className="text-xl font-bold text-white mb-2">User Profile</h1>
+        <p className="text-xs text-neutral-400 mb-4">
+          Sign in to view your bookmarks, reading library, and account preferences.
+        </p>
+        <button
+          onClick={() => setShowAuthModal(true)}
+          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-lg transition shadow-md"
+        >
+          Sign In / Register
+        </button>
+        <AuthModal
+          isOpen={showAuthModal}
+          onClose={() => {
+            setShowAuthModal(false);
+            loadUserData();
+          }}
+        />
       </div>
     );
   }
 
   return (
-    <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 min-h-screen text-neutral-100">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-6 border-b border-neutral-800 gap-3">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-white">
-            Followed Titles
-          </h1>
-          <p className="text-xs text-neutral-400 mt-0.5">
-            {bookmarks.length} titles saved in your library
-          </p>
+    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-8">
+      {/* User Header Profile Card */}
+      <div className="bg-[#12141c] border border-neutral-800/80 rounded-2xl p-5 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-4">
+          <div className="w-14 h-14 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center text-xl font-black text-white shadow-lg">
+            {user.email ? user.email[0].toUpperCase() : 'U'}
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-white">{user.email}</h2>
+            <p className="text-xs text-neutral-400 mt-0.5">
+              {bookmarks.length} Bookmarked {bookmarks.length === 1 ? 'Series' : 'Series'}
+            </p>
+          </div>
         </div>
 
-        {bookmarks.length > 0 && (
-          <button
-            type="button"
-            onClick={handleExportJSON}
-            className="px-3.5 py-1.5 rounded-lg bg-neutral-900 border border-neutral-700/80 hover:bg-neutral-800 text-xs font-semibold text-neutral-200 transition flex items-center gap-1.5"
-          >
-            <span>⭳</span> Export Library (JSON)
-          </button>
-        )}
+        <button
+          onClick={handleSignOut}
+          className="px-3.5 py-1.5 text-xs font-semibold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 rounded-lg transition"
+        >
+          Sign Out
+        </button>
       </div>
 
-      {bookmarks.length === 0 ? (
-        <div className="text-center py-24 text-xs text-neutral-500">
-          You haven&apos;t bookmarked any titles yet. Browse the catalog and tap ☆ Bookmark to follow your favorite series!
+      {/* Bookmarked Library Section */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-4 bg-indigo-500 rounded-sm"></span>
+            <h1 className="text-sm sm:text-base font-bold text-white tracking-tight">
+              Bookmarked Series
+            </h1>
+          </div>
+          <span className="text-xs text-neutral-400">{bookmarks.length} Titles</span>
         </div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4 mt-6">
-          {bookmarks.map((item) => (
-            <div key={item.id} className="relative group flex flex-col">
-              <Link href={`/series/${item.series.slug}`} className="flex flex-col">
-                <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition shadow-md">
-                  {item.series.cover_image_url ? (
+
+        {bookmarks.length === 0 ? (
+          <div className="rounded-2xl border border-neutral-800/80 bg-[#12141c] p-12 text-center space-y-3">
+            <p className="text-sm font-semibold text-neutral-300">No bookmarked series yet</p>
+            <p className="text-xs text-neutral-500 max-w-sm mx-auto">
+              Click &ldquo;+ Bookmark Series&rdquo; on any manga or manhwa details page to save it here.
+            </p>
+            <Link
+              href="/"
+              className="inline-block mt-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-500 transition shadow-md"
+            >
+              Browse Catalog
+            </Link>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-4">
+            {bookmarks.map((b) => {
+              const s = b.series;
+              const cover = s.cover_image_url || FALLBACK_COVER;
+
+              return (
+                <div
+                  key={b.id}
+                  className="group relative flex flex-col rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 hover:border-indigo-500/50 transition shadow-lg"
+                >
+                  <Link
+                    href={`/series/${s.slug || s.id}`}
+                    className="relative aspect-[3/4.2] w-full overflow-hidden block"
+                  >
                     <img
-                      src={item.series.cover_image_url}
-                      alt={item.series.title}
+                      src={cover}
+                      alt={s.title}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = FALLBACK_COVER;
+                      }}
                     />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-600">
-                      No Cover
-                    </div>
-                  )}
-                  <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-black/80 text-neutral-200 border border-white/10">
-                    {item.series.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
-                  </span>
+                    <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-black/80 text-neutral-200 border border-white/10">
+                      {s.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
+                    </span>
+                  </Link>
+
+                  <div className="p-2.5 flex flex-col justify-between flex-1 space-y-2">
+                    <Link href={`/series/${s.slug || s.id}`}>
+                      <h3 className="text-xs font-semibold text-neutral-200 line-clamp-1 hover:text-indigo-400 transition">
+                        {s.title}
+                      </h3>
+                    </Link>
+
+                    <button
+                      onClick={() => handleRemoveBookmark(s.id)}
+                      className="w-full py-1 text-[10px] font-semibold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 rounded border border-rose-500/20 transition"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
-                <h3 className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition">
-                  {item.series.title}
-                </h3>
-              </Link>
-              <button
-                type="button"
-                onClick={() => removeBookmark(item.id)}
-                className="mt-1 text-[10px] text-neutral-500 hover:text-rose-400 transition text-left"
-              >
-                Remove from library
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+              );
+            })}
+          </div>
+        )}
+      </div>
     </main>
   );
 }
