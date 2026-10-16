@@ -2,27 +2,21 @@ name: MangaFlow Auto-Relay Bot & Health Repair
 
 on:
   schedule:
-    # 1-hour polling for new weekly chapter drops
-    - cron: '0 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
-    inputs:
-      pass_number:
-        description: 'Current relay pass number'
-        required: false
-        default: '1'
 
 permissions:
   contents: write
   actions: write
 
 jobs:
-  # -----------------------------------------------------------------
-  # JOB 1: Quick 1-Hour Release Poller (Runs on Hourly Schedule)
-  # -----------------------------------------------------------------
-  hourly-latest-sync:
-    if: github.event_name == 'schedule'
-    name: Hourly Latest Drop Check
+  token-relay:
     runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 3
+      matrix:
+        worker: [1, 2, 3]
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -35,45 +29,31 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Poll Latest Releases
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node scripts/scrape-latest-and-popular.js
-
-  # -----------------------------------------------------------------
-  # JOB 2: Auto-Chaining Relay Sync (Runs until everything is finished)
-  # -----------------------------------------------------------------
-  relay-sync-and-repair:
-    if: github.event_name == 'workflow_dispatch'
-    name: Token Relay Pass ${{ github.event.inputs.pass_number || '1' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install Dependencies
-        run: npm install
-
-      - name: Run Unified Sync & Repair Pass
-        id: sync_step
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - name: Run Accelerated Multi-Source Worker Pass
         run: node scripts/sync-multi-source.js
-
-      - name: Trigger Next Relay Pass (Token Dispatch)
-        if: steps.sync_step.outputs.has_more == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CURRENT_PASS: ${{ github.event.inputs.pass_number || '1' }}
-        run: |
-          NEXT_PASS=$((CURRENT_PASS + 1))
-          echo "Work remains. Sleeping 20s to prevent API spam, then triggering pass #$NEXT_PASS..."
-          sleep 20
-          gh workflow run scraper.yml -f pass_number="$NEXT_PASS"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          WORKER_ID: ${{ matrix.worker }}
+          TOTAL_WORKERS: 3
+
+  chain-next-relay:
+    needs: token-relay
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Trigger Next Relay Pass
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'sync-and-backfill.yml',
+                ref: 'main'
+              });
+              console.log('Next 3-worker matrix pass triggered successfully.');
+            } catch (err) {
+              console.log('Chaining trigger completed or skipped:', err.message);
+            }
