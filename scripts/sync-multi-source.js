@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
-const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '1', 10);
+const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '5', 10);
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.');
@@ -32,13 +32,13 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-// 1. Safe float comparison to match "1.00" with "1"
+// Float comparator to safely handle "1.00" == "1"
 function matchChapterNum(a, b) {
   if (a == null || b == null) return false;
   return Math.abs(parseFloat(a) - parseFloat(b)) < 0.001;
 }
 
-// 2. Series Source Resolver with Flagship Locks
+// Series Source Resolver with Flagship Locks
 async function resolveAnySource(title, slug) {
   const lower = (slug || title).toLowerCase();
 
@@ -73,6 +73,7 @@ async function resolveAnySource(title, slug) {
     };
   }
 
+  // MangaDex Search Fallback
   const mdSearch = await fetchJson(
     `https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=1`
   );
@@ -80,6 +81,7 @@ async function resolveAnySource(title, slug) {
     return { source: 'mangadex', id: mdSearch.data[0].id };
   }
 
+  // ComicK Search Fallback
   const ckSearch = await fetchJson(
     `https://api.comick.fun/v1.0/search?q=${encodeURIComponent(title)}&limit=1`
   );
@@ -90,7 +92,7 @@ async function resolveAnySource(title, slug) {
   return null;
 }
 
-// 3. MangaDex Panel Fetcher
+// Fetch Panels via MangaDex
 async function getMangaDexPages(seriesSourceId, chapterNum) {
   const feed = await fetchJson(
     `https://api.mangadex.org/manga/${seriesSourceId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=100`
@@ -107,7 +109,7 @@ async function getMangaDexPages(seriesSourceId, chapterNum) {
   return chapter.data.map((file) => `${baseUrl}/data/${chapter.hash}/${file}`);
 }
 
-// 4. ComicK Panel Fetcher
+// Fetch Panels via ComicK
 async function getComicKPages(hid, chapterNum) {
   const listData = await fetchJson(
     `https://api.comick.fun/comic/${hid}/chapters?lang=en&limit=100`
@@ -125,35 +127,48 @@ async function getComicKPages(hid, chapterNum) {
   );
 }
 
-// 5. Main Parallel Engine
+// Check if array has valid URLs
+function isPagesEmpty(pages) {
+  if (!pages) return true;
+  if (Array.isArray(pages)) return pages.length === 0;
+  if (typeof pages === 'string') {
+    const trimmed = pages.trim();
+    return trimmed === '' || trimmed === '{}' || trimmed === '[]';
+  }
+  return false;
+}
+
+// 5-Worker Parallel Engine
 async function runWorker() {
   console.log(`Starting Worker ${WORKER_ID} of ${TOTAL_WORKERS}`);
 
+  // Fetch top 50 series waiting in the queue
   const { data: allSeries, error } = await supabase
     .from('series')
     .select('id, title, slug, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
-    .limit(30);
+    .limit(50);
 
   if (error || !allSeries?.length) {
-    console.log('No series found.');
+    console.log('No series found to process.');
     return;
   }
 
+  // Modulo division to split tasks across all 5 workers cleanly
   const assignedSeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
-  console.log(`Worker ${WORKER_ID} assigned ${assignedSeries.length} series.`);
+  console.log(`Worker ${WORKER_ID} assigned ${assignedSeries.length} series in this pass.`);
 
   for (const s of assignedSeries) {
     console.log(`\n[Worker ${WORKER_ID}] Auditing: "${s.title}" (${s.slug})`);
 
     const sourceInfo = await resolveAnySource(s.title, s.slug);
     if (!sourceInfo) {
-      console.log(`No valid source mapping for "${s.title}".`);
+      console.log(`No source found for "${s.title}". Touching updated_at.`);
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
       continue;
     }
 
-    // Safely capture empty text[] rows ([] or null)
+    // Safely query empty chapters
     const { data: rawChapters } = await supabase
       .from('chapters')
       .select('id, chapter_number, pages')
@@ -162,16 +177,16 @@ async function runWorker() {
       .limit(1000);
 
     const emptyChapters = (rawChapters || [])
-      .filter((ch) => !ch.pages || ch.pages.length === 0)
-      .slice(0, 40);
+      .filter((ch) => isPagesEmpty(ch.pages))
+      .slice(0, 50);
 
     if (!emptyChapters.length) {
-      console.log(`No empty chapters for "${s.title}".`);
+      console.log(`No empty chapters for "${s.title}". Moving on.`);
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
       continue;
     }
 
-    console.log(`Found ${emptyChapters.length} empty chapters. Backfilling panels...`);
+    console.log(`Found ${emptyChapters.length} empty chapters. Backfilling panels in parallel...`);
 
     const CHUNK_SIZE = 4;
     for (let i = 0; i < emptyChapters.length; i += CHUNK_SIZE) {
@@ -196,9 +211,10 @@ async function runWorker() {
         })
       );
 
-      await delay(250);
+      await delay(200);
     }
 
+    // Mark updated so other workers take other series next pass
     await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
   }
 
@@ -206,6 +222,6 @@ async function runWorker() {
 }
 
 runWorker().catch((err) => {
-  console.error('Fatal worker error:', err);
+  console.error('Fatal worker crash:', err);
   process.exit(1);
 });
