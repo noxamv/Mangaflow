@@ -32,7 +32,7 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-// Float comparator to safely handle "1.00" == "1"
+// Float matcher: accurately links "1.00" to "1"
 function matchChapterNum(a, b) {
   if (a == null || b == null) return false;
   return Math.abs(parseFloat(a) - parseFloat(b)) < 0.001;
@@ -127,67 +127,54 @@ async function getComicKPages(hid, chapterNum) {
   );
 }
 
-// Check if array has valid URLs
-function isPagesEmpty(pages) {
-  if (!pages) return true;
-  if (Array.isArray(pages)) return pages.length === 0;
-  if (typeof pages === 'string') {
-    const trimmed = pages.trim();
-    return trimmed === '' || trimmed === '{}' || trimmed === '[]';
-  }
-  return false;
-}
-
-// 5-Worker Parallel Engine
+// Main Parallel Engine
 async function runWorker() {
   console.log(`Starting Worker ${WORKER_ID} of ${TOTAL_WORKERS}`);
 
-  // Fetch top 50 series waiting in the queue
+  // Fetch candidate series ordered by updated_at ASC NULLS FIRST
   const { data: allSeries, error } = await supabase
     .from('series')
     .select('id, title, slug, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
-    .limit(50);
+    .limit(40);
 
   if (error || !allSeries?.length) {
     console.log('No series found to process.');
     return;
   }
 
-  // Modulo division to split tasks across all 5 workers cleanly
+  // Modulo division to split series evenly across workers
   const assignedSeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
-  console.log(`Worker ${WORKER_ID} assigned ${assignedSeries.length} series in this pass.`);
+  console.log(`Worker ${WORKER_ID} assigned ${assignedSeries.length} series.`);
 
   for (const s of assignedSeries) {
     console.log(`\n[Worker ${WORKER_ID}] Auditing: "${s.title}" (${s.slug})`);
 
     const sourceInfo = await resolveAnySource(s.title, s.slug);
     if (!sourceInfo) {
-      console.log(`No source found for "${s.title}". Touching updated_at.`);
+      console.log(`No valid source mapping for "${s.title}", touching timestamp.`);
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
       continue;
     }
 
-    // Safely query empty chapters
-    const { data: rawChapters } = await supabase
+    // Zero-Egress Query: only select lightweight fields, filter empty arrays directly in Postgres
+    const { data: emptyChapters } = await supabase
       .from('chapters')
-      .select('id, chapter_number, pages')
+      .select('id, chapter_number')
       .eq('series_id', s.id)
+      .or('pages.is.null,pages.eq.{}')
       .order('chapter_number', { ascending: true })
-      .limit(1000);
+      .limit(40);
 
-    const emptyChapters = (rawChapters || [])
-      .filter((ch) => isPagesEmpty(ch.pages))
-      .slice(0, 50);
-
-    if (!emptyChapters.length) {
-      console.log(`No empty chapters for "${s.title}". Moving on.`);
+    if (!emptyChapters || emptyChapters.length === 0) {
+      console.log(`No empty chapters for "${s.title}". Marking updated.`);
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
       continue;
     }
 
-    console.log(`Found ${emptyChapters.length} empty chapters. Backfilling panels in parallel...`);
+    console.log(`Found ${emptyChapters.length} empty chapters. Backfilling in parallel chunks...`);
 
+    // Concurrently process in chunks of 4 chapters
     const CHUNK_SIZE = 4;
     for (let i = 0; i < emptyChapters.length; i += CHUNK_SIZE) {
       const chunk = emptyChapters.slice(i, i + CHUNK_SIZE);
@@ -214,7 +201,6 @@ async function runWorker() {
       await delay(200);
     }
 
-    // Mark updated so other workers take other series next pass
     await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
   }
 
