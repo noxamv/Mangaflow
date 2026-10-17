@@ -25,55 +25,53 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function fetchJson(url, options = {}) {
   try {
     const res = await fetch(url, { headers: HEADERS, ...options });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (res.status === 429) {
+        console.warn(`[HTTP 429 Throttle] ${url}`);
+      }
+      return null;
+    }
     return await res.json();
   } catch (err) {
+    console.warn(`[Fetch Error] ${err.message} on ${url}`);
     return null;
   }
 }
 
-// Float matcher: accurately links "1.00" to "1"
-function matchChapterNum(a, b) {
-  if (a == null || b == null) return false;
-  return Math.abs(parseFloat(a) - parseFloat(b)) < 0.001;
+// Float matcher: accurately links "526.00", "526", and "ch. 526"
+function matchChapterNum(apiChap, dbChap) {
+  if (apiChap == null || dbChap == null) return false;
+  const cleanApi = String(apiChap).replace(/[^0-9.]/g, '');
+  const cleanDb = String(dbChap).replace(/[^0-9.]/g, '');
+  if (!cleanApi || !cleanDb) return false;
+  return Math.abs(parseFloat(cleanApi) - parseFloat(cleanDb)) < 0.001;
 }
 
-// Series Source Resolver with Flagship Locks
+// Hardcoded Flagship Locks & Dynamic Search Resolver
 async function resolveAnySource(title, slug) {
   const lower = (slug || title).toLowerCase();
 
+  // Flagship Lock: Lookism
   if (lower.includes('lookism')) {
-    return {
-      source: 'comick',
-      hid: '00-lookism',
-      slug: 'lookism',
-    };
+    return { source: 'comick', hid: '00-lookism', slug: 'lookism' };
   }
 
+  // Flagship Lock: Omniscient Reader's Viewpoint
   if (lower.includes('omniscient') || lower.includes('orv') || lower.includes('dokja')) {
-    return {
-      source: 'comick',
-      hid: 'omniscient-readers-viewpoint',
-      slug: 'omniscient-readers-viewpoint',
-    };
+    return { source: 'comick', hid: 'omniscient-readers-viewpoint', slug: 'omniscient-readers-viewpoint' };
   }
 
+  // Flagship Lock: Lord of the Mysteries
   if (lower === 'lord-of-the-mysteries' || (lower.includes('mysteries') && !lower.includes('wheel'))) {
-    return {
-      source: 'mangadex',
-      id: 'd8f93318-7b9e-4d43-9828-568eb2a2491a',
-    };
+    return { source: 'mangadex', id: 'd8f93318-7b9e-4d43-9828-568eb2a2491a' };
   }
 
+  // Flagship Lock: The Lord of the Wheel of Destiny
   if (lower.includes('wheel-of-destiny') || lower.includes('wheel of destiny')) {
-    return {
-      source: 'comick',
-      hid: 'P6w1V',
-      slug: 'the-lord-of-the-wheel-of-destiny',
-    };
+    return { source: 'comick', hid: 'P6w1V', slug: 'the-lord-of-the-wheel-of-destiny' };
   }
 
-  // MangaDex Search Fallback
+  // Dynamic MangaDex Lookup
   const mdSearch = await fetchJson(
     `https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=1`
   );
@@ -81,7 +79,7 @@ async function resolveAnySource(title, slug) {
     return { source: 'mangadex', id: mdSearch.data[0].id };
   }
 
-  // ComicK Search Fallback
+  // Dynamic ComicK Lookup Fallback
   const ckSearch = await fetchJson(
     `https://api.comick.fun/v1.0/search?q=${encodeURIComponent(title)}&limit=1`
   );
@@ -92,16 +90,17 @@ async function resolveAnySource(title, slug) {
   return null;
 }
 
-// Fetch Panels via MangaDex
+// Targeted MangaDex Lookup by Chapter Number
 async function getMangaDexPages(seriesSourceId, chapterNum) {
+  const cleanNum = parseFloat(String(chapterNum).replace(/[^0-9.]/g, ''));
+  if (isNaN(cleanNum)) return null;
+
   const feed = await fetchJson(
-    `https://api.mangadex.org/manga/${seriesSourceId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=100`
+    `https://api.mangadex.org/manga/${seriesSourceId}/feed?translatedLanguage[]=en&chapter=${cleanNum}&limit=5`
   );
   if (!feed?.data?.length) return null;
 
-  const target = feed.data.find((c) => matchChapterNum(c.attributes?.chapter, chapterNum));
-  if (!target) return null;
-
+  const target = feed.data[0];
   const atHome = await fetchJson(`https://api.mangadex.org/at-home/server/${target.id}`);
   if (!atHome?.baseUrl || !atHome?.chapter?.data?.length) return null;
 
@@ -109,10 +108,10 @@ async function getMangaDexPages(seriesSourceId, chapterNum) {
   return chapter.data.map((file) => `${baseUrl}/data/${chapter.hash}/${file}`);
 }
 
-// Fetch Panels via ComicK
+// ComicK Lookup with Extended Chapter Coverage
 async function getComicKPages(hid, chapterNum) {
   const listData = await fetchJson(
-    `https://api.comick.fun/comic/${hid}/chapters?lang=en&limit=100`
+    `https://api.comick.fun/comic/${hid}/chapters?lang=en&limit=500`
   );
   if (!listData?.chapters?.length) return null;
 
@@ -127,44 +126,44 @@ async function getComicKPages(hid, chapterNum) {
   );
 }
 
-// Main Parallel Engine
+// Parallel Worker Execution Engine
 async function runWorker() {
   console.log(`Starting Worker ${WORKER_ID} of ${TOTAL_WORKERS}`);
 
-  // Fetch candidate series ordered by updated_at ASC NULLS FIRST
+  // Fetch top 50 candidates ordered by least recently updated
   const { data: allSeries, error } = await supabase
     .from('series')
     .select('id, title, slug, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
-    .limit(40);
+    .limit(50);
 
   if (error || !allSeries?.length) {
     console.log('No series found to process.');
     return;
   }
 
-  // Modulo division to split series evenly across workers
+  // Modulo partition across workers
   const assignedSeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
-  console.log(`Worker ${WORKER_ID} assigned ${assignedSeries.length} series.`);
+  console.log(`Worker ${WORKER_ID} assigned ${assignedSeries.length} series in this pass.`);
 
   for (const s of assignedSeries) {
     console.log(`\n[Worker ${WORKER_ID}] Auditing: "${s.title}" (${s.slug})`);
 
     const sourceInfo = await resolveAnySource(s.title, s.slug);
     if (!sourceInfo) {
-      console.log(`No valid source mapping for "${s.title}", touching timestamp.`);
+      console.log(`No valid source mapping for "${s.title}". Touching updated_at.`);
       await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
       continue;
     }
 
-    // Zero-Egress Query: only select lightweight fields, filter empty arrays directly in Postgres
+    // Zero-Egress Query: only fetch id and chapter_number for empty chapters
     const { data: emptyChapters } = await supabase
       .from('chapters')
       .select('id, chapter_number')
       .eq('series_id', s.id)
       .or('pages.is.null,pages.eq.{}')
       .order('chapter_number', { ascending: true })
-      .limit(40);
+      .limit(50);
 
     if (!emptyChapters || emptyChapters.length === 0) {
       console.log(`No empty chapters for "${s.title}". Marking updated.`);
@@ -172,10 +171,11 @@ async function runWorker() {
       continue;
     }
 
-    console.log(`Found ${emptyChapters.length} empty chapters. Backfilling in parallel chunks...`);
+    console.log(`Processing ${emptyChapters.length} empty chapters for "${s.title}" via ${sourceInfo.source}...`);
 
-    // Concurrently process in chunks of 4 chapters
-    const CHUNK_SIZE = 4;
+    let filledCount = 0;
+    const CHUNK_SIZE = 3; // 3 concurrent requests to respect CDN limits
+
     for (let i = 0; i < emptyChapters.length; i += CHUNK_SIZE) {
       const chunk = emptyChapters.slice(i, i + CHUNK_SIZE);
 
@@ -189,22 +189,31 @@ async function runWorker() {
           }
 
           if (pages && pages.length > 0) {
-            await supabase
+            const { error: updateError } = await supabase
               .from('chapters')
               .update({ pages: pages })
               .eq('id', ch.id);
-            console.log(`✓ [Worker ${WORKER_ID}] Filled "${s.title}" Ch. ${ch.chapter_number} (${pages.length} panels)`);
+
+            if (updateError) {
+              console.error(`[Worker ${WORKER_ID}] DB Update Error Ch ${ch.chapter_number}:`, updateError.message);
+            } else {
+              filledCount++;
+              console.log(`✓ [Worker ${WORKER_ID}] Filled "${s.title}" Ch. ${ch.chapter_number} (${pages.length} panels)`);
+            }
+          } else {
+            console.log(`[Worker ${WORKER_ID}] Source returned 0 panels for "${s.title}" Ch. ${ch.chapter_number}`);
           }
         })
       );
 
-      await delay(200);
+      await delay(250); // 250ms spacing between chunk requests
     }
 
+    console.log(`[Worker ${WORKER_ID}] Finished batch: ${filledCount}/${emptyChapters.length} chapters populated.`);
     await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
   }
 
-  console.log(`Worker ${WORKER_ID} complete.`);
+  console.log(`Worker ${WORKER_ID} run complete.`);
 }
 
 runWorker().catch((err) => {
