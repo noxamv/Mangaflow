@@ -48,7 +48,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             try {
-              // 1. Locate this workflow dynamically by name
               const workflowsRes = await github.rest.actions.listRepoWorkflows({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -63,7 +62,7 @@ jobs:
                 return;
               }
 
-              // 2. Prevent queue explosion: check if a run is already queued or active
+              // Check if another run is queued
               const queuedRuns = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -76,6 +75,7 @@ jobs:
                 return;
               }
 
+              // Check if another run is currently executing
               const inProgressRuns = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -83,13 +83,12 @@ jobs:
                 status: 'in_progress'
               });
 
-              // Subtract 1 to ignore the currently executing chaining job
               if (inProgressRuns.data.total_count > 1) {
                 console.log('Another pass is already actively running. Skipping extra dispatch.');
                 return;
               }
 
-              // 3. Dispatch exactly one next run
+              // Dispatch a single fresh run
               await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -99,5 +98,5 @@ jobs:
 
               console.log(`✓ Triggered next single pass for workflow ID: ${targetWorkflow.id}`);
             } catch (err) {
-              console.log('Chaining trigger completed or skipped:', err.message);
+              console.log('Chaining notice:', err.message);
             }
