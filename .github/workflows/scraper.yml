@@ -48,7 +48,6 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             try {
-              // 1. Locate current workflow metadata dynamically
               const workflowsRes = await github.rest.actions.listRepoWorkflows({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -63,7 +62,7 @@ jobs:
                 return;
               }
 
-              // 2. Queue Guard: ensure no runs are already waiting in queue
+              // Do not dispatch if another pass is already queued
               const queuedRuns = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -76,7 +75,7 @@ jobs:
                 return;
               }
 
-              // 3. Execution Guard: ensure no other runs are currently active
+              // Do not dispatch if another pass is already in progress
               const inProgressRuns = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -85,11 +84,11 @@ jobs:
               });
 
               if (inProgressRuns.data.total_count > 1) {
-                console.log('Another pass is currently in progress. Skipping duplicate dispatch.');
+                console.log('Another pass is already actively running. Skipping extra dispatch.');
                 return;
               }
 
-              // 4. Dispatch exactly 1 single follow-up relay run
+              // Dispatch exactly 1 single follow-up run
               await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
