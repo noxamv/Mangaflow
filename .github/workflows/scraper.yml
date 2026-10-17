@@ -1,3 +1,42 @@
+name: MangaFlow Auto-Relay Bot & Health Repair
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  token-relay:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 5
+      matrix:
+        worker: [1, 2, 3, 4, 5]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Run Accelerated Multi-Source Worker Pass
+        run: node scripts/sync-multi-source.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          WORKER_ID: ${{ matrix.worker }}
+          TOTAL_WORKERS: 5
+
   chain-next-relay:
     needs: token-relay
     runs-on: ubuntu-latest
@@ -9,6 +48,7 @@
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             try {
+              // 1. Locate this workflow dynamically by name
               const workflowsRes = await github.rest.actions.listRepoWorkflows({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -18,28 +58,46 @@
                 (w) => w.name === context.workflow
               );
 
-              if (!targetWorkflow) return;
+              if (!targetWorkflow) {
+                console.error(`Workflow named "${context.workflow}" not found.`);
+                return;
+              }
 
-              // Check if another run is already queued or in progress before creating a new one
-              const runs = await github.rest.actions.listWorkflowRuns({
+              // 2. Prevent queue explosion: check if a run is already queued or active
+              const queuedRuns = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 workflow_id: targetWorkflow.id,
                 status: 'queued'
               });
 
-              if (runs.data.total_count > 0) {
-                console.log('A pass is already queued. Skipping extra dispatch.');
+              if (queuedRuns.data.total_count > 0) {
+                console.log('Another pass is already queued. Skipping duplicate dispatch.');
                 return;
               }
 
+              const inProgressRuns = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: targetWorkflow.id,
+                status: 'in_progress'
+              });
+
+              // Subtract 1 to ignore the currently executing chaining job
+              if (inProgressRuns.data.total_count > 1) {
+                console.log('Another pass is already actively running. Skipping extra dispatch.');
+                return;
+              }
+
+              // 3. Dispatch exactly one next run
               await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 workflow_id: targetWorkflow.id,
                 ref: 'main'
               });
-              console.log('✓ Successfully queued 1 next relay pass.');
+
+              console.log(`✓ Triggered next single pass for workflow ID: ${targetWorkflow.id}`);
             } catch (err) {
-              console.log('Chain dispatch notice:', err.message);
+              console.log('Chaining trigger completed or skipped:', err.message);
             }
