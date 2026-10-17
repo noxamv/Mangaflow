@@ -62,7 +62,7 @@ jobs:
                 return;
               }
 
-              // Do not dispatch if another pass is already queued
+              // Guard 1: Skip if already queued
               const queuedRuns = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -71,11 +71,11 @@ jobs:
               });
 
               if (queuedRuns.data.total_count > 0) {
-                console.log('Another pass is already queued. Skipping duplicate dispatch.');
+                console.log('Pass already queued. Skipping duplicate dispatch.');
                 return;
               }
 
-              // Do not dispatch if another pass is already in progress
+              // Guard 2: Skip if another run is in progress
               const inProgressRuns = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -84,11 +84,11 @@ jobs:
               });
 
               if (inProgressRuns.data.total_count > 1) {
-                console.log('Another pass is already actively running. Skipping extra dispatch.');
+                console.log('Pass already actively running. Skipping extra dispatch.');
                 return;
               }
 
-              // Dispatch exactly 1 single follow-up run
+              // Dispatch exactly 1 follow-up run
               await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -96,7 +96,7 @@ jobs:
                 ref: 'main'
               });
 
-              console.log(`✓ Successfully queued next pass for workflow ID: ${targetWorkflow.id}`);
+              console.log(`✓ Triggered next follow-up pass for workflow: ${targetWorkflow.name}`);
             } catch (err) {
-              console.log('Chaining notice:', err.message);
+              console.log('Chaining error caught:', err.message);
             }
