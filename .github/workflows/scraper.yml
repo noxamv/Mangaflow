@@ -42,12 +42,13 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Trigger Next Single Relay Pass
+      - name: Trigger Next Single Relay Pass Safely
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             try {
+              // 1. Locate current workflow metadata dynamically
               const workflowsRes = await github.rest.actions.listRepoWorkflows({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -62,7 +63,7 @@ jobs:
                 return;
               }
 
-              // Check if another run is queued
+              // 2. Queue Guard: ensure no runs are already waiting in queue
               const queuedRuns = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -75,7 +76,7 @@ jobs:
                 return;
               }
 
-              // Check if another run is currently executing
+              // 3. Execution Guard: ensure no other runs are currently active
               const inProgressRuns = await github.rest.actions.listWorkflowRuns({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -84,11 +85,11 @@ jobs:
               });
 
               if (inProgressRuns.data.total_count > 1) {
-                console.log('Another pass is already actively running. Skipping extra dispatch.');
+                console.log('Another pass is currently in progress. Skipping duplicate dispatch.');
                 return;
               }
 
-              // Dispatch a single fresh run
+              // 4. Dispatch exactly 1 single follow-up relay run
               await github.rest.actions.createWorkflowDispatch({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -96,7 +97,7 @@ jobs:
                 ref: 'main'
               });
 
-              console.log(`✓ Triggered next single pass for workflow ID: ${targetWorkflow.id}`);
+              console.log(`✓ Successfully queued next pass for workflow ID: ${targetWorkflow.id}`);
             } catch (err) {
               console.log('Chaining notice:', err.message);
             }
