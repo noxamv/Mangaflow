@@ -2,26 +2,29 @@ name: MangaFlow Auto-Relay Bot & Health Repair
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    # Runs automatically every 15 minutes
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
-permissions:
-  contents: write
-  actions: write
+# Prevents duplicate overlapping runs from hammering APIs simultaneously
+concurrency:
+  group: mangaflow-backfill-matrix
+  cancel-in-progress: false
 
 jobs:
   token-relay:
+    name: token-relay (${{ matrix.worker_id }})
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 5
+      fail-fast: false
       matrix:
-        worker: [1, 2, 3, 4, 5]
+        worker_id: [1, 2, 3, 4, 5]
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -29,74 +32,11 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      - name: Run Accelerated Multi-Source Worker Pass
-        run: node scripts/sync-multi-source.js
+      - name: Run Accelerated Multi Source Worker Pass
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          WORKER_ID: ${{ matrix.worker }}
+          WORKER_ID: ${{ matrix.worker_id }}
           TOTAL_WORKERS: 5
-
-  chain-next-relay:
-    needs: token-relay
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Trigger Next Single Relay Pass Safely
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            try {
-              const workflowsRes = await github.rest.actions.listRepoWorkflows({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-              });
-
-              const targetWorkflow = workflowsRes.data.workflows.find(
-                (w) => w.name === context.workflow
-              );
-
-              if (!targetWorkflow) {
-                console.error(`Workflow named "${context.workflow}" not found.`);
-                return;
-              }
-
-              // Guard 1: Skip if already queued
-              const queuedRuns = await github.rest.actions.listWorkflowRuns({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: targetWorkflow.id,
-                status: 'queued'
-              });
-
-              if (queuedRuns.data.total_count > 0) {
-                console.log('Pass already queued. Skipping duplicate dispatch.');
-                return;
-              }
-
-              // Guard 2: Skip if another run is in progress
-              const inProgressRuns = await github.rest.actions.listWorkflowRuns({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: targetWorkflow.id,
-                status: 'in_progress'
-              });
-
-              if (inProgressRuns.data.total_count > 1) {
-                console.log('Pass already actively running. Skipping extra dispatch.');
-                return;
-              }
-
-              // Dispatch exactly 1 follow-up run
-              await github.rest.actions.createWorkflowDispatch({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                workflow_id: targetWorkflow.id,
-                ref: 'main'
-              });
-
-              console.log(`✓ Triggered next follow-up pass for workflow: ${targetWorkflow.name}`);
-            } catch (err) {
-              console.log('Chaining error caught:', err.message);
-            }
+          NODE_NO_WARNINGS: 1
+        run: node scripts/sync-multi-source.js
