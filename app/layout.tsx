@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import './globals.css';
 import { createClient } from '@supabase/supabase-js';
+import AuthModal from '../components/AuthModal';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || '',
@@ -46,20 +47,54 @@ export default function RootLayout({
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
 
+  // PWA Prompt
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showPwaPrompt, setShowPwaPrompt] = useState(false);
+
   const [user, setUser] = useState<any>(null);
   const [displayName, setDisplayName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState(CHARACTER_AVATARS[0].url);
   const [savingProfile, setSavingProfile] = useState(false);
 
-  const [authEmail, setAuthEmail] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
-  const [authSent, setAuthSent] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Register Service Worker
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+
+    // Capture PWA Install Event
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      const isDismissed = localStorage.getItem('mangaflow_pwa_dismissed');
+      if (!isDismissed) {
+        setShowPwaPrompt(true);
+      }
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowPwaPrompt(false);
+    }
+    setDeferredPrompt(null);
+  };
+
+  const handleDismissPwa = () => {
+    setShowPwaPrompt(false);
+    localStorage.setItem('mangaflow_pwa_dismissed', 'true');
+  };
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -136,23 +171,6 @@ export default function RootLayout({
     return () => clearTimeout(timer);
   }, [query]);
 
-  const handleSendMagicLink = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanEmail = authEmail.trim().toLowerCase();
-    setAuthLoading(true);
-    setAuthError(null);
-
-    const redirectUrl = typeof window !== 'undefined' ? window.location.origin : 'https://mangaflow-psi.vercel.app';
-    const { error } = await supabase.auth.signInWithOtp({
-      email: cleanEmail,
-      options: { emailRedirectTo: redirectUrl },
-    });
-
-    if (error) setAuthError(error.message);
-    else setAuthSent(true);
-    setAuthLoading(false);
-  };
-
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -198,6 +216,38 @@ export default function RootLayout({
           />
         )}
 
+        {/* PWA Floating Install Modal */}
+        {showPwaPrompt && (
+          <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-96 z-50 bg-[#141724] border border-indigo-500/40 rounded-2xl p-4 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-5">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center font-black text-white shrink-0 shadow-lg shadow-indigo-500/30">
+                MF
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-xs font-bold text-white">Install MangaFlow App</h4>
+                <p className="text-[11px] text-neutral-400 mt-0.5 leading-snug">
+                  Add to home screen for fullscreen reading, offline caching, and faster chapter loading.
+                </p>
+                <div className="flex items-center gap-2 mt-3">
+                  <button
+                    onClick={handleInstallClick}
+                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-md shadow-indigo-600/30"
+                  >
+                    Install App
+                  </button>
+                  <button
+                    onClick={handleDismissPwa}
+                    className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white rounded-lg text-xs font-semibold transition"
+                  >
+                    Not Now
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Navbar */}
         <header className="sticky top-0 z-40 w-full bg-[#0f1117]/95 backdrop-blur-md border-b border-neutral-800/80">
           <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
             <div className="relative flex items-center gap-2.5">
@@ -319,7 +369,7 @@ export default function RootLayout({
               ) : (
                 <button
                   type="button"
-                  onClick={() => { setAuthSent(false); setAuthError(null); setAuthOpen(true); }}
+                  onClick={() => setAuthOpen(true)}
                   className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs rounded-md shadow-sm transition"
                 >
                   Sign In
@@ -329,61 +379,7 @@ export default function RootLayout({
           </div>
         </header>
 
-        {editProfileOpen && (
-          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="relative w-full max-w-sm bg-[#141722] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
-              <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
-                <h3 className="text-sm font-bold text-white">Customize Profile</h3>
-                <button type="button" onClick={() => setEditProfileOpen(false)} className="text-neutral-400 hover:text-white text-sm">
-                  ✕
-                </button>
-              </div>
-
-              <form onSubmit={handleSaveProfile} className="space-y-4">
-                <div>
-                  <label className="text-[11px] font-bold text-neutral-400 block mb-1">Display Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Enter reader username..."
-                    className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-neutral-400 block mb-2">Select Character Avatar</label>
-                  <div className="grid grid-cols-4 gap-2.5">
-                    {CHARACTER_AVATARS.map((av) => (
-                      <button
-                        key={av.id}
-                        type="button"
-                        onClick={() => setSelectedAvatar(av.url)}
-                        title={av.name}
-                        className={`relative aspect-square rounded-xl overflow-hidden border-2 transition ${
-                          selectedAvatar === av.url ? 'border-indigo-500 scale-105 shadow-md shadow-indigo-500/40' : 'border-transparent opacity-60 hover:opacity-100'
-                        }`}
-                        style={{ backgroundColor: av.bg }}
-                      >
-                        <img src={av.url} alt={av.name} className="w-full h-full object-cover" />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={savingProfile}
-                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-bold text-xs text-white rounded-lg transition"
-                >
-                  {savingProfile ? 'Saving Changes...' : 'Save Profile'}
-                </button>
-              </form>
-            </div>
-          </div>
-        )}
-
+        {/* Global Search Bar Dropdown */}
         {searchOpen && (
           <div className="sticky top-14 z-40 w-full px-3 sm:px-6 max-w-lg mx-auto">
             <div className="bg-[#151824] border border-neutral-700 rounded-xl shadow-2xl overflow-hidden mt-2">
@@ -432,6 +428,9 @@ export default function RootLayout({
         <footer className="w-full border-t border-neutral-800/80 bg-[#0a0b0e] py-6 text-center text-xs text-neutral-500 mt-12">
           <p>© {new Date().getFullYear()} MangaFlow. All content indexed on-demand.</p>
         </footer>
+
+        {/* Mounted AuthModal */}
+        <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
       </body>
     </html>
   );
