@@ -9,6 +9,9 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
+const FALLBACK_POSTER =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='400' viewBox='0 0 300 400'%3E%3Crect width='300' height='400' fill='%2313151f'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='15px' fill='%236366f1' font-weight='bold'%3EMangaFlow%3C/text%3E%3C/svg%3E";
+
 interface SeriesItem {
   id: string;
   slug: string;
@@ -42,7 +45,7 @@ interface RecentComment {
 function resolveCoverUrl(item: any): string {
   const url = item?.cover_image_url || item?.cover_url || '';
   if (!url || typeof url !== 'string' || url.trim() === '') {
-    return '';
+    return FALLBACK_POSTER;
   }
   return url;
 }
@@ -56,32 +59,35 @@ function SafeImage({
   alt: string;
   className?: string;
 }) {
-  const [imgSrc, setImgSrc] = useState(src);
-  const [hasFailedDirect, setHasFailedDirect] = useState(false);
+  const [imgSrc, setImgSrc] = useState(src || FALLBACK_POSTER);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    setImgSrc(src);
-    setHasFailedDirect(false);
+    setImgSrc(src || FALLBACK_POSTER);
+    setAttempt(0);
   }, [src]);
 
   return (
     <img
-      src={imgSrc || undefined}
+      src={imgSrc}
       alt={alt}
       loading="lazy"
       referrerPolicy="no-referrer"
       className={className}
       onError={() => {
-        if (!hasFailedDirect && imgSrc && !imgSrc.includes('/api/proxy')) {
-          setHasFailedDirect(true);
+        if (attempt === 0 && imgSrc && !imgSrc.includes('/api/proxy') && !imgSrc.startsWith('data:')) {
+          setAttempt(1);
           setImgSrc(`/api/proxy?url=${encodeURIComponent(imgSrc)}`);
+        } else if (attempt <= 1) {
+          // If proxy also fails, display clean SVG poster card instead of broken icon
+          setAttempt(2);
+          setImgSrc(FALLBACK_POSTER);
         }
       }}
     />
   );
 }
 
-// Spotlight Slider with Dot Navigation Bar
 function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const [index, setIndex] = useState(0);
 
@@ -102,7 +108,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
     <div className="relative w-full aspect-[16/9] max-h-[290px] sm:max-h-[350px] rounded-3xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-2xl group flex flex-col justify-between">
       <div
         className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700"
-        style={{ backgroundImage: coverUrl ? `url(${coverUrl})` : undefined }}
+        style={{ backgroundImage: `url(${coverUrl})` }}
       />
       <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-black via-black/85 to-black/30 z-10" />
 
@@ -154,7 +160,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
             className={`h-1.5 rounded-full transition-all duration-300 ${
               index === i ? 'w-6 bg-indigo-500' : 'w-1.5 bg-neutral-700/80 hover:bg-neutral-500'
             }`}
-            aria-label={`Go to slide ${i + 1}`}
+            aria-label={`Slide ${i + 1}`}
           />
         ))}
       </div>
@@ -162,7 +168,6 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   );
 }
 
-// Complete Multi-Platform ShareBar
 function ShareBar() {
   const [copied, setCopied] = useState(false);
   const siteUrl = 'https://mangaflow-psi.vercel.app';
@@ -180,7 +185,7 @@ function ShareBar() {
     <div className="flex flex-wrap items-center justify-between gap-2 bg-[#13151f] border border-neutral-800/80 px-4 py-2.5 rounded-2xl text-xs">
       <span className="text-[11px] font-semibold text-neutral-400">Share MangaFlow:</span>
       <div className="flex items-center gap-2">
-        {/* X (Twitter) */}
+        {/* X */}
         <a
           href={`https://twitter.com/intent/tweet?url=${encodeURIComponent(siteUrl)}&text=${encodeURIComponent(shareText)}`}
           target="_blank"
