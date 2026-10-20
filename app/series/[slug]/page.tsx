@@ -42,7 +42,6 @@ export default function SeriesDetailsPage() {
   const [resumeId, setResumeId] = useState<string | null>(null);
   const [resumeNum, setResumeNum] = useState<number | null>(null);
 
-  // Chapter list controls
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   const [chapterSearch, setChapterSearch] = useState('');
 
@@ -55,7 +54,6 @@ export default function SeriesDetailsPage() {
         const decoded = decodeURIComponent(rawSlug).trim();
         const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(decoded);
 
-        // Safe query resolution: prevents PostgreSQL UUID syntax 400 crashes
         let seriesData: Series | null = null;
 
         if (isUuid) {
@@ -66,7 +64,6 @@ export default function SeriesDetailsPage() {
             .limit(1);
           if (data && data.length > 0) seriesData = data[0];
         } else {
-          // 1. Direct slug match
           const { data: bySlug } = await supabase
             .from('series')
             .select('*')
@@ -76,7 +73,6 @@ export default function SeriesDetailsPage() {
           if (bySlug && bySlug.length > 0) {
             seriesData = bySlug[0];
           } else {
-            // 2. Fallback to English title or primary title match
             const cleanedQuery = decoded.replace(/-/g, ' ');
             const { data: byTitle } = await supabase
               .from('series')
@@ -97,7 +93,6 @@ export default function SeriesDetailsPage() {
 
         setSeries(seriesData);
 
-        // 1. Local reading history for instant resume
         try {
           const local = JSON.parse(localStorage.getItem('mangaflow_reading_history') || '{}');
           if (local[seriesData.id]) {
@@ -106,7 +101,6 @@ export default function SeriesDetailsPage() {
           }
         } catch {}
 
-        // 2. Authenticated user follow & cloud reading history
         const { data: userData } = await supabase.auth.getUser();
         if (userData?.user) {
           const { data: followRecord } = await supabase
@@ -131,7 +125,6 @@ export default function SeriesDetailsPage() {
           }
         }
 
-        // 3. Fetch all indexed chapters
         const { data: chapterData } = await supabase
           .from('chapters')
           .select('id, chapter_number, title, pages')
@@ -174,6 +167,24 @@ export default function SeriesDetailsPage() {
       });
       setIsFollowing(true);
     }
+  };
+
+  // Prevents "Chapter 5 - Chapter 5" repetition
+  const formatChapterTitle = (num: number, rawTitle?: string | null) => {
+    if (!rawTitle || rawTitle.trim() === '' || rawTitle.toLowerCase().includes('null')) {
+      return num === 0 ? 'Prologue' : `Chapter ${num}`;
+    }
+    const clean = rawTitle.trim();
+    const lower = clean.toLowerCase();
+    if (
+      lower === `chapter ${num}`.toLowerCase() ||
+      lower === `ch. ${num}`.toLowerCase() ||
+      lower === `ch ${num}`.toLowerCase() ||
+      lower === `${num}`
+    ) {
+      return `Chapter ${num}`;
+    }
+    return `Chapter ${num} - ${clean}`;
   };
 
   const filteredChapters = useMemo(() => {
@@ -235,7 +246,6 @@ export default function SeriesDetailsPage() {
   return (
     <div className="min-h-screen bg-[#07080b] px-4 py-8 text-white sm:px-8">
       <div className="mx-auto max-w-5xl space-y-8">
-        {/* Banner Poster Card */}
         <div className="relative overflow-hidden rounded-3xl border border-neutral-800/80 bg-[#10121a] p-6 shadow-2xl">
           <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-start md:gap-8">
             <div className="mx-auto aspect-[3/4.2] w-48 shrink-0 overflow-hidden rounded-2xl bg-neutral-900 border border-white/10 shadow-xl">
@@ -268,7 +278,6 @@ export default function SeriesDetailsPage() {
                   {primaryTitle}
                 </h1>
 
-                {/* Alternative Titles */}
                 <div className="mt-2 space-y-1 text-xs text-neutral-400">
                   {series.title !== primaryTitle && (
                     <p>
@@ -293,7 +302,6 @@ export default function SeriesDetailsPage() {
                 </p>
               </div>
 
-              {/* Action Buttons: Read & Follow */}
               <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-neutral-800">
                 {resumeId ? (
                   <Link
@@ -320,7 +328,6 @@ export default function SeriesDetailsPage() {
                   </Link>
                 )}
 
-                {/* Follow Button */}
                 <button
                   type="button"
                   onClick={handleFollowToggle}
@@ -383,7 +390,7 @@ export default function SeriesDetailsPage() {
                   }`}
                 >
                   <span className="truncate text-xs font-semibold text-neutral-200">
-                    Chapter {ch.chapter_number} {ch.title ? `- ${ch.title}` : ''}
+                    {formatChapterTitle(ch.chapter_number, ch.title)}
                   </span>
                   <span
                     className={`text-xs font-bold shrink-0 ml-2 ${
