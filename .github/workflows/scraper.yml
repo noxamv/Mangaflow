@@ -2,11 +2,13 @@ name: MangaFlow Auto-Relay Bot & Health Repair
 
 on:
   schedule:
-    # Runs automatically every 15 minutes
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *' # Backup timer if runner queues stall
   workflow_dispatch:
 
-# Prevents overlapping runs from competing or triggering rate limits
+permissions:
+  contents: read
+  actions: write
+
 concurrency:
   group: mangaflow-backfill-matrix
   cancel-in-progress: false
@@ -15,7 +17,7 @@ jobs:
   token-relay:
     name: token-relay (${{ matrix.worker_id }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -40,4 +42,18 @@ jobs:
           WORKER_ID: ${{ matrix.worker_id }}
           TOTAL_WORKERS: 5
           NODE_NO_WARNINGS: 1
+          RUN_DURATION_MINUTES: 25
         run: node scripts/sync-multi-source.js
+
+  auto-retrigger:
+    name: Auto-Trigger Next Pass
+    needs: token-relay
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Trigger Consecutive Workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Checking if there are more empty chapters to process..."
+          gh workflow run "MangaFlow Auto-Relay Bot & Health Repair" --repo "${{ github.repository }}" || true
