@@ -35,16 +35,6 @@ interface SearchResult {
   reading_mode: string;
 }
 
-interface NotificationItem {
-  id: string;
-  series_id: string;
-  chapter_id: string;
-  title: string;
-  message: string;
-  is_read: boolean;
-  created_at: string;
-}
-
 export default function RootLayout({
   children,
 }: {
@@ -52,16 +42,11 @@ export default function RootLayout({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [notifOpen, setNotifOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
 
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [showPwaBanner, setShowPwaBanner] = useState(false);
   const [user, setUser] = useState<any>(null);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-
   const [displayName, setDisplayName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState(CHARACTER_AVATARS[0].url);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -75,12 +60,6 @@ export default function RootLayout({
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
-  }, []);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -219,7 +198,6 @@ export default function RootLayout({
           />
         )}
 
-        {/* Top Navbar */}
         <header className="sticky top-0 z-40 w-full bg-[#0f1117]/95 backdrop-blur-md border-b border-neutral-800/80">
           <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-2">
             <div className="relative flex items-center gap-2.5">
@@ -234,7 +212,6 @@ export default function RootLayout({
                 </svg>
               </button>
 
-              {/* Clean Title Logo (Icon Box Removed) */}
               <Link href="/" className="flex items-center gap-1.5">
                 <span className="text-lg sm:text-xl font-black tracking-tight text-white">
                   Manga<span className="text-indigo-400">Flow</span>
@@ -259,7 +236,6 @@ export default function RootLayout({
               )}
             </div>
 
-            {/* Right Controls */}
             <div className="flex items-center gap-1.5 sm:gap-2">
               <button
                 type="button"
@@ -287,18 +263,53 @@ export default function RootLayout({
                   </button>
 
                   {userMenuOpen && (
-                    <div className="absolute top-10 right-0 w-48 bg-[#141722] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50">
+                    <div className="absolute top-10 right-0 w-52 bg-[#141722] border border-neutral-700/80 rounded-xl shadow-2xl py-2 z-50">
+                      <div className="px-3.5 py-1.5 border-b border-neutral-800 flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 border border-neutral-700">
+                          {currentAvatarUrl ? (
+                            <img src={currentAvatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full bg-indigo-600 flex items-center justify-center text-[10px] font-bold">
+                              {currentDisplayName[0].toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[10px] text-neutral-400 font-semibold uppercase tracking-wider">Account</p>
+                          <p className="text-xs font-bold text-white truncate">{currentDisplayName}</p>
+                        </div>
+                      </div>
+
                       <button
                         type="button"
                         onClick={() => { setUserMenuOpen(false); setEditProfileOpen(true); }}
-                        className="w-full text-left px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70"
+                        className="w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                       >
-                        👤 Edit Profile
+                        <span>👤</span> Edit Profile
                       </button>
+
+                      <Link
+                        href="/profile/following"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
+                      >
+                        <span>★</span> Following Titles
+                      </Link>
+
+                      <Link
+                        href="/profile/sync"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
+                      >
+                        <span>🔄</span> Import / Export Sync
+                      </Link>
+
+                      <div className="my-1 border-t border-neutral-800" />
+
                       <button
                         type="button"
                         onClick={handleSignOut}
-                        className="w-full text-left px-3.5 py-2 text-xs font-bold text-rose-400 hover:bg-rose-500/10"
+                        className="w-full text-left flex items-center gap-2 px-3.5 py-2 text-xs font-bold text-rose-400 hover:bg-rose-500/10 transition"
                       >
                         Log Out
                       </button>
@@ -318,7 +329,61 @@ export default function RootLayout({
           </div>
         </header>
 
-        {/* Global Search Bar Dropdown */}
+        {editProfileOpen && (
+          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="relative w-full max-w-sm bg-[#141722] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
+              <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
+                <h3 className="text-sm font-bold text-white">Customize Profile</h3>
+                <button type="button" onClick={() => setEditProfileOpen(false)} className="text-neutral-400 hover:text-white text-sm">
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveProfile} className="space-y-4">
+                <div>
+                  <label className="text-[11px] font-bold text-neutral-400 block mb-1">Display Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Enter reader username..."
+                    className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-neutral-400 block mb-2">Select Character Avatar</label>
+                  <div className="grid grid-cols-4 gap-2.5">
+                    {CHARACTER_AVATARS.map((av) => (
+                      <button
+                        key={av.id}
+                        type="button"
+                        onClick={() => setSelectedAvatar(av.url)}
+                        title={av.name}
+                        className={`relative aspect-square rounded-xl overflow-hidden border-2 transition ${
+                          selectedAvatar === av.url ? 'border-indigo-500 scale-105 shadow-md shadow-indigo-500/40' : 'border-transparent opacity-60 hover:opacity-100'
+                        }`}
+                        style={{ backgroundColor: av.bg }}
+                      >
+                        <img src={av.url} alt={av.name} className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={savingProfile}
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-bold text-xs text-white rounded-lg transition"
+                >
+                  {savingProfile ? 'Saving Changes...' : 'Save Profile'}
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
         {searchOpen && (
           <div className="sticky top-14 z-40 w-full px-3 sm:px-6 max-w-lg mx-auto">
             <div className="bg-[#151824] border border-neutral-700 rounded-xl shadow-2xl overflow-hidden mt-2">
@@ -365,7 +430,7 @@ export default function RootLayout({
         <div className="flex-1">{children}</div>
 
         <footer className="w-full border-t border-neutral-800/80 bg-[#0a0b0e] py-6 text-center text-xs text-neutral-500 mt-12">
-          <p>© {new Date().getFullYear()} MangaFlow. Fast reader platform.</p>
+          <p>© {new Date().getFullYear()} MangaFlow. All content indexed on-demand.</p>
         </footer>
       </body>
     </html>
