@@ -58,35 +58,28 @@ async function fetchHtml(url) {
   }
 }
 
-// Robust numerical chapter parser: Handles decimals (312.1), fractions, Prologues, and skips Volumes
+// Numerical parser: handles decimals (312.1), fractions, Prologues, and skips Volumes
 function cleanNum(val) {
   if (val == null) return null;
   const str = String(val).trim().toLowerCase();
 
   if (str === 'prologue' || str === 'oneshot' || str === 'intro') return 0;
 
-  // 1. Prioritize explicit chapter keyword (e.g., "Chapter 312.1" or "Ch. 15.5")
   const chMatch = str.match(/(?:chapter|ch\.?)\s*([0-9]+(?:\.[0-9]+)?)/i);
-  if (chMatch) return parseFloat(chMatch[1]);
+  if (chMatch) return parseFloat(parseFloat(chMatch[1]).toFixed(2));
 
-  // 2. Remove volume references first to avoid picking volume numbers (e.g. "Vol. 2 Ch. 15")
   const stripped = str.replace(/(?:vol\.?|volume)\s*[0-9]+/gi, '');
   const match = stripped.match(/[0-9]+(?:\.[0-9]+)?/);
-  return match ? parseFloat(match[0]) : null;
+  return match ? parseFloat(parseFloat(match[0]).toFixed(2)) : null;
 }
 
-// Standardizes chapter keys for map lookups (e.g., 312 -> "312", 312.1 -> "312.1")
-function toKey(num) {
-  if (num == null) return null;
-  return Number.isInteger(num) ? String(num) : String(parseFloat(num.toFixed(2)));
-}
-
-function stripAccents(str) {
+// Cleans search queries by stripping brackets and symbols
+function cleanTitle(str) {
   if (!str) return '';
   return str
+    .replace(/[【】\[\]\(\)\{\}★☆～~:!?:_]/g, ' ')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9가-힣ぁ-んァ-ヶ一-龯\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -95,8 +88,8 @@ function getSearchCandidates(series) {
   const candidates = [];
   const add = (txt) => {
     if (!txt) return;
-    const clean = stripAccents(txt);
-    if (clean.length > 2 && !candidates.includes(clean)) candidates.push(clean);
+    const clean = cleanTitle(txt);
+    if (clean.length > 1 && !candidates.includes(clean)) candidates.push(clean);
   };
 
   add(series.english_title);
@@ -117,11 +110,11 @@ function getSearchCandidates(series) {
 }
 
 // -------------------------------------------------------------
-// SOURCES: ComicK, MangaDex, MangaPill
+// PROVIDERS: ComicK, MangaDex, MangaPill
 // -------------------------------------------------------------
 async function searchComicK(query) {
   const data = await fetchJson(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(query)}&limit=1`);
-  return data?.[0]?.hid || null;
+  return data?.[0] || null;
 }
 
 async function getComicKMap(hid) {
@@ -133,15 +126,14 @@ async function getComicKMap(hid) {
 
     for (const ch of data.chapters) {
       const num = cleanNum(ch.chap);
-      const key = toKey(num);
-      if (key !== null) {
-        if (!map.has(key)) map.set(key, []);
-        map.get(key).push({ type: 'comick', id: ch.hid });
+      if (num !== null) {
+        if (!map.has(num)) map.set(num, []);
+        map.get(num).push({ type: 'comick', id: ch.hid });
       }
     }
     if (data.chapters.length < 100) break;
     page++;
-    await delay(120);
+    await delay(100);
   }
   return map;
 }
@@ -170,19 +162,16 @@ async function getMangaDexMap(mangaId) {
     if (!data?.data?.length) break;
 
     for (const ch of data.data) {
-      // Avoid dead external MangaPlus links
       if (ch.attributes?.externalUrl) continue;
-
       const num = cleanNum(ch.attributes?.chapter);
-      const key = toKey(num);
-      if (key !== null) {
-        if (!map.has(key)) map.set(key, []);
-        map.get(key).push({ type: 'mangadex', id: ch.id });
+      if (num !== null) {
+        if (!map.has(num)) map.set(num, []);
+        map.get(num).push({ type: 'mangadex', id: ch.id });
       }
     }
     if (data.data.length < 100) break;
     offset += 100;
-    await delay(120);
+    await delay(100);
   }
   return map;
 }
@@ -210,10 +199,9 @@ async function getMangaPillMap(mangaSlug) {
   let match;
   while ((match = regex.exec(html)) !== null) {
     const num = cleanNum(match[2]);
-    const key = toKey(num);
-    if (key !== null) {
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push({ type: 'mangapill', id: match[1] });
+    if (num !== null) {
+      if (!map.has(num)) map.set(num, []);
+      map.get(num).push({ type: 'mangapill', id: match[1] });
     }
   }
   return map;
@@ -232,16 +220,16 @@ async function getMangaPillPages(chapUrlId) {
 }
 
 // -------------------------------------------------------------
-// Unified Map Builder with Multi-Key Support
+// Unified Map Builder with On-The-Fly Metadata Enrichment
 // -------------------------------------------------------------
 async function buildUnifiedChapterMap(series) {
   const queries = getSearchCandidates(series);
   const unifiedMap = new Map();
 
   const mergeMap = (newMap) => {
-    for (const [key, list] of newMap.entries()) {
-      if (!unifiedMap.has(key)) unifiedMap.set(key, list);
-      else unifiedMap.get(key).push(...list);
+    for (const [numKey, list] of newMap.entries()) {
+      if (!unifiedMap.has(numKey)) unifiedMap.set(numKey, list);
+      else unifiedMap.get(numKey).push(...list);
     }
   };
 
@@ -255,9 +243,21 @@ async function buildUnifiedChapterMap(series) {
   }
 
   for (const q of queries) {
-    const ckHid = await searchComicK(q);
-    if (ckHid) {
-      const ckMap = await getComicKMap(ckHid);
+    const meta = await searchComicK(q);
+    if (meta?.hid) {
+      // Auto-Enrich Future Series: Save clean English title & Synonyms if missing
+      if (!series.english_title && meta.title) {
+        const synList = Array.isArray(meta.md_titles) ? meta.md_titles.map((t) => t.title) : [];
+        await supabase
+          .from('series')
+          .update({
+            english_title: meta.title,
+            synonyms: synList.length > 0 ? synList : series.synonyms,
+          })
+          .eq('id', series.id);
+      }
+
+      const ckMap = await getComicKMap(meta.hid);
       mergeMap(ckMap);
       if (ckMap.size > 0) break;
     }
@@ -280,7 +280,7 @@ async function buildUnifiedChapterMap(series) {
 }
 
 // -------------------------------------------------------------
-// Race-Free Worker Loop
+// Partitioned Worker Engine
 // -------------------------------------------------------------
 async function runWorker() {
   console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Dynamic Engine Initialized.`);
@@ -289,7 +289,7 @@ async function runWorker() {
     .from('chapters')
     .select('series_id')
     .or('pages.is.null,pages.eq.{}')
-    .limit(1000);
+    .limit(2000);
 
   if (!emptySample?.length) {
     console.log('🎉 No empty chapters remain in the database!');
@@ -298,22 +298,20 @@ async function runWorker() {
 
   const distinctSeriesIds = [...new Set(emptySample.map((c) => c.series_id))];
 
-  // Fetch candidate series ordered by oldest updated
   const { data: allSeries } = await supabase
     .from('series')
     .select('id, title, slug, source_url, english_title, native_title, synonyms, updated_at')
     .in('id', distinctSeriesIds)
     .order('updated_at', { ascending: true, nullsFirst: true })
-    .limit(100);
+    .limit(200);
 
   if (!allSeries?.length) return;
 
-  // Dedicated worker partition
   const assigned = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
   console.log(`[Worker ${WORKER_ID}] Assigned ${assigned.length} candidate series.`);
 
   for (const s of assigned) {
-    // 1. IMMEDIATE LOCK: Update timestamp now so no other worker picks up this series
+    // 1. Immediate Lock: Prevent concurrent worker overlap
     await supabase
       .from('series')
       .update({ updated_at: new Date().toISOString() })
@@ -342,14 +340,10 @@ async function runWorker() {
       const num = cleanNum(ch.chapter_number);
       if (num === null) continue;
 
-      const key = toKey(num);
-
-      // Support direct key match or floating-point tolerance lookup
-      let candidates = unifiedMap.get(key);
+      let candidates = unifiedMap.get(num);
       if (!candidates) {
         for (const [mapKey, list] of unifiedMap.entries()) {
-          const mapNum = parseFloat(mapKey);
-          if (Math.abs(mapNum - num) < 0.05) {
+          if (Math.abs(mapKey - num) < 0.05) {
             candidates = list;
             break;
           }
@@ -381,7 +375,7 @@ async function runWorker() {
         }
       }
 
-      await delay(250);
+      await delay(200);
     }
 
     console.log(`[Worker ${WORKER_ID}] Result for "${s.title}": filled ${filledCount}/${emptyChapters.length}`);
