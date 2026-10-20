@@ -47,9 +47,9 @@ export default function RootLayout({
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [editProfileOpen, setEditProfileOpen] = useState(false);
 
-  // PWA Prompt
+  // PWA Prompt Management
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [showPwaPrompt, setShowPwaPrompt] = useState(false);
+  const [showPwaBanner, setShowPwaBanner] = useState(false);
 
   const [user, setUser] = useState<any>(null);
   const [displayName, setDisplayName] = useState('');
@@ -62,18 +62,18 @@ export default function RootLayout({
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Register Service Worker
+    // Service Worker registration
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
 
-    // Capture PWA Install Event
+    // Capture PWA installation event
     const handleBeforeInstall = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e);
       const isDismissed = localStorage.getItem('mangaflow_pwa_dismissed');
       if (!isDismissed) {
-        setShowPwaPrompt(true);
+        setShowPwaBanner(true);
       }
     };
 
@@ -81,18 +81,18 @@ export default function RootLayout({
     return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
   }, []);
 
-  const handleInstallClick = async () => {
+  const handleInstallPwa = async () => {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') {
-      setShowPwaPrompt(false);
+      setShowPwaBanner(false);
     }
     setDeferredPrompt(null);
   };
 
   const handleDismissPwa = () => {
-    setShowPwaPrompt(false);
+    setShowPwaBanner(false);
     localStorage.setItem('mangaflow_pwa_dismissed', 'true');
   };
 
@@ -216,9 +216,9 @@ export default function RootLayout({
           />
         )}
 
-        {/* PWA Floating Install Modal */}
-        {showPwaPrompt && (
-          <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-96 z-50 bg-[#141724] border border-indigo-500/40 rounded-2xl p-4 shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-5">
+        {/* PWA Floating Install Banner */}
+        {showPwaBanner && (
+          <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-96 z-50 bg-[#141724] border border-indigo-500/40 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center font-black text-white shrink-0 shadow-lg shadow-indigo-500/30">
                 MF
@@ -226,20 +226,20 @@ export default function RootLayout({
               <div className="flex-1 min-w-0">
                 <h4 className="text-xs font-bold text-white">Install MangaFlow App</h4>
                 <p className="text-[11px] text-neutral-400 mt-0.5 leading-snug">
-                  Add to home screen for fullscreen reading, offline caching, and faster chapter loading.
+                  Install our app for fullscreen reading, offline caching, and faster chapter access.
                 </p>
                 <div className="flex items-center gap-2 mt-3">
                   <button
-                    onClick={handleInstallClick}
+                    onClick={handleInstallPwa}
                     className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-md shadow-indigo-600/30"
                   >
-                    Install App
+                    Install Now
                   </button>
                   <button
                     onClick={handleDismissPwa}
                     className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white rounded-lg text-xs font-semibold transition"
                   >
-                    Not Now
+                    Dismiss
                   </button>
                 </div>
               </div>
@@ -429,7 +429,7 @@ export default function RootLayout({
           <p>© {new Date().getFullYear()} MangaFlow. All content indexed on-demand.</p>
         </footer>
 
-        {/* Mounted AuthModal */}
+        {/* Mounted AuthModal (Resolves Sign In Button Not Opening) */}
         <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
       </body>
     </html>
