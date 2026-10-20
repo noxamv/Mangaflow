@@ -26,32 +26,25 @@ export default function ReaderPage() {
   const chapterId = params?.chapterId as string;
 
   const [chapter, setChapter] = useState<Chapter | null>(null);
-  const [allChapters, setAllChapters] = useState<{ id: string; chapter_number: number }[]>([]);
+  const [allChapters, setAllChapters] = useState<{ id: string; chapter_number: number; title: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [mode, setMode] = useState<'webtoon' | 'single'>('webtoon');
+  // Settings: Single, Double, Long Strip (Webtoon)
+  const [layoutMode, setLayoutMode] = useState<'long_strip' | 'single' | 'double'>('long_strip');
+  const [readingDirection, setReadingDirection] = useState<'rtl' | 'ltr'>('rtl');
+  const [pageMargin, setPageMargin] = useState<number>(0);
   const [pageIdx, setPageIdx] = useState(0);
-  const [showControls, setShowControls] = useState(true);
 
-  // Report Modal States
+  // Floating Modals
+  const [showChaptersDrawer, setShowChaptersDrawer] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
-  const [reportReason, setReportReason] = useState('Broken / Missing Images');
-  const [reportSubmitting, setReportSubmitting] = useState(false);
-  const [reportSent, setReportSent] = useState(false);
 
-  // Fullscreen state
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const readerContainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const savedMode = localStorage.getItem('mangaflow_reader_mode') as 'webtoon' | 'single';
-    if (savedMode) setMode(savedMode);
-  }, []);
-
-  const changeMode = (newMode: 'webtoon' | 'single') => {
-    setMode(newMode);
-    localStorage.setItem('mangaflow_reader_mode', newMode);
-  };
+  const [drawerSearch, setDrawerSearch] = useState('');
+  const [drawerSort, setDrawerSort] = useState<'desc' | 'asc'>('desc');
+  const [reportReason, setReportReason] = useState('');
+  const [reportSuccess, setReportSuccess] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -59,7 +52,6 @@ export default function ReaderPage() {
       setLoading(true);
 
       try {
-        // Try on-demand endpoint first for instant self-healing
         let chData: any = null;
         try {
           const res = await fetch(`/api/chapter/${chapterId}`);
@@ -69,7 +61,7 @@ export default function ReaderPage() {
         if (!chData || !chData.pages || chData.pages.length === 0) {
           const { data } = await supabase
             .from('chapters')
-            .select(`id, series_id, chapter_number, title, pages, series (id, title, english_title, slug, cover_image_url)`)
+            .select('id, series_id, chapter_number, title, pages, series (id, title, english_title, slug, cover_image_url)')
             .eq('id', chapterId)
             .maybeSingle();
           chData = data;
@@ -87,13 +79,13 @@ export default function ReaderPage() {
 
         const { data: sibs } = await supabase
           .from('chapters')
-          .select('id, chapter_number')
+          .select('id, chapter_number, title')
           .eq('series_id', cur.series_id)
           .order('chapter_number', { ascending: true });
 
         if (sibs) setAllChapters(sibs);
 
-        // Save progress to localStorage
+        // Save local history
         const local = JSON.parse(localStorage.getItem('mangaflow_reading_history') || '{}');
         local[cur.series_id] = {
           seriesId: cur.series_id,
@@ -105,7 +97,7 @@ export default function ReaderPage() {
         };
         localStorage.setItem('mangaflow_reading_history', JSON.stringify(local));
 
-        // Sync with user account if logged in
+        // Cloud history
         const { data: auth } = await supabase.auth.getUser();
         if (auth?.user) {
           await supabase.from('reading_history').upsert({
@@ -117,7 +109,7 @@ export default function ReaderPage() {
           }, { onConflict: 'user_id,series_id' });
         }
       } catch (err) {
-        console.error('Reader error:', err);
+        console.error(err);
       } finally {
         setLoading(false);
       }
@@ -130,10 +122,10 @@ export default function ReaderPage() {
   const prevChapter = currentIndex > 0 ? allChapters[currentIndex - 1] : null;
   const nextChapter = currentIndex < allChapters.length - 1 ? allChapters[currentIndex + 1] : null;
 
-  // Single-page keyboard navigation
+  // Keyboard navigation
   const handleKey = useCallback(
     (e: KeyboardEvent) => {
-      if (mode !== 'single' || !chapter?.pages) return;
+      if (layoutMode === 'long_strip' || !chapter?.pages) return;
       if (e.key === 'ArrowRight' || e.key === 'd') {
         if (pageIdx < chapter.pages.length - 1) setPageIdx((p) => p + 1);
         else if (nextChapter) router.push(`/read/${nextChapter.id}`);
@@ -142,7 +134,7 @@ export default function ReaderPage() {
         else if (prevChapter) router.push(`/read/${prevChapter.id}`);
       }
     },
-    [mode, chapter, pageIdx, nextChapter, prevChapter, router]
+    [layoutMode, chapter, pageIdx, nextChapter, prevChapter, router]
   );
 
   useEffect(() => {
@@ -150,158 +142,78 @@ export default function ReaderPage() {
     return () => window.removeEventListener('keydown', handleKey);
   }, [handleKey]);
 
-  // Fullscreen toggle handler
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-    } else {
-      if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
-    }
-  };
-
-  // Submit Chapter Report
-  const handleReportSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chapter) return;
-    setReportSubmitting(true);
-
-    try {
-      await fetch('/api/report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chapterId: chapter.id,
-          reason: reportReason,
-        }),
-      });
-      setReportSent(true);
-    } catch {
-      setReportSent(true);
-    } finally {
-      setReportSubmitting(false);
-    }
-  };
-
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#07080b] flex flex-col items-center justify-center text-xs text-neutral-400 space-y-3">
-        <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-        <p className="font-semibold tracking-wider uppercase">Loading panels...</p>
+      <div className="min-h-screen bg-[#07080a] flex items-center justify-center text-xs text-neutral-500">
+        Loading chapter panels...
       </div>
     );
   }
 
   if (!chapter || !chapter.pages || chapter.pages.length === 0) {
     return (
-      <div className="min-h-screen bg-[#07080b] flex flex-col items-center justify-center text-white space-y-4 px-4 text-center">
-        <p className="text-sm font-semibold">This chapter is currently synchronizing.</p>
-        <div className="flex gap-2">
-          <button
-            onClick={() => window.location.reload()}
-            className="px-4 py-2 bg-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-500 transition"
-          >
-            Retry Now
-          </button>
-          <Link href="/" className="px-4 py-2 bg-neutral-800 rounded-lg text-xs font-bold">
-            Home
-          </Link>
-        </div>
+      <div className="min-h-screen bg-[#07080a] flex flex-col items-center justify-center text-white space-y-4 px-4 text-center">
+        <p className="text-sm font-semibold">Syncing chapter panels in background.</p>
+        <button onClick={() => window.location.reload()} className="px-4 py-2 bg-indigo-600 rounded-xl text-xs font-bold">
+          Retry
+        </button>
       </div>
     );
   }
 
   const primaryTitle = chapter.series?.english_title || chapter.series?.title;
+  const filteredDrawerChapters = allChapters
+    .filter((c) => String(c.chapter_number).includes(drawerSearch.trim()))
+    .sort((a, b) => (drawerSort === 'desc' ? b.chapter_number - a.chapter_number : a.chapter_number - b.chapter_number));
 
   return (
-    <div ref={readerContainerRef} className="min-h-screen bg-[#07080b] text-white flex flex-col select-none">
-      {/* Sticky Top Reader Controls */}
-      <header
-        className={`sticky top-0 z-50 bg-[#0e1017]/95 backdrop-blur border-b border-neutral-800/80 px-3 py-2.5 transition-all duration-300 ${
-          showControls ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none'
-        }`}
-      >
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 truncate min-w-0">
-            <Link
-              href={`/series/${chapter.series?.slug || chapter.series_id}`}
-              className="px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-xs font-semibold text-neutral-300 transition shrink-0"
-            >
-              ← Back
-            </Link>
-            <div className="truncate text-xs">
-              <span className="font-bold text-white truncate">{primaryTitle}</span>
-              <span className="text-neutral-500 ml-1.5 shrink-0">/ Ch. {chapter.chapter_number}</span>
-            </div>
-          </div>
+    <div className="min-h-screen bg-[#07080a] text-white flex flex-col relative select-none">
+      {/* Top Floating Mini Header */}
+      <div className="sticky top-0 z-30 bg-[#0d0e14]/90 backdrop-blur-md border-b border-neutral-800/60 px-4 py-2 flex items-center justify-between text-xs">
+        <Link href={`/series/${chapter.series?.slug || chapter.series_id}`} className="font-bold text-neutral-300 hover:text-white truncate max-w-[50%]">
+          ← {primaryTitle}
+        </Link>
+        <span className="font-semibold text-neutral-400">
+          Ch. {chapter.chapter_number} {chapter.title ? `(${chapter.title})` : ''}
+        </span>
+      </div>
 
-          {/* Controls Bar */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Mode Switcher */}
-            <div className="flex bg-neutral-900 border border-neutral-800 rounded-lg p-0.5 text-[11px]">
-              <button
-                onClick={() => changeMode('webtoon')}
-                className={`px-2.5 py-1 rounded-md font-semibold transition ${
-                  mode === 'webtoon' ? 'bg-indigo-600 text-white' : 'text-neutral-400 hover:text-white'
-                }`}
-              >
-                Webtoon
-              </button>
-              <button
-                onClick={() => changeMode('single')}
-                className={`px-2.5 py-1 rounded-md font-semibold transition ${
-                  mode === 'single' ? 'bg-indigo-600 text-white' : 'text-neutral-400 hover:text-white'
-                }`}
-              >
-                Single
-              </button>
-            </div>
+      {/* Floating Right Sidebar matching MangaFire */}
+      <div className="fixed right-3 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2 bg-[#13151f]/90 border border-neutral-800/80 p-1.5 rounded-2xl shadow-2xl backdrop-blur-md">
+        <button
+          onClick={() => setShowChaptersDrawer(true)}
+          className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-xl transition"
+          title="Chapters List"
+        >
+          📑
+        </button>
+        <button
+          onClick={() => setShowSettingsModal(true)}
+          className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-xl transition"
+          title="Reader Settings"
+        >
+          ⚙️
+        </button>
+        <button
+          onClick={() => setShowHelpModal(true)}
+          className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-xl transition hidden sm:block"
+          title="Keyboard Shortcuts"
+        >
+          ❓
+        </button>
+        <button
+          onClick={() => setShowReportModal(true)}
+          className="p-2 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-xl transition"
+          title="Report Chapter Issue"
+        >
+          🚩
+        </button>
+      </div>
 
-            {/* Fullscreen Button */}
-            <button
-              onClick={toggleFullscreen}
-              className="p-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs text-neutral-300 transition hidden sm:block"
-              title="Toggle Fullscreen"
-            >
-              {isFullscreen ? 'Exit Full' : 'Full'}
-            </button>
-
-            {/* Report Button */}
-            <button
-              onClick={() => {
-                setReportSent(false);
-                setShowReportModal(true);
-              }}
-              className="px-2.5 py-1 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 rounded-lg text-xs font-semibold transition"
-              title="Report broken panels"
-            >
-              Report
-            </button>
-
-            {/* Quick Chapter Selector */}
-            <select
-              value={chapter.id}
-              onChange={(e) => router.push(`/read/${e.target.value}`)}
-              className="bg-neutral-900 border border-neutral-700 text-neutral-200 text-xs rounded-lg px-2 py-1 outline-none cursor-pointer"
-            >
-              {allChapters.map((c) => (
-                <option key={c.id} value={c.id}>
-                  Ch. {c.chapter_number}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </header>
-
-      {/* Reader Panel Canvas */}
-      <main
-        onClick={() => setShowControls((prev) => !prev)}
-        className="flex-1 flex flex-col items-center w-full py-2 cursor-pointer"
-      >
-        {mode === 'webtoon' ? (
-          <div className="w-full max-w-3xl flex flex-col items-center mx-auto pointer-events-auto">
+      {/* Reader Canvas */}
+      <main className="flex-1 flex flex-col items-center w-full" style={{ paddingLeft: `${pageMargin}px`, paddingRight: `${pageMargin}px` }}>
+        {layoutMode === 'long_strip' ? (
+          <div className="w-full max-w-3xl flex flex-col items-center mx-auto">
             {chapter.pages.map((url, i) => (
               <img
                 key={i}
@@ -309,163 +221,239 @@ export default function ReaderPage() {
                 alt=""
                 referrerPolicy="no-referrer"
                 loading={i < 4 ? 'eager' : 'lazy'}
-                decoding="async"
-                className="w-full h-auto block select-none bg-neutral-950"
+                className="w-full h-auto block bg-neutral-950"
                 onError={(e) => {
-                  const target = e.currentTarget;
-                  if (!target.src.includes('/api/proxy')) {
-                    target.src = `/api/proxy?url=${encodeURIComponent(url)}`;
-                  }
+                  const t = e.currentTarget;
+                  if (!t.src.includes('/api/proxy')) t.src = `/api/proxy?url=${encodeURIComponent(url)}`;
                 }}
               />
             ))}
           </div>
         ) : (
-          <div className="w-full max-w-4xl mx-auto flex flex-col items-center justify-center flex-1 px-2 pointer-events-auto">
-            <div className="relative group w-full flex items-center justify-center">
-              <img
-                src={chapter.pages[pageIdx]}
-                alt=""
-                referrerPolicy="no-referrer"
-                className="max-h-[86vh] w-auto object-contain rounded shadow-2xl"
-                onError={(e) => {
-                  const target = e.currentTarget;
-                  if (!target.src.includes('/api/proxy')) {
-                    target.src = `/api/proxy?url=${encodeURIComponent(chapter.pages![pageIdx])}`;
-                  }
-                }}
-              />
-
-              {/* Tap Left / Right page turner */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (pageIdx > 0) setPageIdx((p) => p - 1);
-                }}
-                className="absolute left-0 top-0 w-1/3 h-full cursor-w-resize"
-              />
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (pageIdx < chapter.pages!.length - 1) setPageIdx((p) => p + 1);
-                }}
-                className="absolute right-0 top-0 w-1/3 h-full cursor-e-resize"
-              />
-            </div>
-
-            <div className="mt-4 flex items-center gap-4 text-xs font-semibold text-neutral-400">
-              <button
-                disabled={pageIdx === 0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPageIdx((p) => p - 1);
-                }}
-                className="px-3 py-1 bg-neutral-900 border border-neutral-800 rounded-lg disabled:opacity-30 hover:bg-neutral-800"
-              >
-                ← Prev Page
+          <div className="w-full max-w-4xl mx-auto flex flex-col items-center justify-center flex-1 py-4">
+            <img
+              src={chapter.pages[pageIdx]}
+              alt=""
+              referrerPolicy="no-referrer"
+              className="max-h-[85vh] w-auto object-contain rounded shadow-2xl"
+            />
+            <div className="flex items-center gap-4 mt-4 text-xs font-bold text-neutral-400">
+              <button disabled={pageIdx === 0} onClick={() => setPageIdx((p) => p - 1)} className="px-3 py-1 bg-neutral-900 rounded-lg disabled:opacity-30">
+                ← Prev
               </button>
-              <span>
-                Page {pageIdx + 1} / {chapter.pages.length}
-              </span>
-              <button
-                disabled={pageIdx === chapter.pages.length - 1}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPageIdx((p) => p + 1);
-                }}
-                className="px-3 py-1 bg-neutral-900 border border-neutral-800 rounded-lg disabled:opacity-30 hover:bg-neutral-800"
-              >
-                Next Page →
+              <span>{pageIdx + 1} / {chapter.pages.length}</span>
+              <button disabled={pageIdx === chapter.pages.length - 1} onClick={() => setPageIdx((p) => p + 1)} className="px-3 py-1 bg-neutral-900 rounded-lg disabled:opacity-30">
+                Next →
               </button>
             </div>
           </div>
         )}
+
+        {/* End of Chapter Section matching 1000245704.jpg */}
+        <div className="w-full max-w-2xl mx-auto px-4 py-12 text-center space-y-6">
+          <div className="space-y-1">
+            <h3 className="text-sm font-black text-white">End of Ch. {chapter.chapter_number}</h3>
+            <p className="text-xs text-neutral-500">{chapter.title || 'Official Release'}</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            {prevChapter ? (
+              <Link
+                href={`/read/${prevChapter.id}`}
+                className="p-3.5 bg-[#12141c] hover:bg-neutral-800 border border-neutral-800/80 rounded-2xl flex flex-col items-start transition group text-left"
+              >
+                <span className="text-[10px] text-neutral-500 uppercase font-black group-hover:text-neutral-400">Previous</span>
+                <span className="text-xs font-bold text-white mt-0.5 truncate">Ch. {prevChapter.chapter_number}</span>
+              </Link>
+            ) : (
+              <div className="p-3.5 bg-neutral-900/40 border border-neutral-800/40 rounded-2xl flex flex-col items-start text-left opacity-40">
+                <span className="text-[10px] text-neutral-500 uppercase font-black">Previous</span>
+                <span className="text-xs font-bold text-neutral-400 mt-0.5">None</span>
+              </div>
+            )}
+
+            {nextChapter ? (
+              <Link
+                href={`/read/${nextChapter.id}`}
+                className="p-3.5 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 rounded-2xl flex flex-col items-end transition group text-right"
+              >
+                <span className="text-[10px] text-indigo-400 uppercase font-black">Next</span>
+                <span className="text-xs font-bold text-white mt-0.5 truncate">Ch. {nextChapter.chapter_number}</span>
+              </Link>
+            ) : (
+              <div className="p-3.5 bg-neutral-900/40 border border-neutral-800/40 rounded-2xl flex flex-col items-end text-right opacity-40">
+                <span className="text-[10px] text-neutral-500 uppercase font-black">Next</span>
+                <span className="text-xs font-bold text-neutral-400 mt-0.5">None</span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <Link
+              href={`/series/${chapter.series?.slug || chapter.series_id}`}
+              className="px-5 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-xl text-xs font-bold text-neutral-300 transition"
+            >
+              📖 Series
+            </Link>
+            <Link
+              href="/"
+              className="px-5 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-xl text-xs font-bold text-neutral-300 transition"
+            >
+              🏠 Home
+            </Link>
+          </div>
+        </div>
       </main>
 
-      {/* Reader Bottom Navigation Bar */}
-      <footer className="bg-[#0e1017] border-t border-neutral-800/80 p-4 flex items-center justify-center gap-4">
-        {prevChapter ? (
-          <Link
-            href={`/read/${prevChapter.id}`}
-            className="px-5 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-xs font-bold rounded-xl transition"
-          >
-            ← Previous Chapter ({prevChapter.chapter_number})
-          </Link>
-        ) : (
-          <span className="px-5 py-2.5 bg-neutral-900/50 text-neutral-600 text-xs font-bold rounded-xl cursor-not-allowed">
-            First Chapter
-          </span>
-        )}
-
-        {nextChapter ? (
-          <Link
-            href={`/read/${nextChapter.id}`}
-            className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-xs font-black rounded-xl shadow-lg transition"
-          >
-            Next Chapter ({nextChapter.chapter_number}) →
-          </Link>
-        ) : (
-          <span className="px-5 py-2.5 bg-neutral-900/50 text-neutral-600 text-xs font-bold rounded-xl cursor-not-allowed">
-            Latest Chapter
-          </span>
-        )}
-      </footer>
-
-      {/* Report Modal */}
-      {showReportModal && (
+      {/* Modal 1: Table of Contents Drawer */}
+      {showChaptersDrawer && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="relative w-full max-w-sm bg-[#141722] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
-              <h3 className="text-sm font-bold text-white">Report Broken Chapter</h3>
+          <div className="w-full max-w-sm bg-[#13151f] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl flex flex-col max-h-[80vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-3">
+              <h4 className="text-xs font-black uppercase text-white">Chapters</h4>
+              <button onClick={() => setShowChaptersDrawer(false)} className="text-neutral-400 hover:text-white">✕</button>
+            </div>
+
+            <div className="flex gap-2 mb-3">
+              <input
+                type="text"
+                placeholder="Find chapter..."
+                value={drawerSearch}
+                onChange={(e) => setDrawerSearch(e.target.value)}
+                className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1 text-xs text-white outline-none"
+              />
               <button
-                type="button"
-                onClick={() => setShowReportModal(false)}
-                className="text-neutral-400 hover:text-white text-sm"
+                onClick={() => setDrawerSort(drawerSort === 'desc' ? 'asc' : 'desc')}
+                className="px-2.5 py-1 bg-neutral-800 text-xs rounded-lg font-bold"
               >
-                ✕
+                {drawerSort === 'desc' ? '9→1' : '1→9'}
               </button>
             </div>
 
-            {reportSent ? (
-              <div className="text-center py-4 space-y-2">
-                <div className="w-10 h-10 mx-auto rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
-                  ✓
-                </div>
-                <p className="text-xs font-semibold text-white">Report Logged!</p>
-                <p className="text-[11px] text-neutral-400">
-                  Our bot will re-scrape and rebuild this chapter within minutes.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowReportModal(false)}
-                  className="mt-3 px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold"
+            <div className="flex-1 overflow-y-auto divide-y divide-neutral-800/50 pr-1">
+              {filteredDrawerChapters.map((c) => (
+                <Link
+                  key={c.id}
+                  href={`/read/${c.id}`}
+                  onClick={() => setShowChaptersDrawer(false)}
+                  className={`p-2.5 flex items-center justify-between rounded-lg text-xs transition ${
+                    c.id === chapter.id ? 'bg-indigo-600/20 text-indigo-400 font-bold' : 'text-neutral-300 hover:bg-neutral-800/50'
+                  }`}
                 >
-                  Close
-                </button>
+                  <span>Ch. {c.chapter_number} {c.title ? `- ${c.title}` : ''}</span>
+                  {c.id === chapter.id && <span>●</span>}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 2: Reader Settings Modal matching MangaFire */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-[#13151f] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <h4 className="text-xs font-black uppercase text-white">Reader Settings</h4>
+              <button onClick={() => setShowSettingsModal(false)} className="text-neutral-400 hover:text-white">✕</button>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-2">Layout</label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: 'long_strip', label: 'Long Strip' },
+                  { id: 'single', label: 'Single' },
+                  { id: 'double', label: 'Double' },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setLayoutMode(item.id as any)}
+                    className={`py-2 rounded-xl text-xs font-bold transition ${
+                      layoutMode === item.id ? 'bg-indigo-600 text-white shadow-md' : 'bg-neutral-900 text-neutral-400 border border-neutral-800'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold uppercase text-neutral-400 block mb-2">Page Margin</label>
+              <div className="flex items-center justify-between bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-2">
+                <button onClick={() => setPageMargin((m) => Math.max(0, m - 10))} className="text-base font-bold text-neutral-400 px-2">-</button>
+                <span className="text-xs font-bold text-white">{pageMargin}px</span>
+                <button onClick={() => setPageMargin((m) => m + 10)} className="text-base font-bold text-neutral-400 px-2">+</button>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowSettingsModal(false)}
+              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white shadow-lg transition"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 3: Keyboard Shortcuts Cheatsheet */}
+      {showHelpModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-[#13151f] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl space-y-3">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <h4 className="text-xs font-black uppercase text-white">Keyboard Shortcuts</h4>
+              <button onClick={() => setShowHelpModal(false)} className="text-neutral-400 hover:text-white">✕</button>
+            </div>
+            <div className="space-y-2 text-xs divide-y divide-neutral-800/40">
+              <div className="flex justify-between pt-1"><span className="text-neutral-400">Next / Prev Page</span><span className="font-mono font-bold text-white">→ / ← or D / A</span></div>
+              <div className="flex justify-between pt-1"><span className="text-neutral-400">Next / Prev Chapter</span><span className="font-mono font-bold text-white">N / B</span></div>
+              <div className="flex justify-between pt-1"><span className="text-neutral-400">Scroll Strip</span><span className="font-mono font-bold text-white">W / S or ↑ / ↓</span></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 4: Report Issue Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-[#13151f] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <h4 className="text-xs font-black uppercase text-white">Report Chapter Issue</h4>
+              <button onClick={() => setShowReportModal(false)} className="text-neutral-400 hover:text-white">✕</button>
+            </div>
+
+            {reportSuccess ? (
+              <div className="text-center py-4 space-y-2">
+                <div className="text-emerald-400 font-bold text-lg">✓</div>
+                <p className="text-xs text-neutral-300">Report logged. Chapter queued for re-scrape.</p>
+                <button onClick={() => setShowReportModal(false)} className="px-4 py-1.5 bg-indigo-600 rounded-lg text-xs font-bold mt-2">Close</button>
               </div>
             ) : (
-              <form onSubmit={handleReportSubmit} className="space-y-4">
-                <p className="text-xs text-neutral-400">
-                  Reporting Chapter {chapter.chapter_number} of {primaryTitle}. Select the issue:
-                </p>
-
-                <select
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  await fetch('/api/report', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chapterId: chapter.id, reason: reportReason }),
+                  });
+                  setReportSuccess(true);
+                }}
+                className="space-y-3"
+              >
+                <p className="text-xs text-neutral-400">What is wrong with Chapter {chapter.chapter_number}?</p>
+                <textarea
+                  required
+                  rows={3}
                   value={reportReason}
                   onChange={(e) => setReportReason(e.target.value)}
-                  className="w-full bg-neutral-900 border border-neutral-700 text-xs text-white rounded-lg px-3 py-2 outline-none"
-                >
-                  <option value="Broken / Missing Images">Broken / Missing Images</option>
-                  <option value="Images out of order">Images out of order</option>
-                  <option value="Wrong series or chapter">Wrong series or chapter</option>
-                  <option value="Duplicate pages">Duplicate pages</option>
-                </select>
-
-                <button
-                  type="submit"
-                  disabled={reportSubmitting}
-                  className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 font-bold text-xs text-white rounded-xl transition"
-                >
-                  {reportSubmitting ? 'Reporting...' : 'Submit Report'}
+                  placeholder="e.g. Missing panels, broken images, wrong chapter..."
+                  className="w-full bg-neutral-900 border border-neutral-700 rounded-xl p-3 text-xs text-white outline-none focus:border-indigo-500"
+                />
+                <button type="submit" className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 font-bold text-xs text-white rounded-xl transition">
+                  Send Report
                 </button>
               </form>
             )}
