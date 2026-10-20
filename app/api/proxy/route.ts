@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Whitelisted upstream image domains
-const ALLOWED_DOMAINS = [
+const ALLOWED_ROOTS = [
   'mangadex.org',
-  'uploads.mangadex.org',
   'comick.io',
   'comick.pictures',
-  'meo.comick.pictures',
-  'meo3.comick.pictures',
   'mangapill.com',
+  'readdetectiveconan.com',
   'consumet.org',
 ];
 
@@ -27,23 +24,18 @@ export async function GET(request: NextRequest) {
     return new NextResponse('Malformed URL', { status: 400 });
   }
 
-  // Domain security verification
-  const isAllowed = ALLOWED_DOMAINS.some(
-    (domain) =>
-      parsedUrl.hostname === domain || parsedUrl.hostname.endsWith(`.${domain}`)
+  const hostname = parsedUrl.hostname.toLowerCase();
+  const isAllowed = ALLOWED_ROOTS.some(
+    (root) => hostname === root || hostname.endsWith(`.${root}`)
   );
 
   if (!isAllowed) {
     return new NextResponse('Target domain not permitted', { status: 403 });
   }
 
-  // Dynamic referer matching based on provider
   let referer = 'https://mangadex.org/';
-  if (parsedUrl.hostname.includes('comick')) {
-    referer = 'https://comick.io/';
-  } else if (parsedUrl.hostname.includes('mangapill')) {
-    referer = 'https://mangapill.com/';
-  }
+  if (hostname.includes('comick')) referer = 'https://comick.io/';
+  else if (hostname.includes('mangapill')) referer = 'https://mangapill.com/';
 
   try {
     const res = await fetch(targetUrl, {
@@ -67,8 +59,7 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control':
-          'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400',
+        'Cache-Control': 'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400',
       },
     });
   } catch (err: any) {
