@@ -23,31 +23,34 @@ const HEADERS = {
 
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
-async function fetchJson(url, options = {}) {
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(url, {
-      headers: HEADERS,
-      signal: controller.signal,
-      ...options,
-    });
-    clearTimeout(id);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
+async function fetchJson(url, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 9000);
+      const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
+      clearTimeout(id);
+
+      if (res.status === 429) {
+        // Rate limited: back off exponentially
+        await delay(3000 * (attempt + 1));
+        continue;
+      }
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      if (attempt === retries) return null;
+      await delay(1000);
+    }
   }
+  return null;
 }
 
 async function fetchHtml(url) {
   try {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), 9000);
-    const res = await fetch(url, {
-      headers: HEADERS,
-      signal: controller.signal,
-    });
+    const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
     clearTimeout(id);
     if (!res.ok) return null;
     return await res.text();
@@ -80,14 +83,10 @@ function getSearchCandidates(series) {
     if (clean.length > 2 && !candidates.includes(clean)) candidates.push(clean);
   };
 
-  // 1. English title first priority
   add(series.english_title);
   add(series.title);
-
-  // 2. Native Korean/Japanese/Chinese titles
   add(series.native_title);
 
-  // 3. Alternative synonyms & aliases
   if (Array.isArray(series.synonyms)) {
     series.synonyms.forEach(add);
   } else if (typeof series.synonyms === 'string') {
@@ -102,22 +101,18 @@ function getSearchCandidates(series) {
 }
 
 // -------------------------------------------------------------
-// SOURCE 1: ComicK API (Full Scanlation Archives)
+// SOURCES: ComicK, MangaDex, MangaPill
 // -------------------------------------------------------------
 async function searchComicK(query) {
-  const data = await fetchJson(
-    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(query)}&limit=1`
-  );
+  const data = await fetchJson(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(query)}&limit=1`);
   return data?.[0]?.hid || null;
 }
 
 async function getComicKMap(hid) {
   const map = new Map();
   let page = 1;
-  while (page <= 40) {
-    const data = await fetchJson(
-      `https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`
-    );
+  while (page <= 25) {
+    const data = await fetchJson(`https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`);
     if (!data?.chapters?.length) break;
 
     for (const ch of data.chapters) {
@@ -129,7 +124,7 @@ async function getComicKMap(hid) {
     }
     if (data.chapters.length < 100) break;
     page++;
-    await delay(90);
+    await delay(200);
   }
   return map;
 }
@@ -138,36 +133,27 @@ async function getComicKPages(hid) {
   const data = await fetchJson(`https://api.comick.io/chapter/${hid}`);
   if (data?.chapter?.images?.length) {
     return data.chapter.images.map((img) =>
-      img.url.startsWith('http')
-        ? img.url
-        : `https://meo3.comick.pictures/${img.url}`
+      img.url.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.url}`
     );
   }
   return null;
 }
 
-// -------------------------------------------------------------
-// SOURCE 2: MangaDex API (Bypasses MangaPlus Redirects)
-// -------------------------------------------------------------
 async function searchMangaDex(query) {
-  const data = await fetchJson(
-    `https://api.mangadex.org/manga?title=${encodeURIComponent(query)}&limit=1`
-  );
+  const data = await fetchJson(`https://api.mangadex.org/manga?title=${encodeURIComponent(query)}&limit=1`);
   return data?.data?.[0]?.id || null;
 }
 
 async function getMangaDexMap(mangaId) {
   const map = new Map();
   let offset = 0;
-  while (offset < 1000) {
+  while (offset < 800) {
     const url = `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage%5B%5D=en&order%5Bchapter%5D=asc&limit=100&offset=${offset}`;
     const data = await fetchJson(url);
     if (!data?.data?.length) break;
 
     for (const ch of data.data) {
-      // Exclude dead external MangaPlus redirect stubs
       if (ch.attributes?.externalUrl) continue;
-
       const num = cleanNum(ch.attributes?.chapter);
       if (num !== null && !map.has(num)) {
         map.set(num, [{ type: 'mangadex', id: ch.id }]);
@@ -175,27 +161,20 @@ async function getMangaDexMap(mangaId) {
     }
     if (data.data.length < 100) break;
     offset += 100;
-    await delay(100);
+    await delay(200);
   }
   return map;
 }
 
 async function getMangaDexPages(chapterId) {
-  const atHome = await fetchJson(
-    `https://api.mangadex.org/at-home/server/${chapterId}`
-  );
+  const atHome = await fetchJson(`https://api.mangadex.org/at-home/server/${chapterId}`);
   if (!atHome?.baseUrl || !atHome?.chapter?.data?.length) return null;
   const { baseUrl, chapter } = atHome;
   return chapter.data.map((f) => `${baseUrl}/data/${chapter.hash}/${f}`);
 }
 
-// -------------------------------------------------------------
-// SOURCE 3: MangaPill (Unrestricted Aggregator Mirror)
-// -------------------------------------------------------------
 async function searchMangaPill(query) {
-  const html = await fetchHtml(
-    `https://mangapill.com/search?q=${encodeURIComponent(query)}`
-  );
+  const html = await fetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(query)}`);
   if (!html) return null;
   const match = html.match(/href="\/manga\/([0-9]+\/[^"]+)"/i);
   return match ? match[1] : null;
@@ -206,15 +185,12 @@ async function getMangaPillMap(mangaSlug) {
   const html = await fetchHtml(`https://mangapill.com/manga/${mangaSlug}`);
   if (!html) return map;
 
-  const regex =
-    /href="\/chapters\/([0-9]+-[0-9]+\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
+  const regex = /href="\/chapters\/([0-9]+-[0-9]+\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
   let match;
   while ((match = regex.exec(html)) !== null) {
-    const chapUrlId = match[1];
-    const chapText = match[2];
-    const num = cleanNum(chapText);
+    const num = cleanNum(match[2]);
     if (num !== null && !map.has(num)) {
-      map.set(num, [{ type: 'mangapill', id: chapUrlId }]);
+      map.set(num, [{ type: 'mangapill', id: match[1] }]);
     }
   }
   return map;
@@ -233,47 +209,7 @@ async function getMangaPillPages(chapUrlId) {
 }
 
 // -------------------------------------------------------------
-// SOURCE 4: Consumet / MangaHere Fallback
-// -------------------------------------------------------------
-async function searchConsumet(query) {
-  const data = await fetchJson(
-    `https://api.consumet.org/manga/mangahere/${encodeURIComponent(query)}`
-  );
-  return data?.results?.[0]?.id || null;
-}
-
-async function getConsumetMap(mangaId) {
-  const map = new Map();
-  const data = await fetchJson(
-    `https://api.consumet.org/manga/mangahere/info?id=${encodeURIComponent(
-      mangaId
-    )}`
-  );
-  if (!data?.chapters?.length) return map;
-
-  for (const ch of data.chapters) {
-    const num = cleanNum(ch.chapterNumber || ch.id);
-    if (num !== null && !map.has(num)) {
-      map.set(num, [{ type: 'consumet', id: ch.id }]);
-    }
-  }
-  return map;
-}
-
-async function getConsumetPages(chapterId) {
-  const data = await fetchJson(
-    `https://api.consumet.org/manga/mangahere/read?chapterId=${encodeURIComponent(
-      chapterId
-    )}`
-  );
-  if (Array.isArray(data)) {
-    return data.map((img) => img.img || img.url).filter(Boolean);
-  }
-  return null;
-}
-
-// -------------------------------------------------------------
-// Master Cascade: Compiles Maximum Chapters Across All Sources
+// Unified Map Builder
 // -------------------------------------------------------------
 async function buildUnifiedChapterMap(series) {
   const queries = getSearchCandidates(series);
@@ -281,31 +217,20 @@ async function buildUnifiedChapterMap(series) {
 
   const mergeMap = (newMap) => {
     for (const [chNum, list] of newMap.entries()) {
-      if (!unifiedMap.has(chNum)) {
-        unifiedMap.set(chNum, list);
-      } else {
-        unifiedMap.get(chNum).push(...list);
-      }
+      if (!unifiedMap.has(chNum)) unifiedMap.set(chNum, list);
+      else unifiedMap.get(chNum).push(...list);
     }
   };
 
-  // 1. Direct MangaDex UUID check if already saved in DB
   const isMdUuid = (str) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      str || ''
-    );
-  const mdId = isMdUuid(series.source_url)
-    ? series.source_url
-    : isMdUuid(series.slug)
-    ? series.slug
-    : null;
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str || '');
+  const mdId = isMdUuid(series.source_url) ? series.source_url : (isMdUuid(series.slug) ? series.slug : null);
 
   if (mdId) {
     const mdMap = await getMangaDexMap(mdId);
     mergeMap(mdMap);
   }
 
-  // 2. Query ComicK across candidate names
   for (const q of queries) {
     const ckHid = await searchComicK(q);
     if (ckHid) {
@@ -313,30 +238,18 @@ async function buildUnifiedChapterMap(series) {
       mergeMap(ckMap);
       if (ckMap.size > 0) break;
     }
-    await delay(100);
+    await delay(200);
   }
 
-  // 3. Query MangaPill across candidate names
-  for (const q of queries.slice(0, 2)) {
-    const mpSlug = await searchMangaPill(q);
-    if (mpSlug) {
-      const mpMap = await getMangaPillMap(mpSlug);
-      mergeMap(mpMap);
-      if (mpMap.size > 0) break;
-    }
-    await delay(100);
-  }
-
-  // 4. Fallback to Consumet / MangaHere if chapters are still sparse
   if (unifiedMap.size < 5) {
     for (const q of queries.slice(0, 2)) {
-      const cId = await searchConsumet(q);
-      if (cId) {
-        const cMap = await getConsumetMap(cId);
-        mergeMap(cMap);
-        if (cMap.size > 0) break;
+      const mpSlug = await searchMangaPill(q);
+      if (mpSlug) {
+        const mpMap = await getMangaPillMap(mpSlug);
+        mergeMap(mpMap);
+        if (mpMap.size > 0) break;
       }
-      await delay(100);
+      await delay(200);
     }
   }
 
@@ -344,160 +257,100 @@ async function buildUnifiedChapterMap(series) {
 }
 
 // -------------------------------------------------------------
-// Continuous Multi-Cycle Worker Loop (25-Minute Budget)
+// Worker Engine
 // -------------------------------------------------------------
 async function runWorker() {
-  const DURATION_LIMIT_MS =
-    parseInt(process.env.RUN_DURATION_MINUTES || '25', 10) * 60 * 1000;
-  const START_TIME = Date.now();
+  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Multi-Source Worker Initialized.`);
 
-  console.log(
-    `[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Continuous Auto-Backfill Loop Started (${
-      process.env.RUN_DURATION_MINUTES || 25
-    }m budget).`
-  );
+  const { data: emptySample } = await supabase
+    .from('chapters')
+    .select('series_id')
+    .or('pages.is.null,pages.eq.{}')
+    .limit(1000);
 
-  while (Date.now() - START_TIME < DURATION_LIMIT_MS) {
-    // Check if any empty chapters remain
-    const { data: emptySample } = await supabase
-      .from('chapters')
-      .select('series_id')
-      .or('pages.is.null,pages.eq.{}')
-      .limit(1000);
-
-    if (!emptySample?.length) {
-      console.log('🎉 Database 100% complete! No empty chapters remain.');
-      return;
-    }
-
-    const distinctSeriesIds = [...new Set(emptySample.map((c) => c.series_id))];
-
-    const { data: allSeries } = await supabase
-      .from('series')
-      .select(
-        'id, title, slug, source_url, english_title, native_title, synonyms, updated_at'
-      )
-      .in('id', distinctSeriesIds)
-      .order('updated_at', { ascending: true, nullsFirst: true })
-      .limit(100);
-
-    if (!allSeries?.length) {
-      await delay(5000);
-      continue;
-    }
-
-    const assigned = allSeries.filter(
-      (_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1
-    );
-
-    if (!assigned.length) {
-      console.log(
-        `[Worker ${WORKER_ID}] No series assigned in this sub-cycle. Waiting 5s...`
-      );
-      await delay(5000);
-      continue;
-    }
-
-    for (const s of assigned) {
-      if (Date.now() - START_TIME >= DURATION_LIMIT_MS) {
-        console.log(
-          `[Worker ${WORKER_ID}] Time limit reached for this run. Gracefully exiting.`
-        );
-        return;
-      }
-
-      const { data: emptyChapters } = await supabase
-        .from('chapters')
-        .select('id, chapter_number')
-        .eq('series_id', s.id)
-        .or('pages.is.null,pages.eq.{}')
-        .order('chapter_number', { ascending: true })
-        .limit(100);
-
-      if (!emptyChapters?.length) {
-        await supabase
-          .from('series')
-          .update({ updated_at: new Date().toISOString() })
-          .eq('id', s.id);
-        continue;
-      }
-
-      console.log(
-        `\n[Worker ${WORKER_ID}] Auditing "${s.title}" (${emptyChapters.length} empty chapters to fill)...`
-      );
-
-      const unifiedMap = await buildUnifiedChapterMap(s);
-      console.log(
-        `[Worker ${WORKER_ID}] Available playable chapters across providers: ${unifiedMap.size}`
-      );
-
-      if (unifiedMap.size === 0) {
-        await supabase
-          .from('series')
-          .update({ updated_at: new Date().toISOString() })
-          .eq('id', s.id);
-        continue;
-      }
-
-      let filledCount = 0;
-      const CHUNK_SIZE = 4;
-
-      for (let i = 0; i < emptyChapters.length; i += CHUNK_SIZE) {
-        const chunk = emptyChapters.slice(i, i + CHUNK_SIZE);
-
-        await Promise.all(
-          chunk.map(async (ch) => {
-            const targetNum = cleanNum(ch.chapter_number);
-            if (targetNum === null || !unifiedMap.has(targetNum)) return;
-
-            const candidates = unifiedMap.get(targetNum);
-            let pages = null;
-
-            for (const cand of candidates) {
-              try {
-                if (cand.type === 'comick') {
-                  pages = await getComicKPages(cand.id);
-                } else if (cand.type === 'mangadex') {
-                  pages = await getMangaDexPages(cand.id);
-                } else if (cand.type === 'mangapill') {
-                  pages = await getMangaPillPages(cand.id);
-                } else if (cand.type === 'consumet') {
-                  pages = await getConsumetPages(cand.id);
-                }
-                if (pages && pages.length > 0) break;
-              } catch {}
-            }
-
-            if (pages && pages.length > 0) {
-              const { error: upErr } = await supabase
-                .from('chapters')
-                .update({ pages })
-                .eq('id', ch.id);
-
-              if (!upErr) {
-                filledCount++;
-                console.log(
-                  `✓ [Worker ${WORKER_ID}] "${s.title}" Ch. ${ch.chapter_number} -> ${pages.length} panels`
-                );
-              }
-            }
-          })
-        );
-
-        await delay(150);
-      }
-
-      console.log(
-        `[Worker ${WORKER_ID}] Result for "${s.title}": filled ${filledCount}/${emptyChapters.length}`
-      );
-      await supabase
-        .from('series')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', s.id);
-    }
+  if (!emptySample?.length) {
+    console.log('No empty chapters found. Database 100% complete.');
+    return;
   }
 
-  console.log(`[Worker ${WORKER_ID}] Worker 25-minute cycle complete.`);
+  const distinctSeriesIds = [...new Set(emptySample.map((c) => c.series_id))];
+
+  // Fetch up to 100 series ordered by oldest updated
+  const { data: allSeries } = await supabase
+    .from('series')
+    .select('id, title, slug, source_url, english_title, native_title, synonyms, updated_at')
+    .in('id', distinctSeriesIds)
+    .order('updated_at', { ascending: true, nullsFirst: true })
+    .limit(100);
+
+  if (!allSeries?.length) return;
+
+  const assigned = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
+  console.log(`[Worker ${WORKER_ID}] Assigned ${assigned.length} series.`);
+
+  for (const s of assigned) {
+    const { data: emptyChapters } = await supabase
+      .from('chapters')
+      .select('id, chapter_number')
+      .eq('series_id', s.id)
+      .or('pages.is.null,pages.eq.{}')
+      .order('chapter_number', { ascending: true })
+      .limit(80);
+
+    if (!emptyChapters?.length) {
+      await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
+      continue;
+    }
+
+    console.log(`\n[Worker ${WORKER_ID}] Auditing "${s.title}" (${emptyChapters.length} empty chapters)...`);
+
+    const unifiedMap = await buildUnifiedChapterMap(s);
+    console.log(`[Worker ${WORKER_ID}] Available playable chapters across providers: ${unifiedMap.size}`);
+
+    if (unifiedMap.size === 0) {
+      await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
+      continue;
+    }
+
+    let filledCount = 0;
+
+    // Process chapters with a safe delay to respect provider rate limits
+    for (const ch of emptyChapters) {
+      const targetNum = cleanNum(ch.chapter_number);
+      if (targetNum === null || !unifiedMap.has(targetNum)) continue;
+
+      const candidates = unifiedMap.get(targetNum);
+      let pages = null;
+
+      for (const cand of candidates) {
+        try {
+          if (cand.type === 'comick') pages = await getComicKPages(cand.id);
+          else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
+          else if (cand.type === 'mangapill') pages = await getMangaPillPages(cand.id);
+          if (pages && pages.length > 0) break;
+        } catch {}
+      }
+
+      if (pages && pages.length > 0) {
+        const { error: upErr } = await supabase
+          .from('chapters')
+          .update({ pages })
+          .eq('id', ch.id);
+
+        if (!upErr) {
+          filledCount++;
+          console.log(`✓ [Worker ${WORKER_ID}] "${s.title}" Ch. ${ch.chapter_number} -> ${pages.length} panels`);
+        }
+      }
+
+      await delay(350); // Steady rate pacing
+    }
+
+    console.log(`[Worker ${WORKER_ID}] Result for "${s.title}": filled ${filledCount}/${emptyChapters.length}`);
+    await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
+  }
+
+  console.log(`[Worker ${WORKER_ID}] Pass completed.`);
 }
 
 runWorker().catch((err) => {
