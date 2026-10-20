@@ -16,8 +16,10 @@ interface SeriesItem {
   id: string;
   slug: string;
   title: string;
+  english_title?: string | null;
   synopsis: string | null;
   cover_image_url: string | null;
+  cover_url?: string | null;
   reading_mode: string | null;
   total_chapters?: number;
 }
@@ -36,6 +38,7 @@ interface RecentComment {
   created_at: string;
   series: {
     title: string;
+    english_title?: string | null;
     slug: string;
   };
 }
@@ -55,55 +58,56 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
     if (items.length <= 1) return;
     const interval = setInterval(() => {
       setIndex((prev) => (prev + 1) % items.length);
-    }, 3500);
+    }, 4000);
     return () => clearInterval(interval);
   }, [items.length]);
 
   if (!items || items.length === 0) return null;
   const current = items[index];
   const coverUrl = getCoverUrl(current);
+  const displayTitle = current.english_title || current.title;
 
   return (
-    <div className="relative w-full aspect-[16/9] max-h-[280px] sm:max-h-[340px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-xl group">
+    <div className="relative w-full aspect-[16/9] max-h-[280px] sm:max-h-[340px] rounded-3xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-2xl group">
       <div
         className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700"
         style={{ backgroundImage: `url(${coverUrl})` }}
       />
       <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-black via-black/85 to-black/30 z-10" />
 
-      <div className="relative z-20 w-full h-full p-4 sm:p-6 flex items-center justify-between gap-4">
-        <div className="max-w-[65%] sm:max-w-md space-y-1.5">
+      <div className="relative z-20 w-full h-full p-5 sm:p-7 flex items-center justify-between gap-4">
+        <div className="max-w-[65%] sm:max-w-md space-y-2">
           <div className="flex items-center gap-2">
-            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded bg-indigo-500/30 text-indigo-300 border border-indigo-500/40">
+            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded-lg bg-indigo-500/30 text-indigo-300 border border-indigo-500/40">
               Spotlight #{index + 1}
             </span>
-            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded bg-black/60 text-neutral-300 border border-white/10">
+            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded-lg bg-black/60 text-neutral-300 border border-white/10">
               {current.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
             </span>
           </div>
 
-          <h2 className="text-sm sm:text-lg font-black text-white line-clamp-1">
-            {current.title}
+          <h2 className="text-base sm:text-xl font-black text-white line-clamp-1 tracking-tight">
+            {displayTitle}
           </h2>
 
-          <p className="text-[10px] sm:text-xs text-neutral-400 line-clamp-2">
-            {current.synopsis || 'Read online for free on MangaFlow.'}
+          <p className="text-[10px] sm:text-xs text-neutral-400 line-clamp-2 leading-relaxed">
+            {current.synopsis || 'Read online for free in high definition on MangaFlow.'}
           </p>
 
-          <div className="pt-1">
+          <div className="pt-1.5">
             <Link
               href={`/series/${current.slug}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg shadow-md transition"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
             >
               Read Now →
             </Link>
           </div>
         </div>
 
-        <div className="shrink-0 w-24 sm:w-32 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900">
+        <div className="shrink-0 w-24 sm:w-32 aspect-[3/4.2] rounded-2xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900">
           <img
             src={coverUrl}
-            alt={current.title}
+            alt={displayTitle}
             referrerPolicy="no-referrer"
             className="w-full h-full object-cover"
             onError={(e) => {
@@ -119,7 +123,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
 function ShareBar() {
   const [copied, setCopied] = useState(false);
   const siteUrl = 'https://mangaflow-psi.vercel.app';
-  const shareText = 'Read free manga and manhwa on MangaFlow!';
+  const shareText = 'Read free manga and manhwa in high definition on MangaFlow!';
 
   const copyUrl = () => {
     if (typeof window !== 'undefined') {
@@ -130,21 +134,9 @@ function ShareBar() {
   };
 
   return (
-    <div className="flex items-center justify-between bg-[#13151f] border border-neutral-800/80 px-4 py-2.5 rounded-xl text-xs">
+    <div className="flex items-center justify-between bg-[#13151f] border border-neutral-800/80 px-4 py-2.5 rounded-2xl text-xs">
       <span className="text-[11px] font-semibold text-neutral-400">Share MangaFlow:</span>
       <div className="flex items-center gap-2">
-        <a
-          href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(siteUrl)}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="p-1.5 bg-[#1877F2]/20 hover:bg-[#1877F2]/30 text-[#1877F2] rounded-lg transition"
-          title="Share to Facebook"
-        >
-          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
-          </svg>
-        </a>
-
         <a
           href={`https://twitter.com/intent/tweet?url=${encodeURIComponent(siteUrl)}&text=${encodeURIComponent(shareText)}`}
           target="_blank"
@@ -181,18 +173,6 @@ function ShareBar() {
           </svg>
         </a>
 
-        <a
-          href={`https://reddit.com/submit?url=${encodeURIComponent(siteUrl)}&title=${encodeURIComponent('MangaFlow Free Reader')}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="p-1.5 bg-[#FF4500]/20 hover:bg-[#FF4500]/30 text-[#FF4500] rounded-lg transition"
-          title="Share to Reddit"
-        >
-          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .616-.319 1.157-.802 1.467.037.234.056.474.056.719 0 3.654-4.244 6.617-9.477 6.617-5.233 0-9.477-2.963-9.477-6.617 0-.245.019-.485.056-.719a1.745 1.745 0 0 1-.802-1.467c0-.968.786-1.754 1.754-1.754.477 0 .899.182 1.207.491 1.194-.856 2.85-1.418 4.674-1.488l.964-4.516a.375.375 0 0 1 .444-.289l3.18.669a1.248 1.248 0 0 1 1.066-.607z" />
-          </svg>
-        </a>
-
         <button
           onClick={copyUrl}
           className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded-lg transition"
@@ -220,6 +200,7 @@ export default function HomePage() {
         id, 
         slug, 
         title, 
+        english_title,
         synopsis, 
         cover_image_url, 
         reading_mode,
@@ -249,7 +230,7 @@ export default function HomePage() {
             .limit(30),
           supabase
             .from('series_comments')
-            .select('id, username, content, created_at, series (title, slug)')
+            .select('id, username, content, created_at, series (title, english_title, slug)')
             .order('created_at', { ascending: false })
             .limit(6),
         ]);
@@ -259,6 +240,7 @@ export default function HomePage() {
             id: s.id,
             slug: s.slug || s.id,
             title: s.title,
+            english_title: s.english_title,
             synopsis: s.synopsis,
             cover_image_url: s.cover_image_url,
             reading_mode: s.reading_mode,
@@ -271,19 +253,45 @@ export default function HomePage() {
         setRandomList(sanitize(randomRes.data || []).sort(() => 0.5 - Math.random()).slice(0, 12));
         setRecentComments((commRes.data as any) || []);
 
+        // Reading History Resolution (Cloud Authenticated + Guest LocalStorage Fallback)
+        let resolvedHistory: ContinueItem[] = [];
+
         const { data: authData } = await supabase.auth.getUser();
         if (authData?.user) {
           const { data: historyData } = await supabase
             .from('reading_history')
-            .select('series_id, chapter_id, chapter_number, series (id, slug, title, cover_image_url, reading_mode)')
+            .select('series_id, chapter_id, chapter_number, series (id, slug, title, english_title, cover_image_url, reading_mode)')
             .eq('user_id', authData.user.id)
             .order('updated_at', { ascending: false })
-            .limit(12);
+            .limit(10);
 
-          if (historyData) {
-            setContinueList(historyData as any);
+          if (historyData?.length) {
+            resolvedHistory = historyData as any;
           }
         }
+
+        // If no cloud data, load guest reading history from localStorage
+        if (resolvedHistory.length === 0 && typeof window !== 'undefined') {
+          try {
+            const local = JSON.parse(localStorage.getItem('mangaflow_reading_history') || '{}');
+            const items = Object.values(local).map((item: any) => ({
+              series_id: item.seriesId,
+              chapter_id: item.chapterId,
+              chapter_number: item.chapterNumber,
+              series: {
+                id: item.seriesId,
+                slug: item.seriesSlug,
+                title: item.seriesTitle,
+                english_title: item.seriesTitle,
+                cover_image_url: item.coverUrl,
+                reading_mode: 'manga',
+              },
+            }));
+            resolvedHistory = items as any;
+          } catch {}
+        }
+
+        setContinueList(resolvedHistory);
       } catch (err) {
         console.error('Error fetching home feeds:', err);
       } finally {
@@ -322,6 +330,7 @@ export default function HomePage() {
         <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 px-3 sm:px-0 scroll-smooth">
           {items.map((item) => {
             const cover = getCoverUrl(item);
+            const displayTitle = item.english_title || item.title;
 
             return (
               <Link
@@ -329,10 +338,10 @@ export default function HomePage() {
                 href={`/series/${item.slug}`}
                 className="shrink-0 w-28 sm:w-36 flex flex-col group"
               >
-                <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition">
+                <div className="relative aspect-[3/4.2] w-full rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition shadow-sm">
                   <img
                     src={cover}
-                    alt={item.title}
+                    alt={displayTitle}
                     referrerPolicy="no-referrer"
                     loading="lazy"
                     className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
@@ -344,8 +353,11 @@ export default function HomePage() {
                     {item.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
                   </span>
                 </div>
-                <h3 className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition">
-                  {item.title}
+                <h3
+                  className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition"
+                  title={displayTitle}
+                >
+                  {displayTitle}
                 </h3>
               </Link>
             );
@@ -365,6 +377,7 @@ export default function HomePage() {
 
   return (
     <main className="max-w-7xl mx-auto px-0 sm:px-6 lg:px-8 py-4 space-y-6 sm:space-y-8">
+      {/* Top Spotlight Banner */}
       <div className="px-3 sm:px-0">
         <SpotlightSlider items={trendingList.slice(0, 7)} />
       </div>
@@ -373,6 +386,7 @@ export default function HomePage() {
         <ShareBar />
       </div>
 
+      {/* Continue Reading Row */}
       {continueList.length > 0 && (
         <section className="space-y-3">
           <div className="flex items-center justify-between px-3 sm:px-0">
@@ -387,6 +401,7 @@ export default function HomePage() {
           <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 px-3 sm:px-0">
             {continueList.map((entry) => {
               const cover = getCoverUrl(entry.series);
+              const displayTitle = entry.series?.english_title || entry.series?.title || 'Series';
 
               return (
                 <Link
@@ -394,22 +409,25 @@ export default function HomePage() {
                   href={`/read/${entry.chapter_id}`}
                   className="shrink-0 w-28 sm:w-36 flex flex-col group"
                 >
-                  <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition">
+                  <div className="relative aspect-[3/4.2] w-full rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 transition shadow-sm">
                     <img
                       src={cover}
-                      alt={entry.series?.title || 'Series'}
+                      alt={displayTitle}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                       onError={(e) => {
                         (e.target as HTMLImageElement).src = FALLBACK_COVER;
                       }}
                     />
-                    <span className="absolute bottom-1.5 right-1.5 text-[8px] font-black px-1.5 py-0.5 rounded bg-black/90 text-emerald-400 border border-emerald-500/30">
+                    <span className="absolute bottom-1.5 right-1.5 text-[8px] font-black px-1.5 py-0.5 rounded-lg bg-black/90 text-emerald-400 border border-emerald-500/30">
                       Ch. {entry.chapter_number}
                     </span>
                   </div>
-                  <h3 className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition">
-                    {entry.series?.title}
+                  <h3
+                    className="text-xs font-semibold text-neutral-200 truncate mt-1.5 group-hover:text-indigo-400 transition"
+                    title={displayTitle}
+                  >
+                    {displayTitle}
                   </h3>
                 </Link>
               );
@@ -418,6 +436,7 @@ export default function HomePage() {
         </section>
       )}
 
+      {/* Main Shelves */}
       <HorizontalRow
         title="Trending Series"
         viewAllHref="/category/trending"
@@ -443,6 +462,7 @@ export default function HomePage() {
         badgeColor="bg-cyan-500"
       />
 
+      {/* Live Discussions Board */}
       <section className="space-y-3 px-3 sm:px-0 pt-6 border-t border-neutral-800/60">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -462,33 +482,37 @@ export default function HomePage() {
               No discussions yet. Visit any series detail page to start a conversation!
             </div>
           ) : (
-            recentComments.map((comm) => (
-              <Link
-                key={comm.id}
-                href={`/series/${comm.series?.slug}`}
-                className="p-3.5 sm:p-4 hover:bg-neutral-800/30 transition flex items-start gap-3 group"
-              >
-                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center font-bold text-white text-xs shrink-0 mt-0.5">
-                  {comm.username[0]?.toUpperCase() || 'U'}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 transition truncate">
-                      {comm.username}
-                      <span className="text-[10px] font-normal text-neutral-500 ml-2">
-                        on {comm.series?.title}
-                      </span>
-                    </span>
-                    <span className="text-[10px] text-neutral-500 shrink-0">
-                      {new Date(comm.created_at).toLocaleDateString()}
-                    </span>
+            recentComments.map((comm) => {
+              const seriesTitle = comm.series?.english_title || comm.series?.title;
+
+              return (
+                <Link
+                  key={comm.id}
+                  href={`/series/${comm.series?.slug}`}
+                  className="p-3.5 sm:p-4 hover:bg-neutral-800/30 transition flex items-start gap-3 group"
+                >
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center font-bold text-white text-xs shrink-0 mt-0.5 shadow-md">
+                    {comm.username[0]?.toUpperCase() || 'U'}
                   </div>
-                  <p className="text-xs text-neutral-400 line-clamp-2 leading-relaxed">
-                    &ldquo;{comm.content}&rdquo;
-                  </p>
-                </div>
-              </Link>
-            ))
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 transition truncate">
+                        {comm.username}
+                        <span className="text-[10px] font-normal text-neutral-500 ml-2">
+                          on {seriesTitle}
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-neutral-500 shrink-0">
+                        {new Date(comm.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <p className="text-xs text-neutral-400 line-clamp-2 leading-relaxed">
+                      &ldquo;{comm.content}&rdquo;
+                    </p>
+                  </div>
+                </Link>
+              );
+            })
           )}
         </div>
       </section>
