@@ -10,21 +10,38 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
+// 18+ Iconic Characters Across Manga, Manhwa, and Manhua
 const CHARACTER_AVATARS = [
-  { id: 'jinwoo', name: 'Sung Jin-Woo', url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=150&auto=format&fit=crop&q=80' },
-  { id: 'gojo', name: 'Satoru Gojo', url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=150&auto=format&fit=crop&q=80' },
-  { id: 'luffy', name: 'Monkey D. Luffy', url: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=150&auto=format&fit=crop&q=80' },
-  { id: 'zoro', name: 'Roronoa Zoro', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=150&auto=format&fit=crop&q=80' },
-  { id: 'eren', name: 'Eren Yeager', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80' },
-  { id: 'frieren', name: 'Frieren', url: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=150&auto=format&fit=crop&q=80' },
-  { id: 'anya', name: 'Anya Forger', url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=150&auto=format&fit=crop&q=80' },
-  { id: 'chahaein', name: 'Cha Hae-In', url: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=150&auto=format&fit=crop&q=80' },
+  // Manga Legends
+  { id: 'luffy', name: 'Monkey D. Luffy (One Piece)', url: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f3f4-200d-2620-fe0f.png', bg: '#ef4444' },
+  { id: 'ichigo', name: 'Ichigo Kurosaki (Bleach)', url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=150&auto=format&fit=crop&q=80', bg: '#f97316' },
+  { id: 'goku', name: 'Son Goku (Dragon Ball)', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=150&auto=format&fit=crop&q=80', bg: '#eab308' },
+  { id: 'zoro', name: 'Roronoa Zoro (One Piece)', url: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=150&auto=format&fit=crop&q=80', bg: '#10b981' },
+  { id: 'gojo', name: 'Satoru Gojo (Jujutsu Kaisen)', url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=150&auto=format&fit=crop&q=80', bg: '#3b82f6' },
+  { id: 'naruto', name: 'Naruto Uzumaki (Naruto)', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80', bg: '#f59e0b' },
+  { id: 'eren', name: 'Eren Yeager (Attack on Titan)', url: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=150&auto=format&fit=crop&q=80', bg: '#78716c' },
+  { id: 'frieren', name: 'Frieren (Beyond Journey\'s End)', url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=150&auto=format&fit=crop&q=80', bg: '#ec4899' },
+  { id: 'anya', name: 'Anya Forger (Spy × Family)', url: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=150&auto=format&fit=crop&q=80', bg: '#f43f5e' },
+  { id: 'kaneki', name: 'Ken Kaneki (Tokyo Ghoul)', url: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=150&auto=format&fit=crop&q=80', bg: '#64748b' },
+
+  // Manhwa Icons
+  { id: 'jinwoo', name: 'Sung Jin-Woo (Solo Leveling)', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80', bg: '#6366f1' },
+  { id: 'chahaein', name: 'Cha Hae-In (Solo Leveling)', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=150&auto=format&fit=crop&q=80', bg: '#eab308' },
+  { id: 'dokja', name: 'Kim Dokja (Omniscient Reader)', url: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=150&auto=format&fit=crop&q=80', bg: '#0284c7' },
+  { id: 'arthur', name: 'Arthur Leywin (TBATE)', url: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=150&auto=format&fit=crop&q=80', bg: '#8b5cf6' },
+  { id: 'jinmori', name: 'Jin Mori (God of High School)', url: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=150&auto=format&fit=crop&q=80', bg: '#f97316' },
+  { id: 'chungmyung', name: 'Chung Myung (Return of Mount Hua)', url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=150&auto=format&fit=crop&q=80', bg: '#14b8a6' },
+
+  // Manhua Legends
+  { id: 'yangkai', name: 'Yang Kai (Martial Peak)', url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=150&auto=format&fit=crop&q=80', bg: '#d97706' },
+  { id: 'luozheng', name: 'Luo Zheng (Apotheosis)', url: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?w=150&auto=format&fit=crop&q=80', bg: '#8b5cf6' },
 ];
 
 interface SearchResult {
   id: string;
   slug: string;
   title: string;
+  english_title?: string | null;
   cover_image_url: string;
   reading_mode: string;
 }
@@ -165,23 +182,57 @@ export default function RootLayout({
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
-  // Search debouncing
+  // Multi-Title Search (English, Romaji, Pinyin, Synonyms)
   useEffect(() => {
-    if (!query.trim()) {
+    const trimmed = query.trim();
+    if (!trimmed || trimmed.length < 2) {
       setResults([]);
       return;
     }
 
     const timer = setTimeout(async () => {
       setLoadingSearch(true);
-      const { data } = await supabase
-        .from('series')
-        .select('id, slug, title, cover_image_url, reading_mode')
-        .ilike('title', `%${query.trim()}%`)
-        .limit(6);
+      try {
+        // 1. Check multi-title function in Supabase
+        const { data: rpcData, error: rpcError } = await supabase.rpc('search_all_titles', {
+          search_query: trimmed,
+        });
 
-      setResults(data || []);
-      setLoadingSearch(false);
+        if (!rpcError && rpcData?.length) {
+          setResults(
+            rpcData.map((s: any) => ({
+              id: s.id,
+              slug: s.slug || s.id,
+              title: s.english_title || s.title,
+              english_title: s.english_title,
+              cover_image_url: s.cover_image_url || s.cover_url || '',
+              reading_mode: s.reading_mode || 'manga',
+            }))
+          );
+        } else {
+          // Direct fallback across columns
+          const { data: fallbackData } = await supabase
+            .from('series')
+            .select('id, slug, title, english_title, cover_image_url, reading_mode')
+            .or(`title.ilike.%${trimmed}%,english_title.ilike.%${trimmed}%`)
+            .limit(10);
+
+          setResults(
+            (fallbackData || []).map((s: any) => ({
+              id: s.id,
+              slug: s.slug || s.id,
+              title: s.english_title || s.title,
+              english_title: s.english_title,
+              cover_image_url: s.cover_image_url || '',
+              reading_mode: s.reading_mode || 'manga',
+            }))
+          );
+        }
+      } catch (err) {
+        console.error('Search error:', err);
+      } finally {
+        setLoadingSearch(false);
+      }
     }, 180);
 
     return () => clearTimeout(timer);
@@ -258,7 +309,7 @@ export default function RootLayout({
       </head>
       <body className="bg-[#0b0c10] text-neutral-100 antialiased min-h-screen flex flex-col selection:bg-indigo-600 selection:text-white">
         
-        {/* PWA App Install Slide-Down Banner */}
+        {/* PWA App Install Banner */}
         {showPwaBanner && (
           <aside aria-label="Install App" className="sticky top-0 z-50 bg-gradient-to-r from-indigo-900/90 via-violet-900/90 to-neutral-900/90 border-b border-indigo-500/30 px-4 py-2 flex items-center justify-between text-xs backdrop-blur-md">
             <div className="flex items-center gap-2">
@@ -351,11 +402,11 @@ export default function RootLayout({
                   </Link>
                   <div className="my-1 border-t border-neutral-700/60" />
                   <Link
-                    href="/filter"
+                    href="/browse"
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2.5 px-3.5 py-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 hover:bg-neutral-800/70 transition"
                   >
-                    Filter & Browse
+                    Browse Library
                   </Link>
                 </div>
               )}
@@ -374,7 +425,7 @@ export default function RootLayout({
                 </svg>
               </button>
 
-              {/* Notification Bell Button with Unread Pulse */}
+              {/* Notification Bell Button */}
               <button
                 type="button"
                 onClick={() => setNotifOpen(true)}
@@ -432,7 +483,7 @@ export default function RootLayout({
                         }}
                         className="w-full text-left flex items-center gap-2.5 px-3.5 py-2 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-neutral-800/70 transition"
                       >
-                        <span>👤</span> Edit Profile
+                        <span>👤</span> Edit Profile & Avatar
                       </button>
 
                       <Link
@@ -539,12 +590,12 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* Edit Profile Modal */}
+        {/* Edit Profile & Avatar Selection Modal */}
         {editProfileOpen && (
           <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="relative w-full max-w-sm bg-[#141722] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
+            <div className="relative w-full max-w-md bg-[#141722] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
               <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
-                <h3 className="text-sm font-bold text-white">Customize Profile</h3>
+                <h3 className="text-sm font-bold text-white">Customize Profile & Avatar</h3>
                 <button
                   type="button"
                   onClick={() => setEditProfileOpen(false)}
@@ -554,7 +605,7 @@ export default function RootLayout({
                 </button>
               </div>
 
-              <form onSubmit={handleSaveProfile} className="space-y-4">
+              <form onSubmit={handleSaveProfile} className="space-y-5">
                 <div>
                   <label className="text-[11px] font-bold text-neutral-400 block mb-1">
                     Display Name
@@ -571,22 +622,35 @@ export default function RootLayout({
 
                 <div>
                   <label className="text-[11px] font-bold text-neutral-400 block mb-2">
-                    Select Anime / Manhwa Avatar
+                    Choose Character Avatar (Manga • Manhwa • Manhua)
                   </label>
-                  <div className="grid grid-cols-4 gap-2.5">
+                  <div className="grid grid-cols-4 sm:grid-cols-6 gap-2.5 max-h-56 overflow-y-auto p-1 border border-neutral-800 rounded-xl bg-neutral-950/50">
                     {CHARACTER_AVATARS.map((av) => (
                       <button
                         key={av.id}
                         type="button"
                         onClick={() => setSelectedAvatar(av.url)}
                         title={av.name}
-                        className={`relative aspect-square rounded-xl overflow-hidden border-2 transition ${
+                        className={`relative aspect-square rounded-xl overflow-hidden border-2 transition group flex items-center justify-center ${
                           selectedAvatar === av.url
-                            ? 'border-indigo-500 scale-105 shadow-md shadow-indigo-500/40'
-                            : 'border-transparent opacity-60 hover:opacity-100'
+                            ? 'border-indigo-500 scale-105 shadow-md shadow-indigo-500/50'
+                            : 'border-transparent opacity-65 hover:opacity-100 hover:border-neutral-600'
                         }`}
+                        style={{ backgroundColor: av.bg }}
                       >
-                        <img src={av.url} alt={av.name} className="w-full h-full object-cover" />
+                        <img
+                          src={av.url}
+                          alt={av.name}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            // Fallback character badge
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                        <span className="absolute bottom-0 inset-x-0 bg-black/80 text-[8px] font-bold text-center text-white py-0.5 truncate px-1">
+                          {av.name.split(' ')[0]}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -595,7 +659,7 @@ export default function RootLayout({
                 <button
                   type="submit"
                   disabled={savingProfile}
-                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-bold text-xs text-white rounded-lg transition"
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 font-bold text-xs text-white rounded-lg transition shadow-md shadow-indigo-600/30"
                 >
                   {savingProfile ? 'Saving Changes...' : 'Save Profile'}
                 </button>
@@ -683,7 +747,7 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* Floating Search Bar */}
+        {/* Global Floating Search Bar Modal */}
         {searchOpen && (
           <div className="sticky top-14 z-40 w-full px-3 sm:px-6 max-w-lg mx-auto">
             <div className="bg-[#151824] border border-neutral-700 rounded-xl shadow-2xl overflow-hidden mt-2">
@@ -693,8 +757,9 @@ export default function RootLayout({
                   type="text"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search series title..."
+                  placeholder="Search by English, Romaji, Pinyin, or Alternate Titles..."
                   className="flex-1 bg-transparent text-xs text-white placeholder-neutral-500 focus:outline-none"
+                  autoFocus
                 />
                 {query && (
                   <button onClick={() => setQuery('')} className="text-neutral-400 hover:text-white text-xs px-1">
@@ -704,36 +769,49 @@ export default function RootLayout({
               </div>
 
               {query && (
-                <div className="max-h-72 overflow-y-auto divide-y divide-neutral-800/60 bg-[#151824]">
+                <div className="max-h-80 overflow-y-auto divide-y divide-neutral-800/60 bg-[#151824]">
                   {loadingSearch && (
-                    <div className="p-3 text-center text-xs text-neutral-400">Searching...</div>
+                    <div className="p-3 text-center text-xs text-neutral-400">Searching library...</div>
                   )}
 
-                  {!loadingSearch && results.map((item) => (
-                    <Link
-                      key={item.id}
-                      href={`/series/${item.slug}`}
-                      onClick={() => setSearchOpen(false)}
-                      className="flex items-center gap-3 px-3 py-2 hover:bg-neutral-800/60 transition group"
-                    >
-                      <div className="w-9 h-12 rounded overflow-hidden bg-neutral-900 shrink-0">
-                        <img
-                          src={item.cover_image_url}
-                          alt={item.title}
-                          referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <h4 className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 truncate">
-                          {item.title}
-                        </h4>
-                        <span className="text-[10px] text-neutral-400 uppercase font-medium">
-                          {item.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
-                        </span>
-                      </div>
-                    </Link>
-                  ))}
+                  {!loadingSearch && results.length === 0 && (
+                    <div className="p-4 text-center text-xs text-neutral-500">
+                      No titles found. Try searching by English, Japanese, or Chinese name.
+                    </div>
+                  )}
+
+                  {!loadingSearch &&
+                    results.map((item) => (
+                      <Link
+                        key={item.id}
+                        href={`/series/${item.slug}`}
+                        onClick={() => setSearchOpen(false)}
+                        className="flex items-center gap-3 px-3 py-2 hover:bg-neutral-800/60 transition group"
+                      >
+                        <div className="w-9 h-12 rounded overflow-hidden bg-neutral-900 shrink-0 border border-white/5">
+                          {item.cover_image_url ? (
+                            <img
+                              src={item.cover_image_url}
+                              alt={item.title}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-[8px] text-neutral-600">
+                              Cover
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h4 className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 truncate">
+                            {item.title}
+                          </h4>
+                          <span className="text-[10px] text-neutral-400 uppercase font-medium">
+                            {item.reading_mode === 'webtoon' ? 'Manhwa / Manhua' : 'Manga'}
+                          </span>
+                        </div>
+                      </Link>
+                    ))}
                 </div>
               )}
             </div>
