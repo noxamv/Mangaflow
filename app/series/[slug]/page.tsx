@@ -62,7 +62,7 @@ export default function SeriesDetailsPage() {
 
         setSeries(seriesData);
 
-        // 1. Check local reading history for guest progress
+        // 1. Local reading history for instant resume
         try {
           const local = JSON.parse(localStorage.getItem('mangaflow_reading_history') || '{}');
           if (local[seriesData.id]) {
@@ -71,32 +71,32 @@ export default function SeriesDetailsPage() {
           }
         } catch {}
 
-        // 2. Check user follow & cloud reading status
+        // 2. User Follow/Bookmark State
         const { data: userData } = await supabase.auth.getUser();
         if (userData?.user) {
-          const [followRes, historyRes] = await Promise.all([
-            supabase
-              .from('user_follows')
-              .select('id')
-              .eq('user_id', userData.user.id)
-              .eq('series_id', seriesData.id)
-              .maybeSingle(),
-            supabase
-              .from('reading_history')
-              .select('chapter_id, chapter_number')
-              .eq('user_id', userData.user.id)
-              .eq('series_id', seriesData.id)
-              .maybeSingle(),
-          ]);
+          const { data: followRecord } = await supabase
+            .from('user_follows')
+            .select('id')
+            .eq('user_id', userData.user.id)
+            .eq('series_id', seriesData.id)
+            .maybeSingle();
 
-          if (followRes.data) setIsFollowing(true);
-          if (historyRes.data) {
-            setResumeId(historyRes.data.chapter_id);
-            setResumeNum(historyRes.data.chapter_number);
+          if (followRecord) setIsFollowing(true);
+
+          const { data: cloudHistory } = await supabase
+            .from('reading_history')
+            .select('chapter_id, chapter_number')
+            .eq('user_id', userData.user.id)
+            .eq('series_id', seriesData.id)
+            .maybeSingle();
+
+          if (cloudHistory) {
+            setResumeId(cloudHistory.chapter_id);
+            setResumeNum(cloudHistory.chapter_number);
           }
         }
 
-        // 3. Fetch all chapters for this series
+        // 3. Fetch Chapters
         const { data: chapterData } = await supabase
           .from('chapters')
           .select('id, chapter_number, title, pages')
@@ -161,13 +161,14 @@ export default function SeriesDetailsPage() {
   }
 
   const primaryTitle = series.english_title || series.title;
-  const playableChapters = chapters.filter((c) => Array.isArray(c.pages) && c.pages.length > 0);
+  const playableChapters = chapters.filter((c) => Array.isArray(c.pages) && (c.pages?.length ?? 0) > 0);
   const firstChapter = playableChapters[playableChapters.length - 1] || chapters[chapters.length - 1];
   const latestChapter = playableChapters[0] || chapters[0];
 
   let synList: string[] = [];
-  if (Array.isArray(series.synonyms)) synList = series.synonyms;
-  else if (typeof series.synonyms === 'string') {
+  if (Array.isArray(series.synonyms)) {
+    synList = series.synonyms;
+  } else if (typeof series.synonyms === 'string') {
     try {
       synList = JSON.parse(series.synonyms);
     } catch {
@@ -178,12 +179,11 @@ export default function SeriesDetailsPage() {
   const rawCover = series.cover_image_url || series.cover_url || '';
 
   return (
-    <main className="min-h-screen bg-[#07080b] px-4 py-8 text-white sm:px-8">
+    <div className="min-h-screen bg-[#07080b] px-4 py-8 text-white sm:px-8">
       <div className="mx-auto max-w-5xl space-y-8">
         {/* Banner Poster Card */}
         <div className="relative overflow-hidden rounded-3xl border border-neutral-800/80 bg-[#10121a] p-6 shadow-2xl">
           <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-start md:gap-8">
-            {/* Real Cover Image (With Server Proxy Fallback to Prevent Broken Placeholders) */}
             <div className="mx-auto aspect-[3/4.2] w-48 shrink-0 overflow-hidden rounded-2xl bg-neutral-900 border border-white/10 shadow-xl">
               <img
                 src={rawCover}
@@ -214,7 +214,7 @@ export default function SeriesDetailsPage() {
                   {primaryTitle}
                 </h1>
 
-                {/* Alternative Titles Display */}
+                {/* Alternative Titles */}
                 <div className="mt-2 space-y-1 text-xs text-neutral-400">
                   {series.title !== primaryTitle && (
                     <p>
@@ -239,7 +239,7 @@ export default function SeriesDetailsPage() {
                 </p>
               </div>
 
-              {/* Action Buttons: Reading, Following, and Sharing */}
+              {/* Action Buttons: Read & Follow */}
               <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-neutral-800">
                 {resumeId ? (
                   <Link
@@ -266,7 +266,7 @@ export default function SeriesDetailsPage() {
                   </Link>
                 )}
 
-                {/* Active Follow / Bookmark Button */}
+                {/* Follow Button */}
                 <button
                   type="button"
                   onClick={handleFollowToggle}
@@ -290,9 +290,42 @@ export default function SeriesDetailsPage() {
         <div className="space-y-4">
           <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
             <h2 className="text-base font-black text-white sm:text-lg">Chapters List</h2>
-            <span className="text-xs text-neutral-500">{chapters.length} Available</span>
+            <span className="text-xs text-neutral-500">{chapters.length} Total</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-[600px] overflow-y-auto">
             {chapters.map((ch) => {
-              const hasPages = Array.isArray(ch.pages) && ch.pages.length >
+              const hasPages = Array.isArray(ch.pages) && (ch.pages?.length ?? 0) > 0;
+              return (
+                <Link
+                  key={ch.id}
+                  href={`/read/${ch.id}`}
+                  className={`flex items-center justify-between p-3.5 rounded-xl border transition ${
+                    resumeId === ch.id
+                      ? 'border-emerald-500/50 bg-emerald-950/20'
+                      : hasPages
+                      ? 'border-neutral-800/80 bg-[#10121a] hover:border-indigo-500/40'
+                      : 'border-neutral-800/40 bg-[#0d0e14] opacity-60'
+                  }`}
+                >
+                  <span className="truncate text-xs font-semibold text-neutral-200">
+                    Chapter {ch.chapter_number} {ch.title ? `- ${ch.title}` : ''}
+                  </span>
+                  <span
+                    className={`text-xs font-bold shrink-0 ml-2 ${
+                      hasPages ? 'text-indigo-400' : 'text-neutral-500 text-[11px]'
+                    }`}
+                  >
+                    {hasPages ? 'Read →' : 'Syncing...'}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
+    </div>
+  );
+}
