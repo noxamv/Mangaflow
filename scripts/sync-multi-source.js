@@ -32,7 +32,6 @@ async function fetchJson(url, retries = 2) {
       clearTimeout(id);
 
       if (res.status === 429) {
-        // Rate limited: back off exponentially
         await delay(3000 * (attempt + 1));
         continue;
       }
@@ -40,7 +39,7 @@ async function fetchJson(url, retries = 2) {
       return await res.json();
     } catch {
       if (attempt === retries) return null;
-      await delay(1000);
+      await delay(800);
     }
   }
   return null;
@@ -59,10 +58,27 @@ async function fetchHtml(url) {
   }
 }
 
+// Robust numerical chapter parser: Handles decimals (312.1), fractions, Prologues, and skips Volumes
 function cleanNum(val) {
   if (val == null) return null;
-  const match = String(val).match(/[0-9]+(\.[0-9]+)?/);
+  const str = String(val).trim().toLowerCase();
+
+  if (str === 'prologue' || str === 'oneshot' || str === 'intro') return 0;
+
+  // 1. Prioritize explicit chapter keyword (e.g., "Chapter 312.1" or "Ch. 15.5")
+  const chMatch = str.match(/(?:chapter|ch\.?)\s*([0-9]+(?:\.[0-9]+)?)/i);
+  if (chMatch) return parseFloat(chMatch[1]);
+
+  // 2. Remove volume references first to avoid picking volume numbers (e.g. "Vol. 2 Ch. 15")
+  const stripped = str.replace(/(?:vol\.?|volume)\s*[0-9]+/gi, '');
+  const match = stripped.match(/[0-9]+(?:\.[0-9]+)?/);
   return match ? parseFloat(match[0]) : null;
+}
+
+// Standardizes chapter keys for map lookups (e.g., 312 -> "312", 312.1 -> "312.1")
+function toKey(num) {
+  if (num == null) return null;
+  return Number.isInteger(num) ? String(num) : String(parseFloat(num.toFixed(2)));
 }
 
 function stripAccents(str) {
@@ -111,20 +127,21 @@ async function searchComicK(query) {
 async function getComicKMap(hid) {
   const map = new Map();
   let page = 1;
-  while (page <= 25) {
+  while (page <= 35) {
     const data = await fetchJson(`https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`);
     if (!data?.chapters?.length) break;
 
     for (const ch of data.chapters) {
       const num = cleanNum(ch.chap);
-      if (num !== null) {
-        if (!map.has(num)) map.set(num, []);
-        map.get(num).push({ type: 'comick', id: ch.hid });
+      const key = toKey(num);
+      if (key !== null) {
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push({ type: 'comick', id: ch.hid });
       }
     }
     if (data.chapters.length < 100) break;
     page++;
-    await delay(200);
+    await delay(120);
   }
   return map;
 }
@@ -147,21 +164,25 @@ async function searchMangaDex(query) {
 async function getMangaDexMap(mangaId) {
   const map = new Map();
   let offset = 0;
-  while (offset < 800) {
+  while (offset < 1000) {
     const url = `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage%5B%5D=en&order%5Bchapter%5D=asc&limit=100&offset=${offset}`;
     const data = await fetchJson(url);
     if (!data?.data?.length) break;
 
     for (const ch of data.data) {
+      // Avoid dead external MangaPlus links
       if (ch.attributes?.externalUrl) continue;
+
       const num = cleanNum(ch.attributes?.chapter);
-      if (num !== null && !map.has(num)) {
-        map.set(num, [{ type: 'mangadex', id: ch.id }]);
+      const key = toKey(num);
+      if (key !== null) {
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push({ type: 'mangadex', id: ch.id });
       }
     }
     if (data.data.length < 100) break;
     offset += 100;
-    await delay(200);
+    await delay(120);
   }
   return map;
 }
@@ -189,8 +210,10 @@ async function getMangaPillMap(mangaSlug) {
   let match;
   while ((match = regex.exec(html)) !== null) {
     const num = cleanNum(match[2]);
-    if (num !== null && !map.has(num)) {
-      map.set(num, [{ type: 'mangapill', id: match[1] }]);
+    const key = toKey(num);
+    if (key !== null) {
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push({ type: 'mangapill', id: match[1] });
     }
   }
   return map;
@@ -209,16 +232,16 @@ async function getMangaPillPages(chapUrlId) {
 }
 
 // -------------------------------------------------------------
-// Unified Map Builder
+// Unified Map Builder with Multi-Key Support
 // -------------------------------------------------------------
 async function buildUnifiedChapterMap(series) {
   const queries = getSearchCandidates(series);
   const unifiedMap = new Map();
 
   const mergeMap = (newMap) => {
-    for (const [chNum, list] of newMap.entries()) {
-      if (!unifiedMap.has(chNum)) unifiedMap.set(chNum, list);
-      else unifiedMap.get(chNum).push(...list);
+    for (const [key, list] of newMap.entries()) {
+      if (!unifiedMap.has(key)) unifiedMap.set(key, list);
+      else unifiedMap.get(key).push(...list);
     }
   };
 
@@ -238,7 +261,7 @@ async function buildUnifiedChapterMap(series) {
       mergeMap(ckMap);
       if (ckMap.size > 0) break;
     }
-    await delay(200);
+    await delay(120);
   }
 
   if (unifiedMap.size < 5) {
@@ -249,7 +272,7 @@ async function buildUnifiedChapterMap(series) {
         mergeMap(mpMap);
         if (mpMap.size > 0) break;
       }
-      await delay(200);
+      await delay(120);
     }
   }
 
@@ -257,10 +280,10 @@ async function buildUnifiedChapterMap(series) {
 }
 
 // -------------------------------------------------------------
-// Worker Engine
+// Race-Free Worker Loop
 // -------------------------------------------------------------
 async function runWorker() {
-  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Multi-Source Worker Initialized.`);
+  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Dynamic Engine Initialized.`);
 
   const { data: emptySample } = await supabase
     .from('chapters')
@@ -269,13 +292,13 @@ async function runWorker() {
     .limit(1000);
 
   if (!emptySample?.length) {
-    console.log('No empty chapters found. Database 100% complete.');
+    console.log('🎉 No empty chapters remain in the database!');
     return;
   }
 
   const distinctSeriesIds = [...new Set(emptySample.map((c) => c.series_id))];
 
-  // Fetch up to 100 series ordered by oldest updated
+  // Fetch candidate series ordered by oldest updated
   const { data: allSeries } = await supabase
     .from('series')
     .select('id, title, slug, source_url, english_title, native_title, synonyms, updated_at')
@@ -285,41 +308,56 @@ async function runWorker() {
 
   if (!allSeries?.length) return;
 
+  // Dedicated worker partition
   const assigned = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
-  console.log(`[Worker ${WORKER_ID}] Assigned ${assigned.length} series.`);
+  console.log(`[Worker ${WORKER_ID}] Assigned ${assigned.length} candidate series.`);
 
   for (const s of assigned) {
+    // 1. IMMEDIATE LOCK: Update timestamp now so no other worker picks up this series
+    await supabase
+      .from('series')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', s.id);
+
     const { data: emptyChapters } = await supabase
       .from('chapters')
       .select('id, chapter_number')
       .eq('series_id', s.id)
       .or('pages.is.null,pages.eq.{}')
       .order('chapter_number', { ascending: true })
-      .limit(80);
+      .limit(100);
 
-    if (!emptyChapters?.length) {
-      await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
-      continue;
-    }
+    if (!emptyChapters?.length) continue;
 
-    console.log(`\n[Worker ${WORKER_ID}] Auditing "${s.title}" (${emptyChapters.length} empty chapters)...`);
+    console.log(`\n[Worker ${WORKER_ID}] Auditing "${s.title}" (${emptyChapters.length} empty chapters to fill)...`);
 
     const unifiedMap = await buildUnifiedChapterMap(s);
-    console.log(`[Worker ${WORKER_ID}] Available playable chapters across providers: ${unifiedMap.size}`);
+    console.log(`[Worker ${WORKER_ID}] Playable chapters available online: ${unifiedMap.size}`);
 
-    if (unifiedMap.size === 0) {
-      await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
-      continue;
-    }
+    if (unifiedMap.size === 0) continue;
 
     let filledCount = 0;
 
-    // Process chapters with a safe delay to respect provider rate limits
     for (const ch of emptyChapters) {
-      const targetNum = cleanNum(ch.chapter_number);
-      if (targetNum === null || !unifiedMap.has(targetNum)) continue;
+      const num = cleanNum(ch.chapter_number);
+      if (num === null) continue;
 
-      const candidates = unifiedMap.get(targetNum);
+      const key = toKey(num);
+
+      // Support direct key match or floating-point tolerance lookup
+      let candidates = unifiedMap.get(key);
+      if (!candidates) {
+        for (const [mapKey, list] of unifiedMap.entries()) {
+          const mapNum = parseFloat(mapKey);
+          if (Math.abs(mapNum - num) < 0.05) {
+            candidates = list;
+            break;
+          }
+        }
+      }
+
+      if (!candidates || candidates.length === 0) continue;
+
       let pages = null;
 
       for (const cand of candidates) {
@@ -343,14 +381,13 @@ async function runWorker() {
         }
       }
 
-      await delay(350); // Steady rate pacing
+      await delay(250);
     }
 
     console.log(`[Worker ${WORKER_ID}] Result for "${s.title}": filled ${filledCount}/${emptyChapters.length}`);
-    await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
   }
 
-  console.log(`[Worker ${WORKER_ID}] Pass completed.`);
+  console.log(`[Worker ${WORKER_ID}] Worker pass complete.`);
 }
 
 runWorker().catch((err) => {
