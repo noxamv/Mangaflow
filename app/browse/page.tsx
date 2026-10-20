@@ -105,7 +105,6 @@ export default async function BrowsePage({ searchParams }: PageProps) {
         <p className="text-xs sm:text-sm text-neutral-400 mt-1">{totalCount} titles available</p>
       </div>
 
-      {/* Advanced Filter & Search Panel */}
       <form method="GET" action="/browse" className="bg-[#12141c] border border-neutral-800/80 rounded-2xl p-4 sm:p-6 shadow-xl space-y-4">
         <div className="flex gap-2">
           <input
@@ -181,7 +180,6 @@ export default async function BrowsePage({ searchParams }: PageProps) {
         </div>
       </form>
 
-      {/* Series Grid */}
       {series.length === 0 ? (
         <div className="bg-[#12141c] border border-neutral-800/80 rounded-2xl p-12 text-center text-neutral-400 text-xs">
           No series matched your filters. Try clearing some selections.
