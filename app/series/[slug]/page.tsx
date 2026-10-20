@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
@@ -42,6 +42,10 @@ export default function SeriesDetailsPage() {
   const [resumeId, setResumeId] = useState<string | null>(null);
   const [resumeNum, setResumeNum] = useState<number | null>(null);
 
+  // Chapter list controls
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [chapterSearch, setChapterSearch] = useState('');
+
   useEffect(() => {
     async function fetchSeriesData() {
       if (!rawSlug) return;
@@ -62,7 +66,6 @@ export default function SeriesDetailsPage() {
 
         setSeries(seriesData);
 
-        // 1. Local reading history for instant resume
         try {
           const local = JSON.parse(localStorage.getItem('mangaflow_reading_history') || '{}');
           if (local[seriesData.id]) {
@@ -71,7 +74,6 @@ export default function SeriesDetailsPage() {
           }
         } catch {}
 
-        // 2. User Follow/Bookmark State
         const { data: userData } = await supabase.auth.getUser();
         if (userData?.user) {
           const { data: followRecord } = await supabase
@@ -96,7 +98,6 @@ export default function SeriesDetailsPage() {
           }
         }
 
-        // 3. Fetch Chapters
         const { data: chapterData } = await supabase
           .from('chapters')
           .select('id, chapter_number, title, pages')
@@ -141,6 +142,25 @@ export default function SeriesDetailsPage() {
     }
   };
 
+  const filteredChapters = useMemo(() => {
+    let list = [...chapters];
+
+    if (chapterSearch.trim()) {
+      const q = chapterSearch.trim().toLowerCase();
+      list = list.filter((c) =>
+        String(c.chapter_number).includes(q) || (c.title && c.title.toLowerCase().includes(q))
+      );
+    }
+
+    list.sort((a, b) =>
+      sortOrder === 'desc'
+        ? b.chapter_number - a.chapter_number
+        : a.chapter_number - b.chapter_number
+    );
+
+    return list;
+  }, [chapters, sortOrder, chapterSearch]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#07080b] flex items-center justify-center text-xs text-neutral-500">
@@ -181,7 +201,6 @@ export default function SeriesDetailsPage() {
   return (
     <div className="min-h-screen bg-[#07080b] px-4 py-8 text-white sm:px-8">
       <div className="mx-auto max-w-5xl space-y-8">
-        {/* Banner Poster Card */}
         <div className="relative overflow-hidden rounded-3xl border border-neutral-800/80 bg-[#10121a] p-6 shadow-2xl">
           <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-start md:gap-8">
             <div className="mx-auto aspect-[3/4.2] w-48 shrink-0 overflow-hidden rounded-2xl bg-neutral-900 border border-white/10 shadow-xl">
@@ -214,7 +233,6 @@ export default function SeriesDetailsPage() {
                   {primaryTitle}
                 </h1>
 
-                {/* Alternative Titles */}
                 <div className="mt-2 space-y-1 text-xs text-neutral-400">
                   {series.title !== primaryTitle && (
                     <p>
@@ -239,7 +257,6 @@ export default function SeriesDetailsPage() {
                 </p>
               </div>
 
-              {/* Action Buttons: Read & Follow */}
               <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-neutral-800">
                 {resumeId ? (
                   <Link
@@ -266,7 +283,6 @@ export default function SeriesDetailsPage() {
                   </Link>
                 )}
 
-                {/* Follow Button */}
                 <button
                   type="button"
                   onClick={handleFollowToggle}
@@ -286,15 +302,35 @@ export default function SeriesDetailsPage() {
           </div>
         </div>
 
-        {/* Chapters Section */}
+        {/* Chapters Section with Filter & Sort */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
-            <h2 className="text-base font-black text-white sm:text-lg">Chapters List</h2>
-            <span className="text-xs text-neutral-500">{chapters.length} Total</span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-800 pb-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-black text-white sm:text-lg">Chapters List</h2>
+              <span className="text-xs text-neutral-500">({filteredChapters.length} shown)</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Find chapter..."
+                value={chapterSearch}
+                onChange={(e) => setChapterSearch(e.target.value)}
+                className="bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 w-32 sm:w-40"
+              />
+
+              <button
+                type="button"
+                onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
+                className="px-2.5 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-semibold text-neutral-300 transition"
+              >
+                {sortOrder === 'desc' ? 'Sort: 9 → 1' : 'Sort: 1 → 9'}
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-[600px] overflow-y-auto">
-            {chapters.map((ch) => {
+            {filteredChapters.map((ch) => {
               const hasPages = Array.isArray(ch.pages) && (ch.pages?.length ?? 0) > 0;
               return (
                 <Link
