@@ -2,7 +2,7 @@ name: MangaFlow Auto-Relay Bot & Health Repair
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -10,14 +10,14 @@ permissions:
   actions: write
 
 concurrency:
-  group: mangaflow-backfill-matrix
-  cancel-in-progress: false
+  group: mangaflow-sync-pass
+  cancel-in-progress: true
 
 jobs:
   token-relay:
     name: token-relay (${{ matrix.worker_id }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
