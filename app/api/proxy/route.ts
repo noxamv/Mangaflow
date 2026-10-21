@@ -22,6 +22,24 @@ export async function GET(request: NextRequest) {
     return new NextResponse('Invalid target URL', { status: 400 });
   }
 
+  // Anti-hotlinking verification
+  const referer = request.headers.get('referer');
+  const origin = request.headers.get('origin');
+  const host = request.headers.get('host') || '';
+
+  if (process.env.NODE_ENV === 'production' && !host.includes('localhost')) {
+    const isAllowedReferer =
+      !referer ||
+      referer.includes(host) ||
+      (origin && origin.includes(host));
+
+    if (!isAllowedReferer) {
+      return new NextResponse('Forbidden: Hotlinking is not permitted', {
+        status: 403,
+      });
+    }
+  }
+
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(targetUrl);
@@ -30,24 +48,24 @@ export async function GET(request: NextRequest) {
   }
 
   const hostname = parsedUrl.hostname.toLowerCase();
-  const isAllowed = ALLOWED_ROOTS.some(
+  const isAllowedHost = ALLOWED_ROOTS.some(
     (root) => hostname === root || hostname.endsWith(`.${root}`)
   );
 
-  if (!isAllowed) {
+  if (!isAllowedHost) {
     return new NextResponse('Target domain not permitted', { status: 403 });
   }
 
-  let referer = 'https://mangadex.org/';
-  if (hostname.includes('comick')) referer = 'https://comick.io/';
-  else if (hostname.includes('mangapill')) referer = 'https://mangapill.com/';
+  let upstreamReferer = 'https://mangadex.org/';
+  if (hostname.includes('comick')) upstreamReferer = 'https://comick.io/';
+  else if (hostname.includes('mangapill')) upstreamReferer = 'https://mangapill.com/';
 
   try {
     const res = await fetch(targetUrl, {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        Referer: referer,
+        Referer: upstreamReferer,
       },
     });
 
@@ -64,8 +82,8 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        // Immutable cache for fast panel flips and low bandwidth
         'Cache-Control': 'public, max-age=31536000, immutable',
+        'X-Content-Type-Options': 'nosniff',
       },
     });
   } catch (err: any) {
