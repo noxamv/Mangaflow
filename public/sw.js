@@ -1,6 +1,7 @@
-const CACHE_NAME = 'mangaflow-v1';
+const CACHE_NAME = 'mangaflow-v3';
 
-const STATIC_ASSETS = [
+// 1. Static UI shell assets pre-cached for native PWA performance
+const STATIC_SHELL_ASSETS = [
   '/',
   '/manifest.json',
   '/filter',
@@ -10,24 +11,20 @@ const STATIC_ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS);
-    })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_SHELL_ASSETS))
   );
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
+    caches.keys().then((keys) =>
+      Promise.all(
         keys.map((key) => {
-          if (key !== CACHE_NAME) {
-            return caches.delete(key);
-          }
+          if (key !== CACHE_NAME) return caches.delete(key);
         })
-      );
-    })
+      )
+    )
   );
   self.clients.claim();
 });
@@ -37,30 +34,55 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
-  // Stale-while-revalidate for images & pages
-  if (url.pathname.startsWith('/api/proxy') || event.request.destination === 'image') {
+  // 2. Chapter Data API: Stale-While-Revalidate
+  // Caches chapter metadata & page URL lists so the reader can reopen offline
+  if (url.pathname.startsWith('/api/chapter/')) {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {
-        const cachedResponse = await cache.match(event.request);
-        const fetchPromise = fetch(event.request)
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              cache.put(event.request, networkResponse.clone());
+        const cached = await cache.match(event.request);
+        const networkFetch = fetch(event.request)
+          .then((res) => {
+            if (res && res.status === 200) {
+              cache.put(event.request, res.clone());
             }
-            return networkResponse;
+            return res;
           })
-          .catch(() => cachedResponse);
+          .catch(() => cached);
 
-        return cachedResponse || fetchPromise;
+        return cached || networkFetch;
       })
     );
     return;
   }
 
-  // Network-first with cache fallback for standard navigation
+  // 3. Chapter Panel Images: Cache-First
+  // Ensures panels already requested are instantly served offline (e.g. in Airplane Mode)
+  if (url.pathname.startsWith('/api/proxy') || event.request.destination === 'image') {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(event.request);
+        if (cached) return cached;
+
+        try {
+          const networkResponse = await fetch(event.request);
+          if (networkResponse && networkResponse.status === 200) {
+            cache.put(event.request, networkResponse.clone());
+          }
+          return networkResponse;
+        } catch {
+          // If offline and panel wasn't fetched yet, return friendly offline fallback
+          return new Response('Panel offline', { status: 503, statusText: 'Offline' });
+        }
+      })
+    );
+    return;
+  }
+
+  // 4. Standard Site Navigation: Network-First with Cache Fallback
   event.respondWith(
-    fetch(event.request).catch(() => {
-      return caches.match(event.request);
+    fetch(event.request).catch(async () => {
+      const cached = await caches.match(event.request);
+      return cached || new Response('Offline', { status: 503, statusText: 'Offline' });
     })
   );
 });
