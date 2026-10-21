@@ -34,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [user, setUser] = useState<any>(null);
   const [displayName, setDisplayName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState(CHARACTER_AVATARS[0].url);
-  const [latestAlerts, setLatestAlerts] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
@@ -71,7 +71,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       if (u) {
         setDisplayName(u.user_metadata?.display_name || u.email?.split('@')[0] || '');
         setSelectedAvatar(u.user_metadata?.avatar_url || CHARACTER_AVATARS[0].url);
-        loadLatestNotifications(u.id);
+        loadNotifications(u.id);
       }
     });
 
@@ -81,45 +81,48 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       if (u) {
         setDisplayName(u.user_metadata?.display_name || u.email?.split('@')[0] || '');
         setSelectedAvatar(u.user_metadata?.avatar_url || CHARACTER_AVATARS[0].url);
-        loadLatestNotifications(u.id);
+        loadNotifications(u.id);
       }
     });
 
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  async function loadLatestNotifications(userId: string) {
+  // Deduplicated: Exactly ONE latest chapter per followed series
+  async function loadNotifications(userId: string) {
     try {
       const { data: follows } = await supabase
         .from('user_follows')
         .select('series_id')
         .eq('user_id', userId);
 
-      if (!follows?.length) return;
-
-      const seriesIds = follows.map((f: any) => f.series_id);
-      const alerts: any[] = [];
-
-      // Query latest chapter only per series
-      for (const sId of seriesIds.slice(0, 6)) {
-        const { data: latestCh } = await supabase
+      if (follows && follows.length > 0) {
+        const sIds = follows.map((f: any) => f.series_id);
+        const { data: chaps } = await supabase
           .from('chapters')
-          .select('id, chapter_number, created_at, series (title, slug, cover_image_url)')
-          .eq('series_id', sId)
-          .order('chapter_number', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+          .select('id, series_id, chapter_number, created_at, series (title, slug)')
+          .in('series_id', sIds)
+          .order('chapter_number', { ascending: false });
 
-        if (latestCh) {
-          const sObj = Array.isArray(latestCh.series) ? latestCh.series[0] : latestCh.series;
-          alerts.push({
-            id: latestCh.id,
-            series_title: sObj?.title || 'Series',
-            chapter_number: latestCh.chapter_number,
-          });
+        if (chaps) {
+          const map = new Map<string, any>();
+          for (const c of chaps) {
+            if (!map.has(c.series_id)) {
+              const sObj = Array.isArray(c.series) ? c.series[0] : c.series;
+              map.set(c.series_id, {
+                id: c.id,
+                series_title: sObj?.title || 'Series',
+                series_slug: sObj?.slug || '',
+                chapter_id: c.id,
+                chapter_number: c.chapter_number,
+                time_ago: 'Latest Release',
+                is_read: false,
+              });
+            }
+          }
+          setNotifications(Array.from(map.values()).slice(0, 8));
         }
       }
-      setLatestAlerts(alerts);
     } catch {}
   }
 
@@ -150,6 +153,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     window.location.reload();
   };
 
+  const hasUnread = notifications.some((n) => !n.is_read);
+
   return (
     <html lang="en">
       <head>
@@ -179,12 +184,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <div className="flex-1 min-w-0">
                 <h4 className="text-xs font-bold text-white">Install MangaFlow App</h4>
                 <p className="text-[11px] text-neutral-400 mt-0.5 leading-snug">
-                  Fullscreen reading, offline caching, and faster chapter loading.
+                  Fullscreen reading, offline caching, and instant chapter loading.
                 </p>
                 <div className="flex items-center gap-2 mt-3">
                   <button
                     onClick={handleInstallPwa}
-                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-md"
+                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-md shadow-indigo-600/30"
                   >
                     Install Now
                   </button>
@@ -203,7 +208,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         )}
 
-        {/* Clean Header Bar */}
         <header className="sticky top-0 z-40 w-full bg-[#0d0e14]/95 backdrop-blur-md border-b border-neutral-800/80">
           <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-3">
             <div className="relative flex items-center gap-2.5">
@@ -241,6 +245,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               )}
             </div>
 
+            {/* Clean Header: Settings removed from here, accessible in Profile dropdown */}
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -253,7 +258,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </svg>
               </button>
 
-              {/* Notification Bell */}
               <div className="relative">
                 <button
                   type="button"
@@ -267,7 +271,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                   </svg>
-                  {latestAlerts.length > 0 && (
+                  {hasUnread && (
                     <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-[#0d0e14]" />
                   )}
                 </button>
@@ -276,44 +280,52 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <div className="absolute top-10 right-0 w-72 sm:w-80 bg-[#13151f] border border-neutral-700/80 rounded-2xl shadow-2xl overflow-hidden z-50">
                     <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
                       <span className="text-xs font-bold text-white">Notifications</span>
-                      <Link
-                        href="/notifications"
-                        onClick={() => setNotifMenuOpen(false)}
+                      <button
+                        onClick={() => setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))}
                         className="text-[10px] font-semibold text-indigo-400 hover:text-indigo-300"
                       >
-                        View all →
-                      </Link>
+                        ✓ Mark as read
+                      </button>
                     </div>
 
                     <div className="max-h-64 overflow-y-auto divide-y divide-neutral-800/50">
-                      {latestAlerts.length === 0 ? (
+                      {notifications.length === 0 ? (
                         <div className="p-6 text-center text-xs text-neutral-500">
-                          No chapter alerts. Bookmark series to see updates!
+                          No chapter alerts yet. Follow series to receive drop updates!
                         </div>
                       ) : (
-                        latestAlerts.map((item) => (
+                        notifications.map((item) => (
                           <Link
                             key={item.id}
-                            href={`/read/${item.id}`}
+                            href={`/read/${item.chapter_id}`}
                             onClick={() => setNotifMenuOpen(false)}
                             className="p-3 hover:bg-neutral-800/40 flex items-center justify-between gap-2 text-xs transition"
                           >
                             <div className="truncate">
                               <p className="font-bold text-neutral-200 truncate">{item.series_title}</p>
-                              <p className="text-[10px] text-neutral-400">Chapter {item.chapter_number}</p>
+                              <p className="text-[10px] text-neutral-400">Latest: Chapter {item.chapter_number}</p>
                             </div>
                             <span className="text-[9px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-black shrink-0">
-                              Latest
+                              {item.time_ago}
                             </span>
                           </Link>
                         ))
                       )}
                     </div>
+
+                    <div className="p-2 border-t border-neutral-800 text-center bg-neutral-900/40">
+                      <Link
+                        href="/notifications"
+                        onClick={() => setNotifMenuOpen(false)}
+                        className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300"
+                      >
+                        View all notifications →
+                      </Link>
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* User Avatar with Profile Dropdown */}
               {user ? (
                 <div className="relative">
                   <button
