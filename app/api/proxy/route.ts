@@ -7,7 +7,12 @@ const ALLOWED_ROOTS = [
   'mangapill.com',
   'readdetectiveconan.com',
   'consumet.org',
+  'meo.comick.pictures',
+  'meo2.comick.pictures',
+  'meo3.comick.pictures',
 ];
+
+export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -59,8 +64,8 @@ export async function GET(request: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control':
-          'public, max-age=604800, s-maxage=604800, stale-while-revalidate=86400',
+        // Immutable cache for fast panel flips and low bandwidth
+        'Cache-Control': 'public, max-age=31536000, immutable',
       },
     });
   } catch (err: any) {
