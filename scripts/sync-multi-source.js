@@ -70,120 +70,106 @@ function cleanNum(val) {
 }
 
 function toKey(num) {
-  if (num == null) return null;
-  return Number.isInteger(num) ? String(num) : String(parseFloat(num.toFixed(2)));
+  if (num === null || isNaN(num)) return null;
+  return String(num);
 }
 
-function cleanTitle(str) {
-  if (!str) return '';
-  return str
-    .replace(/[【】\[\]\(\)\{\}★☆～~:!?:_]/g, ' ')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function getSearchCandidates(series) {
-  const candidates = [];
-  const add = (txt) => {
-    if (!txt) return;
-    const clean = cleanTitle(txt);
-    if (clean.length > 1 && !candidates.includes(clean)) candidates.push(clean);
-  };
-
-  add(series.english_title);
-  add(series.title);
-  add(series.native_title);
-
-  if (Array.isArray(series.synonyms)) {
-    series.synonyms.forEach(add);
-  } else if (typeof series.synonyms === 'string') {
-    try {
-      const parsed = JSON.parse(series.synonyms);
-      if (Array.isArray(parsed)) parsed.forEach(add);
-    } catch {
-      add(series.synonyms);
-    }
-  }
-  return candidates;
-}
-
-async function searchComicK(query) {
-  const data = await fetchJson(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(query)}&limit=1`);
-  return data?.[0] || null;
-}
-
-async function getComicKMap(hid) {
-  const map = new Map();
-  let page = 1;
-  while (page <= 35) {
-    const data = await fetchJson(`https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`);
-    if (!data?.chapters?.length) break;
-
-    for (const ch of data.chapters) {
-      const num = cleanNum(ch.chap);
-      const key = toKey(num);
-      if (key !== null) {
-        if (!map.has(key)) map.set(key, []);
-        map.get(key).push({ type: 'comick', id: ch.hid });
-      }
-    }
-    if (data.chapters.length < 100) break;
-    page++;
-    await delay(120);
-  }
-  return map;
-}
-
-async function getComicKPages(hid) {
-  const data = await fetchJson(`https://api.comick.io/chapter/${hid}`);
-  if (data?.chapter?.images?.length) {
-    return data.chapter.images.map((img) =>
-      img.url.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.url}`
-    );
-  }
-  return null;
-}
-
-async function searchMangaDex(query) {
-  const data = await fetchJson(`https://api.mangadex.org/manga?title=${encodeURIComponent(query)}&limit=1`);
-  return data?.data?.[0]?.id || null;
+// ---------------------------------------------------------------------------
+// Source 1: MangaDex
+// ---------------------------------------------------------------------------
+async function searchMangaDex(title) {
+  const url = `https://api.mangadex.org/manga?title=${encodeURIComponent(
+    title
+  )}&limit=1&order[relevance]=desc&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
+  const json = await fetchJson(url);
+  return json?.data?.[0]?.id || null;
 }
 
 async function getMangaDexMap(mangaId) {
   const map = new Map();
   let offset = 0;
-  while (offset < 1000) {
-    const url = `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage%5B%5D=en&order%5Bchapter%5D=asc&limit=100&offset=${offset}`;
-    const data = await fetchJson(url);
-    if (!data?.data?.length) break;
+  const limit = 100;
 
-    for (const ch of data.data) {
-      if (ch.attributes?.externalUrl) continue;
-      const num = cleanNum(ch.attributes?.chapter);
-      const key = toKey(num);
-      if (key !== null) {
-        if (!map.has(key)) map.set(key, []);
-        map.get(key).push({ type: 'mangadex', id: ch.id });
+  while (true) {
+    const url = `https://api.mangadex.org/chapter?manga=${mangaId}&translatedLanguage[]=en&limit=${limit}&offset=${offset}&order[chapter]=desc`;
+    const json = await fetchJson(url);
+    if (!json?.data?.length) break;
+
+    for (const item of json.data) {
+      const chNum = cleanNum(item.attributes?.chapter);
+      const key = toKey(chNum);
+      if (key !== null && !map.has(key)) {
+        map.set(key, item.id);
       }
     }
-    if (data.data.length < 100) break;
-    offset += 100;
-    await delay(120);
+
+    offset += limit;
+    if (offset >= (json.total || 0) || offset >= 600) break;
+    await delay(200);
   }
+
   return map;
 }
 
 async function getMangaDexPages(chapterId) {
-  const atHome = await fetchJson(`https://api.mangadex.org/at-home/server/${chapterId}`);
-  if (!atHome?.baseUrl || !atHome?.chapter?.data?.length) return null;
-  const { baseUrl, chapter } = atHome;
-  return chapter.data.map((f) => `${baseUrl}/data/${chapter.hash}/${f}`);
+  const meta = await fetchJson(`https://api.mangadex.org/at-home/server/${chapterId}`);
+  if (!meta?.baseUrl || !meta?.chapter?.data?.length) return null;
+  const { baseUrl, chapter } = meta;
+  return chapter.data.map((file) => `${baseUrl}/data/${chapter.hash}/${file}`);
 }
 
-async function searchMangaPill(query) {
-  const html = await fetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(query)}`);
+// ---------------------------------------------------------------------------
+// Source 2: ComicK
+// ---------------------------------------------------------------------------
+async function searchComicK(title) {
+  const url = `https://api.comick.io/v1.0/search?q=${encodeURIComponent(
+    title
+  )}&limit=1&type=comic`;
+  const json = await fetchJson(url);
+  const item = json?.[0];
+  if (!item?.hid) return null;
+  return { hid: item.hid, title: item.title, md_titles: item.md_titles };
+}
+
+async function getComicKMap(comicHid) {
+  const map = new Map();
+  let page = 1;
+
+  while (page <= 6) {
+    const url = `https://api.comick.io/comic/${comicHid}/chapters?lang=en&page=${page}&limit=100`;
+    const json = await fetchJson(url);
+    if (!json?.chapters?.length) break;
+
+    for (const item of json.chapters) {
+      const chNum = cleanNum(item.chap);
+      const key = toKey(chNum);
+      if (key !== null && !map.has(key) && item.hid) {
+        map.set(key, item.hid);
+      }
+    }
+
+    if (json.chapters.length < 100) break;
+    page++;
+    await delay(150);
+  }
+
+  return map;
+}
+
+async function getComicKPages(chapterHid) {
+  const json = await fetchJson(`https://api.comick.io/chapter/${chapterHid}`);
+  if (!json?.chapter?.images?.length) return null;
+  return json.chapter.images
+    .filter((img) => img.url)
+    .map((img) => img.url);
+}
+
+// ---------------------------------------------------------------------------
+// Source 3: MangaPill
+// ---------------------------------------------------------------------------
+async function searchMangaPill(title) {
+  const url = `https://mangapill.com/search?q=${encodeURIComponent(title)}`;
+  const html = await fetchHtml(url);
   if (!html) return null;
   const match = html.match(/href="\/manga\/([0-9]+\/[^"]+)"/i);
   return match ? match[1] : null;
@@ -191,70 +177,84 @@ async function searchMangaPill(query) {
 
 async function getMangaPillMap(mangaSlug) {
   const map = new Map();
-  const html = await fetchHtml(`https://mangapill.com/manga/${mangaSlug}`);
+  const url = `https://mangapill.com/manga/${mangaSlug}`;
+  const html = await fetchHtml(url);
   if (!html) return map;
 
-  const regex = /href="\/chapters\/([0-9]+-[0-9]+\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
+  const regex = /href="\/chapters\/([^"]+)"[^>]*>.*?chapter\s*([0-9]+(?:\.[0-9]+)?)/gi;
   let match;
   while ((match = regex.exec(html)) !== null) {
-    const num = cleanNum(match[2]);
-    const key = toKey(num);
-    if (key !== null) {
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push({ type: 'mangapill', id: match[1] });
+    const chId = match[1];
+    const chNum = cleanNum(match[2]);
+    const key = toKey(chNum);
+    if (key !== null && !map.has(key)) {
+      map.set(key, chId);
     }
   }
+
   return map;
 }
 
-async function getMangaPillPages(chapUrlId) {
-  const html = await fetchHtml(`https://mangapill.com/chapters/${chapUrlId}`);
+async function getMangaPillPages(chapterSlug) {
+  const html = await fetchHtml(`https://mangapill.com/chapters/${chapterSlug}`);
   if (!html) return null;
-  const pages = [];
-  const regex = /<img[^>]+data-src="([^">]+)"/gi;
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    pages.push(match[1]);
-  }
-  return pages.length > 0 ? pages : null;
+  const matches = [...html.matchAll(/data-src="([^"]+)"/g)];
+  if (!matches.length) return null;
+  return matches.map((m) => m[1]);
 }
 
+// ---------------------------------------------------------------------------
+// Multi-Source Chapter Aggregator
+// ---------------------------------------------------------------------------
 async function buildUnifiedChapterMap(series) {
-  const queries = getSearchCandidates(series);
   const unifiedMap = new Map();
 
-  const mergeMap = (newMap) => {
-    for (const [key, list] of newMap.entries()) {
-      if (!unifiedMap.has(key)) unifiedMap.set(key, list);
-      else unifiedMap.get(key).push(...list);
+  const queries = [series.title];
+  if (series.english_title && series.english_title !== series.title) {
+    queries.push(series.english_title);
+  }
+
+  const mergeMap = (sourceMap, type) => {
+    for (const [key, id] of sourceMap.entries()) {
+      if (!unifiedMap.has(key)) {
+        unifiedMap.set(key, []);
+      }
+      unifiedMap.get(key).push({ type, id });
     }
   };
 
-  const isMdUuid = (str) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str || '');
-  const mdId = isMdUuid(series.source_url) ? series.source_url : isMdUuid(series.slug) ? series.slug : null;
-
-  if (mdId) {
-    const mdMap = await getMangaDexMap(mdId);
-    mergeMap(mdMap);
+  for (const q of queries) {
+    const mdId = await searchMangaDex(q);
+    if (mdId) {
+      const mdMap = await getMangaDexMap(mdId);
+      for (const [k, v] of mdMap.entries()) {
+        if (!unifiedMap.has(k)) unifiedMap.set(k, []);
+        unifiedMap.get(k).push({ type: 'mangadex', id: v });
+      }
+      if (mdMap.size > 0) break;
+    }
+    await delay(120);
   }
 
   for (const q of queries) {
     const meta = await searchComicK(q);
     if (meta?.hid) {
-      if (!series.english_title && meta.title) {
-        const synList = Array.isArray(meta.md_titles) ? meta.md_titles.map((t) => t.title) : [];
+      if (Array.isArray(meta.md_titles) && meta.md_titles.length > 0) {
+        const synList = meta.md_titles.map((t) => t.title).filter(Boolean);
         await supabase
           .from('series')
           .update({
-            english_title: meta.title,
+            english_title: series.english_title || meta.title || series.title,
             synonyms: synList.length > 0 ? synList : series.synonyms,
           })
           .eq('id', series.id);
       }
 
       const ckMap = await getComicKMap(meta.hid);
-      mergeMap(ckMap);
+      for (const [k, v] of ckMap.entries()) {
+        if (!unifiedMap.has(k)) unifiedMap.set(k, []);
+        unifiedMap.get(k).push({ type: 'comick', id: v });
+      }
       if (ckMap.size > 0) break;
     }
     await delay(120);
@@ -265,7 +265,10 @@ async function buildUnifiedChapterMap(series) {
       const mpSlug = await searchMangaPill(q);
       if (mpSlug) {
         const mpMap = await getMangaPillMap(mpSlug);
-        mergeMap(mpMap);
+        for (const [k, v] of mpMap.entries()) {
+          if (!unifiedMap.has(k)) unifiedMap.set(k, []);
+          unifiedMap.get(k).push({ type: 'mangapill', id: v });
+        }
         if (mpMap.size > 0) break;
       }
       await delay(120);
@@ -275,14 +278,20 @@ async function buildUnifiedChapterMap(series) {
   return unifiedMap;
 }
 
+// ---------------------------------------------------------------------------
+// Worker Execution with Safety Time Limits & Candidate Caps
+// ---------------------------------------------------------------------------
 async function runWorker() {
+  const startTime = Date.now();
+  const MAX_RUNTIME_MS = 13 * 60 * 1000; // 13-minute safety limit before GitHub's 15m timeout
+
   console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Multi-Source Ingestion Initialized.`);
 
   const { data: allSeries } = await supabase
     .from('series')
     .select('id, title, slug, source_url, english_title, native_title, synonyms, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
-    .limit(150);
+    .limit(40); // 8 candidate series per worker per run to prevent timeout bloat
 
   if (!allSeries?.length) return;
 
@@ -290,6 +299,11 @@ async function runWorker() {
   console.log(`[Worker ${WORKER_ID}] Assigned ${assigned.length} candidate series.`);
 
   for (const s of assigned) {
+    if (Date.now() - startTime > MAX_RUNTIME_MS) {
+      console.log(`[Worker ${WORKER_ID}] Reached time budget. Exiting cleanly for next pass.`);
+      break;
+    }
+
     await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
     console.log(`\n[Worker ${WORKER_ID}] Checking "${s.title}"...`);
@@ -313,6 +327,11 @@ async function runWorker() {
     let filledCount = 0;
 
     for (const [key, candidates] of unifiedMap.entries()) {
+      if (Date.now() - startTime > MAX_RUNTIME_MS) {
+        console.log(`[Worker ${WORKER_ID}] Time limit reached inside series loop. Wrapping up.`);
+        break;
+      }
+
       const chNum = parseFloat(key);
       const existing = existingMap.get(key);
 
@@ -345,7 +364,7 @@ async function runWorker() {
         addedCount++;
       }
 
-      await delay(200);
+      await delay(120);
     }
 
     console.log(
