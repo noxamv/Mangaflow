@@ -12,23 +12,13 @@ const supabase = createClient(
 );
 
 const CHARACTER_AVATARS = [
-  { id: 'jinwoo', name: 'Sung Jin-Woo', url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=150&auto=format&fit=crop&q=80', bg: '#4f46e5' },
-  { id: 'luffy', name: 'Monkey D. Luffy', url: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=150&auto=format&fit=crop&q=80', bg: '#ef4444' },
-  { id: 'ichigo', name: 'Ichigo Kurosaki', url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=150&auto=format&fit=crop&q=80', bg: '#f97316' },
-  { id: 'gojo', name: 'Satoru Gojo', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=150&auto=format&fit=crop&q=80', bg: '#0ea5e9' },
-  { id: 'zoro', name: 'Roronoa Zoro', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80', bg: '#10b981' },
-  { id: 'dokja', name: 'Kim Dokja', url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=150&auto=format&fit=crop&q=80', bg: '#6366f1' },
+  { id: 'jinwoo', name: 'Sung Jin-Woo', url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=150&auto=format&fit=crop&q=80' },
+  { id: 'luffy', name: 'Monkey D. Luffy', url: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=150&auto=format&fit=crop&q=80' },
+  { id: 'ichigo', name: 'Ichigo Kurosaki', url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=150&auto=format&fit=crop&q=80' },
+  { id: 'gojo', name: 'Satoru Gojo', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=150&auto=format&fit=crop&q=80' },
+  { id: 'zoro', name: 'Roronoa Zoro', url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80' },
+  { id: 'dokja', name: 'Kim Dokja', url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=150&auto=format&fit=crop&q=80' },
 ];
-
-interface NotificationItem {
-  id: string;
-  series_title: string;
-  series_slug: string;
-  chapter_id: string;
-  chapter_number: number;
-  time_ago: string;
-  is_read: boolean;
-}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -44,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [user, setUser] = useState<any>(null);
   const [displayName, setDisplayName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState(CHARACTER_AVATARS[0].url);
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [latestAlerts, setLatestAlerts] = useState<any[]>([]);
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
@@ -81,7 +71,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       if (u) {
         setDisplayName(u.user_metadata?.display_name || u.email?.split('@')[0] || '');
         setSelectedAvatar(u.user_metadata?.avatar_url || CHARACTER_AVATARS[0].url);
-        loadNotifications(u.id);
+        loadLatestNotifications(u.id);
       }
     });
 
@@ -91,47 +81,45 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       if (u) {
         setDisplayName(u.user_metadata?.display_name || u.email?.split('@')[0] || '');
         setSelectedAvatar(u.user_metadata?.avatar_url || CHARACTER_AVATARS[0].url);
-        loadNotifications(u.id);
+        loadLatestNotifications(u.id);
       }
     });
 
     return () => listener.subscription.unsubscribe();
   }, []);
 
-  async function loadNotifications(userId: string) {
+  async function loadLatestNotifications(userId: string) {
     try {
       const { data: follows } = await supabase
         .from('user_follows')
-        .select('series_id, series (id, title, slug)')
-        .eq('user_id', userId)
-        .limit(10);
+        .select('series_id')
+        .eq('user_id', userId);
 
-      if (follows && follows.length > 0) {
-        const sIds = follows.map((f: any) => f.series_id);
-        const { data: chaps } = await supabase
+      if (!follows?.length) return;
+
+      const seriesIds = follows.map((f: any) => f.series_id);
+      const alerts: any[] = [];
+
+      // Query latest chapter only per series
+      for (const sId of seriesIds.slice(0, 6)) {
+        const { data: latestCh } = await supabase
           .from('chapters')
-          .select('id, series_id, chapter_number, created_at, series (title, slug)')
-          .in('series_id', sIds)
-          .order('created_at', { ascending: false })
-          .limit(5);
+          .select('id, chapter_number, created_at, series (title, slug, cover_image_url)')
+          .eq('series_id', sId)
+          .order('chapter_number', { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-        if (chaps) {
-          setNotifications(
-            chaps.map((c: any) => {
-              const sObj = Array.isArray(c.series) ? c.series[0] : c.series;
-              return {
-                id: c.id,
-                series_title: sObj?.title || 'Series',
-                series_slug: sObj?.slug || '',
-                chapter_id: c.id,
-                chapter_number: c.chapter_number,
-                time_ago: 'New',
-                is_read: false,
-              };
-            })
-          );
+        if (latestCh) {
+          const sObj = Array.isArray(latestCh.series) ? latestCh.series[0] : latestCh.series;
+          alerts.push({
+            id: latestCh.id,
+            series_title: sObj?.title || 'Series',
+            chapter_number: latestCh.chapter_number,
+          });
         }
       }
+      setLatestAlerts(alerts);
     } catch {}
   }
 
@@ -162,8 +150,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     window.location.reload();
   };
 
-  const hasUnread = notifications.some((n) => !n.is_read);
-
   return (
     <html lang="en">
       <head>
@@ -184,7 +170,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           />
         )}
 
-        {/* PWA Floating Install Banner */}
         {showPwaBanner && (
           <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-96 z-50 bg-[#13151f] border border-indigo-500/40 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
             <div className="flex items-start gap-3">
@@ -194,12 +179,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <div className="flex-1 min-w-0">
                 <h4 className="text-xs font-bold text-white">Install MangaFlow App</h4>
                 <p className="text-[11px] text-neutral-400 mt-0.5 leading-snug">
-                  Fullscreen reading, offline caching, and instant chapter loading.
+                  Fullscreen reading, offline caching, and faster chapter loading.
                 </p>
                 <div className="flex items-center gap-2 mt-3">
                   <button
                     onClick={handleInstallPwa}
-                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-md shadow-indigo-600/30"
+                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-md"
                   >
                     Install Now
                   </button>
@@ -218,10 +203,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         )}
 
-        {/* MangaFire-Style Top Navigation Bar */}
+        {/* Clean Header Bar */}
         <header className="sticky top-0 z-40 w-full bg-[#0d0e14]/95 backdrop-blur-md border-b border-neutral-800/80">
           <div className="max-w-7xl mx-auto px-3 sm:px-6 h-14 flex items-center justify-between gap-3">
-            {/* Left Hamburger & Logo */}
             <div className="relative flex items-center gap-2.5">
               <button
                 type="button"
@@ -257,7 +241,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               )}
             </div>
 
-            {/* Right Action Icons: Search, Settings, Notifications, Profile */}
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -270,18 +253,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </svg>
               </button>
 
-              <Link
-                href="/settings"
-                className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800/60 rounded-lg transition"
-                title="Settings"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              </Link>
-
-              {/* Notifications Dropdown */}
+              {/* Notification Bell */}
               <div className="relative">
                 <button
                   type="button"
@@ -295,7 +267,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                   </svg>
-                  {hasUnread && (
+                  {latestAlerts.length > 0 && (
                     <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-[#0d0e14]" />
                   )}
                 </button>
@@ -304,24 +276,25 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <div className="absolute top-10 right-0 w-72 sm:w-80 bg-[#13151f] border border-neutral-700/80 rounded-2xl shadow-2xl overflow-hidden z-50">
                     <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
                       <span className="text-xs font-bold text-white">Notifications</span>
-                      <button
-                        onClick={() => setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))}
+                      <Link
+                        href="/notifications"
+                        onClick={() => setNotifMenuOpen(false)}
                         className="text-[10px] font-semibold text-indigo-400 hover:text-indigo-300"
                       >
-                        ✓ Mark as read
-                      </button>
+                        View all →
+                      </Link>
                     </div>
 
                     <div className="max-h-64 overflow-y-auto divide-y divide-neutral-800/50">
-                      {notifications.length === 0 ? (
+                      {latestAlerts.length === 0 ? (
                         <div className="p-6 text-center text-xs text-neutral-500">
-                          No chapter alerts yet. Follow series to receive drop updates!
+                          No chapter alerts. Bookmark series to see updates!
                         </div>
                       ) : (
-                        notifications.map((item) => (
+                        latestAlerts.map((item) => (
                           <Link
                             key={item.id}
-                            href={`/read/${item.chapter_id}`}
+                            href={`/read/${item.id}`}
                             onClick={() => setNotifMenuOpen(false)}
                             className="p-3 hover:bg-neutral-800/40 flex items-center justify-between gap-2 text-xs transition"
                           >
@@ -330,27 +303,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                               <p className="text-[10px] text-neutral-400">Chapter {item.chapter_number}</p>
                             </div>
                             <span className="text-[9px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded font-black shrink-0">
-                              {item.time_ago}
+                              Latest
                             </span>
                           </Link>
                         ))
                       )}
                     </div>
-
-                    <div className="p-2 border-t border-neutral-800 text-center bg-neutral-900/40">
-                      <Link
-                        href="/notifications"
-                        onClick={() => setNotifMenuOpen(false)}
-                        className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300"
-                      >
-                        View all notifications →
-                      </Link>
-                    </div>
                   </div>
                 )}
               </div>
 
-              {/* Profile Avatar & MangaFire-Style Dropdown */}
+              {/* User Avatar with Profile Dropdown */}
               {user ? (
                 <div className="relative">
                   <button
@@ -362,7 +325,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     className="relative w-8 h-8 rounded-full overflow-hidden border border-indigo-400/50 shadow-sm hover:scale-105 transition bg-neutral-800 flex items-center justify-center"
                   >
                     <img src={selectedAvatar} alt="Avatar" className="w-full h-full object-cover" />
-                    {/* Active Online Indicator Dot */}
                     <span className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-[#0d0e14]" />
                   </button>
 
@@ -452,7 +414,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         </header>
 
-        {/* Global Search Dropdown */}
         {searchOpen && (
           <div className="sticky top-14 z-40 w-full px-3 sm:px-6 max-w-lg mx-auto">
             <div className="bg-[#13151f] border border-neutral-700 rounded-2xl shadow-2xl overflow-hidden mt-2">
@@ -492,7 +453,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         )}
 
-        {/* Edit Profile Modal */}
         {editProfileOpen && (
           <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="w-full max-w-sm bg-[#13151f] border border-neutral-700/80 rounded-2xl p-6 shadow-2xl">
