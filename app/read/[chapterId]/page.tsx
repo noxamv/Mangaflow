@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
@@ -29,13 +29,13 @@ export default function ReaderPage() {
   const [allChapters, setAllChapters] = useState<{ id: string; chapter_number: number; title: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Settings: Single, Double, Long Strip (Webtoon)
+  // Tap-to-toggle UI visibility state
+  const [showUi, setShowUi] = useState(true);
+
   const [layoutMode, setLayoutMode] = useState<'long_strip' | 'single' | 'double'>('long_strip');
-  const [readingDirection, setReadingDirection] = useState<'rtl' | 'ltr'>('rtl');
   const [pageMargin, setPageMargin] = useState<number>(0);
   const [pageIdx, setPageIdx] = useState(0);
 
-  // Floating Modals
   const [showChaptersDrawer, setShowChaptersDrawer] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -85,7 +85,6 @@ export default function ReaderPage() {
 
         if (sibs) setAllChapters(sibs);
 
-        // Save local history
         const local = JSON.parse(localStorage.getItem('mangaflow_reading_history') || '{}');
         local[cur.series_id] = {
           seriesId: cur.series_id,
@@ -97,7 +96,6 @@ export default function ReaderPage() {
         };
         localStorage.setItem('mangaflow_reading_history', JSON.stringify(local));
 
-        // Cloud history
         const { data: auth } = await supabase.auth.getUser();
         if (auth?.user) {
           await supabase.from('reading_history').upsert({
@@ -122,7 +120,6 @@ export default function ReaderPage() {
   const prevChapter = currentIndex > 0 ? allChapters[currentIndex - 1] : null;
   const nextChapter = currentIndex < allChapters.length - 1 ? allChapters[currentIndex + 1] : null;
 
-  // Keyboard navigation
   const handleKey = useCallback(
     (e: KeyboardEvent) => {
       if (layoutMode === 'long_strip' || !chapter?.pages) return;
@@ -168,8 +165,12 @@ export default function ReaderPage() {
 
   return (
     <div className="min-h-screen bg-[#07080a] text-white flex flex-col relative select-none">
-      {/* Top Floating Mini Header */}
-      <div className="sticky top-0 z-30 bg-[#0d0e14]/90 backdrop-blur-md border-b border-neutral-800/60 px-4 py-2 flex items-center justify-between text-xs">
+      {/* Top Bar: Hides/Shows on Tap */}
+      <div
+        className={`sticky top-0 z-30 bg-[#0d0e14]/90 backdrop-blur-md border-b border-neutral-800/60 px-4 py-2.5 flex items-center justify-between text-xs transition-transform duration-300 ${
+          showUi ? 'translate-y-0' : '-translate-y-full pointer-events-none'
+        }`}
+      >
         <Link href={`/series/${chapter.series?.slug || chapter.series_id}`} className="font-bold text-neutral-300 hover:text-white truncate max-w-[50%]">
           ← {primaryTitle}
         </Link>
@@ -178,31 +179,35 @@ export default function ReaderPage() {
         </span>
       </div>
 
-      {/* Floating Right Sidebar matching MangaFire */}
-      <div className="fixed right-3 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2 bg-[#13151f]/90 border border-neutral-800/80 p-1.5 rounded-2xl shadow-2xl backdrop-blur-md">
+      {/* Floating Sidebar: Hides/Shows on Tap */}
+      <div
+        className={`fixed right-3 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-2 bg-[#13151f]/90 border border-neutral-800/80 p-1.5 rounded-2xl shadow-2xl backdrop-blur-md transition-all duration-300 ${
+          showUi ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-12 pointer-events-none'
+        }`}
+      >
         <button
-          onClick={() => setShowChaptersDrawer(true)}
+          onClick={(e) => { e.stopPropagation(); setShowChaptersDrawer(true); }}
           className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-xl transition"
           title="Chapters List"
         >
           📑
         </button>
         <button
-          onClick={() => setShowSettingsModal(true)}
+          onClick={(e) => { e.stopPropagation(); setShowSettingsModal(true); }}
           className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-xl transition"
           title="Reader Settings"
         >
           ⚙️
         </button>
         <button
-          onClick={() => setShowHelpModal(true)}
+          onClick={(e) => { e.stopPropagation(); setShowHelpModal(true); }}
           className="p-2 text-neutral-400 hover:text-white hover:bg-neutral-800 rounded-xl transition hidden sm:block"
           title="Keyboard Shortcuts"
         >
           ❓
         </button>
         <button
-          onClick={() => setShowReportModal(true)}
+          onClick={(e) => { e.stopPropagation(); setShowReportModal(true); }}
           className="p-2 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 rounded-xl transition"
           title="Report Chapter Issue"
         >
@@ -210,8 +215,12 @@ export default function ReaderPage() {
         </button>
       </div>
 
-      {/* Reader Canvas */}
-      <main className="flex-1 flex flex-col items-center w-full" style={{ paddingLeft: `${pageMargin}px`, paddingRight: `${pageMargin}px` }}>
+      {/* Tapping canvas toggles floating UI visibility */}
+      <main
+        onClick={() => setShowUi((prev) => !prev)}
+        className="flex-1 flex flex-col items-center w-full cursor-pointer"
+        style={{ paddingLeft: `${pageMargin}px`, paddingRight: `${pageMargin}px` }}
+      >
         {layoutMode === 'long_strip' ? (
           <div className="w-full max-w-3xl flex flex-col items-center mx-auto">
             {chapter.pages.map((url, i) => (
@@ -237,7 +246,10 @@ export default function ReaderPage() {
               referrerPolicy="no-referrer"
               className="max-h-[85vh] w-auto object-contain rounded shadow-2xl"
             />
-            <div className="flex items-center gap-4 mt-4 text-xs font-bold text-neutral-400">
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex items-center gap-4 mt-4 text-xs font-bold text-neutral-400"
+            >
               <button disabled={pageIdx === 0} onClick={() => setPageIdx((p) => p - 1)} className="px-3 py-1 bg-neutral-900 rounded-lg disabled:opacity-30">
                 ← Prev
               </button>
@@ -249,8 +261,7 @@ export default function ReaderPage() {
           </div>
         )}
 
-        {/* End of Chapter Section matching 1000245704.jpg */}
-        <div className="w-full max-w-2xl mx-auto px-4 py-12 text-center space-y-6">
+        <div onClick={(e) => e.stopPropagation()} className="w-full max-w-2xl mx-auto px-4 py-12 text-center space-y-6">
           <div className="space-y-1">
             <h3 className="text-sm font-black text-white">End of Ch. {chapter.chapter_number}</h3>
             <p className="text-xs text-neutral-500">{chapter.title || 'Official Release'}</p>
@@ -305,7 +316,7 @@ export default function ReaderPage() {
         </div>
       </main>
 
-      {/* Modal 1: Table of Contents Drawer */}
+      {/* Chapters Drawer */}
       {showChaptersDrawer && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-[#13151f] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl flex flex-col max-h-[80vh]">
@@ -349,7 +360,7 @@ export default function ReaderPage() {
         </div>
       )}
 
-      {/* Modal 2: Reader Settings Modal matching MangaFire */}
+      {/* Settings Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-[#13151f] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl space-y-4">
@@ -398,24 +409,7 @@ export default function ReaderPage() {
         </div>
       )}
 
-      {/* Modal 3: Keyboard Shortcuts Cheatsheet */}
-      {showHelpModal && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-[#13151f] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl space-y-3">
-            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
-              <h4 className="text-xs font-black uppercase text-white">Keyboard Shortcuts</h4>
-              <button onClick={() => setShowHelpModal(false)} className="text-neutral-400 hover:text-white">✕</button>
-            </div>
-            <div className="space-y-2 text-xs divide-y divide-neutral-800/40">
-              <div className="flex justify-between pt-1"><span className="text-neutral-400">Next / Prev Page</span><span className="font-mono font-bold text-white">→ / ← or D / A</span></div>
-              <div className="flex justify-between pt-1"><span className="text-neutral-400">Next / Prev Chapter</span><span className="font-mono font-bold text-white">N / B</span></div>
-              <div className="flex justify-between pt-1"><span className="text-neutral-400">Scroll Strip</span><span className="font-mono font-bold text-white">W / S or ↑ / ↓</span></div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal 4: Report Issue Modal */}
+      {/* Report Modal */}
       {showReportModal && (
         <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-[#13151f] border border-neutral-700/80 rounded-2xl p-5 shadow-2xl space-y-4">
