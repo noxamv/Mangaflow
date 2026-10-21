@@ -1,0 +1,25 @@
+User-agent: *
+Allow: /
+Allow: /series/
+Allow: /browse
+Allow: /filter
+Allow: /category/
+
+# Prevent bots from crawling 58,000+ reader routes and consuming database connections
+Disallow: /read/
+Disallow: /api/
+Disallow: /profile/
+Disallow: /settings
+
+# Restrict aggressive scraper bots
+User-agent: Bytespider
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /
