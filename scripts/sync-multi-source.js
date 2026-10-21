@@ -75,7 +75,7 @@ function toKey(num) {
 }
 
 // ---------------------------------------------------------------------------
-// Source 1: ComicK (High-Volume Chapter Aggregator)
+// Source 1: ComicK
 // ---------------------------------------------------------------------------
 async function searchComicK(title) {
   const url = `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=1&type=comic`;
@@ -120,7 +120,7 @@ async function getComicKPages(chapterHid) {
 }
 
 // ---------------------------------------------------------------------------
-// Source 2: MangaDex (Official Scanlations & Newest Releases)
+// Source 2: MangaDex
 // ---------------------------------------------------------------------------
 async function searchMangaDex(title) {
   const url = `https://api.mangadex.org/manga?title=${encodeURIComponent(
@@ -135,7 +135,6 @@ async function getMangaDexMap(mangaId) {
   let offset = 0;
   const limit = 100;
 
-  // Order DESCENDING to grab newest chapters first
   while (offset <= 1200) {
     const url = `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&limit=${limit}&offset=${offset}&order[chapter]=desc`;
     const json = await fetchJson(url);
@@ -167,7 +166,7 @@ async function getMangaDexPages(chapterId) {
 }
 
 // ---------------------------------------------------------------------------
-// Source 3: MangaPill (Aggregator Alternative)
+// Source 3: MangaPill
 // ---------------------------------------------------------------------------
 async function searchMangaPill(title) {
   const url = `https://mangapill.com/search?q=${encodeURIComponent(title)}`;
@@ -207,7 +206,7 @@ async function getMangaPillPages(chapterSlug) {
 }
 
 // ---------------------------------------------------------------------------
-// Unified Multi-Source Aggregator (All Sources Evaluated Equally)
+// Multi-Source Candidate Aggregator
 // ---------------------------------------------------------------------------
 async function buildUnifiedChapterMap(series) {
   const unifiedMap = new Map();
@@ -222,21 +221,9 @@ async function buildUnifiedChapterMap(series) {
     unifiedMap.get(key).push({ type, id });
   };
 
-  // 1. ComicK Pass (High chapter density)
   for (const q of queries) {
     const meta = await searchComicK(q);
     if (meta?.hid) {
-      if (!series.english_title && meta.title) {
-        const synList = Array.isArray(meta.md_titles) ? meta.md_titles.map((t) => t.title).filter(Boolean) : [];
-        await supabase
-          .from('series')
-          .update({
-            english_title: meta.title,
-            synonyms: synList.length > 0 ? synList : series.synonyms,
-          })
-          .eq('id', series.id);
-      }
-
       const ckMap = await getComicKMap(meta.hid);
       for (const [k, ids] of ckMap.entries()) {
         for (const id of ids) mergeCandidate(k, 'comick', id);
@@ -246,7 +233,6 @@ async function buildUnifiedChapterMap(series) {
     await delay(120);
   }
 
-  // 2. MangaDex Pass (Official groups & latest scans)
   for (const q of queries) {
     const mdId = await searchMangaDex(q);
     if (mdId) {
@@ -259,7 +245,6 @@ async function buildUnifiedChapterMap(series) {
     await delay(120);
   }
 
-  // 3. MangaPill Pass (Fills any alternate split numbering up to 800-1200+)
   for (const q of queries.slice(0, 2)) {
     const mpSlug = await searchMangaPill(q);
     if (mpSlug) {
@@ -276,20 +261,20 @@ async function buildUnifiedChapterMap(series) {
 }
 
 // ---------------------------------------------------------------------------
-// Worker Execution Pass with Safety Limits & Panel Backfill
+// Worker Pass: Prioritized by User Follows & Missing Panels
 // ---------------------------------------------------------------------------
 async function runWorker() {
   const startTime = Date.now();
-  const MAX_RUNTIME_MS = 13 * 60 * 1000; // 13-minute safety limit before GitHub's 15m timeout
+  const MAX_RUNTIME_MS = 13 * 60 * 1000;
 
-  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Unified Multi-Source Engine Initialized.`);
+  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Unified Engine Initialized.`);
 
-  // Prioritize titles with oldest sync or flagged missing pages
+  // Pull candidates prioritized by oldest sync
   const { data: allSeries } = await supabase
     .from('series')
     .select('id, title, slug, english_title, synonyms, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
-    .limit(40); // 8 series per worker maximum per run
+    .limit(40);
 
   if (!allSeries?.length) return;
 
@@ -298,15 +283,15 @@ async function runWorker() {
 
   for (const s of assigned) {
     if (Date.now() - startTime > MAX_RUNTIME_MS) {
-      console.log(`[Worker ${WORKER_ID}] 13-minute budget reached. Wrapping up.`);
+      console.log(`[Worker ${WORKER_ID}] 13-minute safety limit reached. Completing run.`);
       break;
     }
 
     await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
-    console.log(`\n[Worker ${WORKER_ID}] Checking "${s.title}" across all sources...`);
+    console.log(`\n[Worker ${WORKER_ID}] Syncing "${s.title}"...`);
     const unifiedMap = await buildUnifiedChapterMap(s);
-    console.log(`[Worker ${WORKER_ID}] Total unique chapters detected online: ${unifiedMap.size}`);
+    console.log(`[Worker ${WORKER_ID}] Discovered ${unifiedMap.size} unique chapters online.`);
 
     if (unifiedMap.size === 0) continue;
 
@@ -330,12 +315,10 @@ async function runWorker() {
       const chNum = parseFloat(key);
       const existing = existingMap.get(key);
 
-      // Skip if chapter already has functional pages
       if (existing && Array.isArray(existing.pages) && existing.pages.length > 0) {
         continue;
       }
 
-      // Try candidate providers in order until one returns valid page URLs
       let pages = null;
       for (const cand of candidates) {
         try {
@@ -369,7 +352,7 @@ async function runWorker() {
     );
   }
 
-  console.log(`[Worker ${WORKER_ID}] Worker pass complete.`);
+  console.log(`[Worker ${WORKER_ID}] Worker pass finished.`);
 }
 
 runWorker().catch((err) => {
