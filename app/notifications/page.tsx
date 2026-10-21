@@ -40,25 +40,26 @@ export default function NotificationsPage() {
           .from('chapters')
           .select('id, series_id, chapter_number, created_at, series (title, slug, cover_image_url)')
           .in('series_id', sIds)
-          .order('created_at', { ascending: false })
-          .limit(25);
+          .order('chapter_number', { ascending: false });
 
         if (chapters) {
-          setItems(
-            chapters.map((c: any) => {
+          const latestMap = new Map<string, NotificationCard>();
+          for (const c of chapters) {
+            if (!latestMap.has(c.series_id)) {
               const sObj = Array.isArray(c.series) ? c.series[0] : c.series;
-              return {
+              latestMap.set(c.series_id, {
                 id: c.id,
                 chapter_id: c.id,
                 series_title: sObj?.title || 'Series',
                 series_slug: sObj?.slug || '',
                 chapter_number: c.chapter_number,
                 cover_url: sObj?.cover_image_url || '',
-                time_ago: 'New',
+                time_ago: 'Latest Release',
                 is_read: false,
-              };
-            })
-          );
+              });
+            }
+          }
+          setItems(Array.from(latestMap.values()));
         }
       }
       setLoading(false);
@@ -77,7 +78,7 @@ export default function NotificationsPage() {
       <div className="flex items-center justify-between border-b border-neutral-800 pb-4">
         <div>
           <h1 className="text-2xl font-black text-white">Notifications</h1>
-          <p className="text-xs text-neutral-400 mt-0.5">New chapters from titles you follow</p>
+          <p className="text-xs text-neutral-400 mt-0.5">Newest release from each title you bookmark</p>
         </div>
         <button
           onClick={() => setItems((prev) => prev.map((i) => ({ ...i, is_read: true })))}
@@ -104,7 +105,7 @@ export default function NotificationsPage() {
       {loading ? (
         <div className="py-20 text-center text-xs text-neutral-500">Loading alerts...</div>
       ) : filtered.length === 0 ? (
-        <div className="py-20 text-center text-xs text-neutral-500">No notifications to show.</div>
+        <div className="py-20 text-center text-xs text-neutral-500">No bookmarked chapter drops yet.</div>
       ) : (
         <div className="bg-[#13151f] border border-neutral-800 rounded-2xl overflow-hidden divide-y divide-neutral-800/60">
           {filtered.map((item) => (
