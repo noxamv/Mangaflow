@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mangaflow-v3';
+const CACHE_NAME = 'mangaflow-v4';
 
 // 1. Static UI shell assets pre-cached for native PWA performance
 const STATIC_SHELL_ASSETS = [
@@ -65,12 +65,12 @@ self.addEventListener('fetch', (event) => {
 
         try {
           const networkResponse = await fetch(event.request);
+          // Only cache successful image responses (never cache 403 or 500 errors)
           if (networkResponse && networkResponse.status === 200) {
             cache.put(event.request, networkResponse.clone());
           }
           return networkResponse;
         } catch {
-          // If offline and panel wasn't fetched yet, return friendly offline fallback
           return new Response('Panel offline', { status: 503, statusText: 'Offline' });
         }
       })
