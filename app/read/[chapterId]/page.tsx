@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
@@ -41,7 +41,10 @@ export default function ReaderPage() {
   const [drawerSearch, setDrawerSearch] = useState('');
   const [drawerSort, setDrawerSort] = useState<'desc' | 'asc'>('desc');
 
-  // Load Chapter & Sibling Data
+  // Container ref for remembering scroll position in Webtoon mode
+  const webtoonContainerRef = useRef<HTMLDivElement>(null);
+
+  // 1. Load Chapter Data (Handles Offline Cache & Online Supabase)
   useEffect(() => {
     async function load() {
       if (!chapterId) return;
@@ -49,8 +52,10 @@ export default function ReaderPage() {
 
       try {
         let chData: any = null;
-        const res = await fetch(`/api/chapter/${chapterId}`);
-        if (res.ok) chData = await res.json();
+        try {
+          const res = await fetch(`/api/chapter/${chapterId}`);
+          if (res.ok) chData = await res.json();
+        } catch {}
 
         if (!chData) {
           const { data } = await supabase
@@ -63,7 +68,6 @@ export default function ReaderPage() {
 
         if (!chData) return;
         setChapter(chData);
-        setPageIdx(0);
 
         // Fetch sibling chapters for navigation
         const { data: sibs } = await supabase
@@ -73,6 +77,23 @@ export default function ReaderPage() {
           .order('chapter_number', { ascending: true });
 
         if (sibs) setAllChapters(sibs);
+
+        // Restore saved position (Exact page left off)
+        const savedPage = localStorage.getItem(`mangaflow_page_${chapterId}`);
+        if (savedPage !== null) {
+          const parsed = parseInt(savedPage, 10);
+          if (!isNaN(parsed) && parsed >= 0) {
+            setPageIdx(parsed);
+          }
+        }
+
+        // Restore scroll position in long strip mode
+        const savedScroll = localStorage.getItem(`mangaflow_scroll_${chapterId}`);
+        if (savedScroll !== null) {
+          setTimeout(() => {
+            window.scrollTo({ top: parseInt(savedScroll, 10), behavior: 'instant' });
+          }, 150);
+        }
 
         // Update local reading history
         const local = JSON.parse(localStorage.getItem('mangaflow_reading_history') || '{}');
@@ -88,7 +109,7 @@ export default function ReaderPage() {
         };
         localStorage.setItem('mangaflow_reading_history', JSON.stringify(local));
 
-        // Sync to Supabase reading_history
+        // Sync to Supabase reading_history if logged in
         const { data: auth } = await supabase.auth.getUser();
         if (auth?.user) {
           await supabase.from('reading_history').upsert({
@@ -108,7 +129,32 @@ export default function ReaderPage() {
     load();
   }, [chapterId]);
 
-  // Prev / Next Chapter calculations
+  // 2. Save Exact Page Index in Single/Double Mode
+  useEffect(() => {
+    if (!chapterId) return;
+    localStorage.setItem(`mangaflow_page_${chapterId}`, String(pageIdx));
+  }, [chapterId, pageIdx]);
+
+  // 3. Save Exact Scroll Position in Long Strip / Webtoon Mode
+  useEffect(() => {
+    if (!chapterId || layoutMode !== 'long_strip') return;
+
+    let timeout: any;
+    const handleScroll = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        localStorage.setItem(`mangaflow_scroll_${chapterId}`, String(window.scrollY));
+      }, 150);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, [chapterId, layoutMode]);
+
+  // Sibling Chapter Navigation
   const currentIndex = allChapters.findIndex((c) => c.id === chapterId);
   const prevChapter = currentIndex > 0 ? allChapters[currentIndex - 1] : null;
   const nextChapter = currentIndex >= 0 && currentIndex < allChapters.length - 1 ? allChapters[currentIndex + 1] : null;
@@ -139,7 +185,7 @@ export default function ReaderPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [layoutMode, pages.length, nextChapter, prevChapter, router, showChaptersDrawer, showSettingsModal]);
 
-  // Filtered chapters inside the Quick-Jump drawer
+  // Filtered Chapters Drawer
   const filteredChapters = useMemo(() => {
     return allChapters
       .filter((c) => {
@@ -161,7 +207,7 @@ export default function ReaderPage() {
     return (
       <div className="min-h-screen bg-[#0d0e12] flex flex-col items-center justify-center text-gray-400 gap-4">
         <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-sm font-medium tracking-wide">Loading panels...</p>
+        <p className="text-sm font-medium tracking-wide">Loading chapter...</p>
       </div>
     );
   }
@@ -169,9 +215,9 @@ export default function ReaderPage() {
   if (!chapter || pages.length === 0) {
     return (
       <div className="min-h-screen bg-[#0d0e12] flex flex-col items-center justify-center text-gray-300 p-6 text-center">
-        <h2 className="text-xl font-bold mb-2">No Pages Found</h2>
+        <h2 className="text-xl font-bold mb-2">No Pages Available</h2>
         <p className="text-sm text-gray-500 max-w-md mb-6">
-          This chapter is currently in the sync queue. Our background workers are processing it.
+          If you are offline, only chapters you previously opened are available.
         </p>
         <Link
           href={`/series/${chapter?.series?.slug || ''}`}
@@ -185,7 +231,7 @@ export default function ReaderPage() {
 
   return (
     <div className="min-h-screen bg-[#090a0d] text-white flex flex-col relative select-none">
-      {/* Top Floating MangaFire Navigation Bar */}
+      {/* Top Floating Header */}
       <header
         className={`fixed top-0 inset-x-0 z-40 bg-[#121319]/95 backdrop-blur border-b border-gray-800/80 px-4 py-3 flex items-center justify-between transition-transform duration-300 ${
           showUi ? 'translate-y-0' : '-translate-y-full'
@@ -208,26 +254,23 @@ export default function ReaderPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Chapter Quick Jump Drawer Toggle */}
           <button
             onClick={() => setShowChaptersDrawer(true)}
             className="px-3 py-1.5 bg-[#1b1d24] hover:bg-[#252833] border border-gray-700/60 rounded-md text-xs font-medium flex items-center gap-1.5 text-gray-200 transition"
           >
             📑 Chapters
           </button>
-
-          {/* Reader View Mode Settings */}
           <button
             onClick={() => setShowSettingsModal(true)}
             className="p-1.5 bg-[#1b1d24] hover:bg-[#252833] border border-gray-700/60 rounded-md text-gray-300 transition"
-            title="Reader Mode"
+            title="Settings"
           >
             ⚙️
           </button>
         </div>
       </header>
 
-      {/* Main Reader Viewport */}
+      {/* Reader Viewport */}
       <main
         className="flex-1 flex flex-col items-center justify-center py-16 px-0 w-full"
         onClick={() => setShowUi((prev) => !prev)}
@@ -235,6 +278,7 @@ export default function ReaderPage() {
         {/* Mode 1: Long Strip / Webtoon Mode */}
         {layoutMode === 'long_strip' && (
           <div
+            ref={webtoonContainerRef}
             className="flex flex-col items-center w-full max-w-3xl"
             style={{ gap: `${pageMargin}px` }}
           >
@@ -243,7 +287,7 @@ export default function ReaderPage() {
                 key={i}
                 src={`/api/proxy?url=${encodeURIComponent(url)}`}
                 alt={`Page ${i + 1}`}
-                loading={i < 3 ? 'eager' : 'lazy'}
+                loading={i < 4 ? 'eager' : 'lazy'}
                 className="w-full h-auto block select-none pointer-events-none"
               />
             ))}
@@ -283,7 +327,7 @@ export default function ReaderPage() {
         )}
       </main>
 
-      {/* Bottom Floating MangaFire Bar */}
+      {/* Bottom Floating Navigation Bar */}
       <footer
         className={`fixed bottom-0 inset-x-0 z-40 bg-[#121319]/95 backdrop-blur border-t border-gray-800/80 px-4 py-2.5 flex items-center justify-between transition-transform duration-300 ${
           showUi ? 'translate-y-0' : 'translate-y-full'
@@ -310,7 +354,7 @@ export default function ReaderPage() {
         </button>
       </footer>
 
-      {/* Chapter Quick-Jump Drawer */}
+      {/* Chapter Quick Jump Drawer */}
       {showChaptersDrawer && (
         <div className="fixed inset-0 z-50 flex">
           <div
@@ -331,7 +375,7 @@ export default function ReaderPage() {
             <div className="my-3 flex items-center gap-2">
               <input
                 type="text"
-                placeholder="Search chapter number..."
+                placeholder="Search chapter..."
                 value={drawerSearch}
                 onChange={(e) => setDrawerSearch(e.target.value)}
                 className="flex-1 bg-[#1a1c24] border border-gray-700/60 rounded px-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500"
@@ -374,7 +418,7 @@ export default function ReaderPage() {
         </div>
       )}
 
-      {/* Reader Mode Settings Modal */}
+      {/* Reading Options Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
