@@ -41,7 +41,7 @@ export default function ReaderPage() {
   const [drawerSearch, setDrawerSearch] = useState('');
   const [drawerSort, setDrawerSort] = useState<'desc' | 'asc'>('desc');
 
-  // Container ref for remembering scroll position in Webtoon mode
+  // Container ref for scroll position in Webtoon mode
   const webtoonContainerRef = useRef<HTMLDivElement>(null);
 
   // 1. Load Chapter Data (Handles Offline Cache & Online Supabase)
@@ -288,6 +288,13 @@ export default function ReaderPage() {
                 src={`/api/proxy?url=${encodeURIComponent(url)}`}
                 alt={`Page ${i + 1}`}
                 loading={i < 4 ? 'eager' : 'lazy'}
+                onError={(e) => {
+                  // Direct upstream fallback if proxy rejects or encounters issue
+                  const target = e.currentTarget;
+                  if (target.src.includes('/api/proxy')) {
+                    target.src = url;
+                  }
+                }}
                 className="w-full h-auto block select-none pointer-events-none"
               />
             ))}
@@ -300,6 +307,12 @@ export default function ReaderPage() {
             <img
               src={`/api/proxy?url=${encodeURIComponent(pages[pageIdx])}`}
               alt={`Page ${pageIdx + 1}`}
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (target.src.includes('/api/proxy')) {
+                  target.src = pages[pageIdx];
+                }
+              }}
               className="max-h-[85vh] w-auto object-contain select-none"
             />
             <div className="mt-4 text-xs text-gray-400">
@@ -315,12 +328,24 @@ export default function ReaderPage() {
               <img
                 src={`/api/proxy?url=${encodeURIComponent(pages[pageIdx + 1])}`}
                 alt={`Page ${pageIdx + 2}`}
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (target.src.includes('/api/proxy')) {
+                    target.src = pages[pageIdx + 1];
+                  }
+                }}
                 className="max-h-[85vh] w-1/2 object-contain select-none"
               />
             )}
             <img
               src={`/api/proxy?url=${encodeURIComponent(pages[pageIdx])}`}
               alt={`Page ${pageIdx + 1}`}
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (target.src.includes('/api/proxy')) {
+                  target.src = pages[pageIdx];
+                }
+              }}
               className="max-h-[85vh] w-1/2 object-contain select-none"
             />
           </div>
