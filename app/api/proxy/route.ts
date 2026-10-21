@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const ALLOWED_ROOTS = [
+const ALLOWED_PATTERNS = [
   'mangadex.org',
+  'mangadex.network',
+  'uploads.mangadex.org',
   'comick.io',
   'comick.pictures',
+  'comick.fun',
+  'comick.app',
   'mangapill.com',
+  'mpcdn.xyz',
   'readdetectiveconan.com',
   'consumet.org',
-  'meo.comick.pictures',
-  'meo2.comick.pictures',
-  'meo3.comick.pictures',
 ];
 
 export const runtime = 'nodejs';
@@ -22,24 +24,6 @@ export async function GET(request: NextRequest) {
     return new NextResponse('Invalid target URL', { status: 400 });
   }
 
-  // Anti-hotlinking verification
-  const referer = request.headers.get('referer');
-  const origin = request.headers.get('origin');
-  const host = request.headers.get('host') || '';
-
-  if (process.env.NODE_ENV === 'production' && !host.includes('localhost')) {
-    const isAllowedReferer =
-      !referer ||
-      referer.includes(host) ||
-      (origin && origin.includes(host));
-
-    if (!isAllowedReferer) {
-      return new NextResponse('Forbidden: Hotlinking is not permitted', {
-        status: 403,
-      });
-    }
-  }
-
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(targetUrl);
@@ -48,17 +32,18 @@ export async function GET(request: NextRequest) {
   }
 
   const hostname = parsedUrl.hostname.toLowerCase();
-  const isAllowedHost = ALLOWED_ROOTS.some(
-    (root) => hostname === root || hostname.endsWith(`.${root}`)
+  const isAllowed = ALLOWED_PATTERNS.some(
+    (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
   );
 
-  if (!isAllowedHost) {
-    return new NextResponse('Target domain not permitted', { status: 403 });
+  if (!isAllowed) {
+    return new NextResponse(`Target domain "${hostname}" not permitted`, { status: 403 });
   }
 
+  // Proper upstream referer headers
   let upstreamReferer = 'https://mangadex.org/';
   if (hostname.includes('comick')) upstreamReferer = 'https://comick.io/';
-  else if (hostname.includes('mangapill')) upstreamReferer = 'https://mangapill.com/';
+  else if (hostname.includes('mangapill') || hostname.includes('mpcdn')) upstreamReferer = 'https://mangapill.com/';
 
   try {
     const res = await fetch(targetUrl, {
@@ -70,23 +55,21 @@ export async function GET(request: NextRequest) {
     });
 
     if (!res.ok) {
-      return new NextResponse(`Upstream responded with ${res.status}`, {
-        status: res.status,
-      });
+      return new NextResponse(`Upstream returned ${res.status}`, { status: res.status });
     }
 
     const contentType = res.headers.get('content-type') || 'image/jpeg';
-    const buffer = await res.arrayBuffer();
 
-    return new NextResponse(buffer, {
+    // Stream the body directly to avoid Vercel memory and buffer limits
+    return new NextResponse(res.body, {
       status: 200,
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=31536000, immutable',
-        'X-Content-Type-Options': 'nosniff',
+        'Access-Control-Allow-Origin': '*',
       },
     });
   } catch (err: any) {
-    return new NextResponse(`Proxy fetch error: ${err.message}`, { status: 500 });
+    return new NextResponse(`Proxy error: ${err.message}`, { status: 500 });
   }
 }
