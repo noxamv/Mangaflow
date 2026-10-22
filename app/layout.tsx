@@ -9,19 +9,13 @@ import './globals.css';
 interface UserProfile {
   id: string;
   email?: string;
-  user_metadata?: {
-    avatar_url?: string;
-    full_name?: string;
-  };
 }
 
 interface NotificationItem {
   id: string;
   title: string;
   message: string;
-  series_title?: string;
   cover_url?: string;
-  chapter_id?: string;
   read: boolean;
   created_at: string;
 }
@@ -42,7 +36,6 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  // Navigation & UI States
   const [user, setUser] = useState<UserProfile | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -58,7 +51,6 @@ export default function RootLayout({
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
-  // 1. Listen for Supabase Auth changes
   useEffect(() => {
     async function checkAuth() {
       const { data: { session } } = await supabase.auth.getSession();
@@ -75,7 +67,6 @@ export default function RootLayout({
     };
   }, []);
 
-  // 2. Click outside listener to close dropdowns
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -92,7 +83,6 @@ export default function RootLayout({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // 3. Live search query logic
   useEffect(() => {
     if (!searchQuery.trim()) {
       setSearchResults([]);
@@ -116,7 +106,6 @@ export default function RootLayout({
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Keyboard shortcut Ctrl+K or Cmd+K to open Search
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -134,7 +123,6 @@ export default function RootLayout({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Filter notifications according to active tab
   const filteredNotifications = notifications.filter((n) => {
     if (notifTab === 'unread') return !n.read;
     if (notifTab === 'read') return n.read;
@@ -155,24 +143,21 @@ export default function RootLayout({
   };
 
   return (
-    <html lang="en" className="dark scroll-smooth">
+    <html lang="en" className="dark scroll-smooth overflow-x-hidden">
       <head>
         <meta charSet="utf-8" />
-        {/* Ensures phone browsers render at native mobile app scale */}
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
         <title>MangaFlow - High Performance Comic Reader</title>
         <meta name="description" content="Read trending and popular manga, manhwa, and manhua with instant high-speed chapters." />
-        {/* Hotlink Defense: Strips the Referer header to stop 403 Forbidden image CDN blocks */}
         <meta name="referrer" content="no-referrer" />
       </head>
 
-      <body className="bg-[#090a0d] text-neutral-200 antialiased min-h-screen flex flex-col selection:bg-amber-500/20 selection:text-amber-300">
+      <body className="bg-[#090a0d] text-neutral-200 antialiased min-h-screen w-full max-w-full overflow-x-hidden flex flex-col selection:bg-amber-500/20 selection:text-amber-300">
         
         {/* TOP NAVIGATION BAR */}
         <header className="sticky top-0 z-40 bg-[#090a0d]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 lg:px-8 py-3 transition-colors">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
             
-            {/* Left: Brand & Main Routes */}
             <div className="flex items-center gap-6">
               <Link href="/" className="flex items-center gap-2 group">
                 <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-black font-black text-lg tracking-tighter shadow-lg shadow-amber-500/20 group-hover:scale-105 transition-transform">
@@ -209,26 +194,23 @@ export default function RootLayout({
                   Latest
                 </Link>
 
-                {/* Genres Mega-Dropdown Trigger */}
                 <div className="relative" ref={dropdownRef}>
                   <button
                     onClick={() => setGenresDropdownOpen(!genresDropdownOpen)}
                     className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1 ${
-                      genresDropdownOpen || pathname.startsWith('/browse')
+                      genresDropdownOpen || pathname.startsWith('/filter')
                         ? 'text-amber-400 bg-neutral-900'
                         : 'hover:text-white hover:bg-neutral-900/60'
                     }`}
                   >
                     <span>Browse</span>
-                    <span className="text-[10px] transform transition-transform duration-200">
-                      {genresDropdownOpen ? '▲' : '▼'}
-                    </span>
+                    <span className="text-[10px]">{genresDropdownOpen ? '▲' : '▼'}</span>
                   </button>
 
                   {genresDropdownOpen && (
                     <div className="absolute top-full left-0 mt-2 w-72 p-3 bg-[#0d0e14] border border-neutral-800 rounded-xl shadow-2xl z-50 grid grid-cols-2 gap-1 animate-in fade-in zoom-in-95 duration-100">
                       <Link
-                        href="/browse"
+                        href="/filter"
                         onClick={() => setGenresDropdownOpen(false)}
                         className="col-span-2 text-center py-1.5 mb-1 text-[11px] font-bold text-amber-400 bg-amber-400/10 rounded-lg hover:bg-amber-400/20 border border-amber-400/20"
                       >
@@ -237,7 +219,7 @@ export default function RootLayout({
                       {GENRE_LIST.map((genre) => (
                         <Link
                           key={genre}
-                          href={`/browse?genre=${encodeURIComponent(genre.toLowerCase())}`}
+                          href={`/filter?genre=${encodeURIComponent(genre.toLowerCase())}`}
                           onClick={() => setGenresDropdownOpen(false)}
                           className="px-2.5 py-1.5 text-[11px] text-neutral-300 hover:text-white hover:bg-neutral-800/80 rounded-md transition truncate"
                         >
@@ -250,10 +232,7 @@ export default function RootLayout({
               </nav>
             </div>
 
-            {/* Right: Search, Notifications & Auth */}
             <div className="flex items-center gap-3">
-              
-              {/* Quick Search Button */}
               <button
                 onClick={() => setSearchOpen(true)}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800/90 border border-neutral-800 text-neutral-400 text-xs transition"
@@ -265,7 +244,6 @@ export default function RootLayout({
                 </kbd>
               </button>
 
-              {/* Notification Center Trigger */}
               <div className="relative" ref={notifRef}>
                 <button
                   onClick={() => setNotifOpen(!notifOpen)}
@@ -280,36 +258,18 @@ export default function RootLayout({
                   )}
                 </button>
 
-                {/* Notifications Drawer Dialog */}
                 {notifOpen && (
                   <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-[#0d0e14] border border-neutral-800 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col">
                     <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-white">Notifications</span>
-                        {unreadCount > 0 && (
-                          <span className="text-[10px] bg-amber-400/20 text-amber-400 px-1.5 py-0.2 rounded-full font-bold">
-                            {unreadCount} new
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={markAllNotificationsAsRead}
-                          className="text-[10px] text-neutral-400 hover:text-neutral-200 transition"
-                        >
-                          Mark all read
-                        </button>
-                        <Link
-                          href="/notifications"
-                          onClick={() => setNotifOpen(false)}
-                          className="text-[10px] text-amber-400 hover:underline"
-                        >
-                          Full page →
-                        </Link>
-                      </div>
+                      <span className="text-xs font-bold text-white">Notifications</span>
+                      <button
+                        onClick={markAllNotificationsAsRead}
+                        className="text-[10px] text-neutral-400 hover:text-neutral-200 transition"
+                      >
+                        Mark all read
+                      </button>
                     </div>
 
-                    {/* All / Unread / Read Tabs */}
                     <div className="flex border-b border-neutral-800 text-[11px] font-semibold bg-neutral-950/60">
                       {(['all', 'unread', 'read'] as const).map((tab) => (
                         <button
@@ -326,11 +286,10 @@ export default function RootLayout({
                       ))}
                     </div>
 
-                    {/* Notification List Container */}
                     <div className="max-h-80 overflow-y-auto divide-y divide-neutral-800/60 scrollbar-thin">
                       {filteredNotifications.length === 0 ? (
                         <div className="py-8 text-center text-xs text-neutral-500">
-                          No {notifTab !== 'all' ? notifTab : ''} notifications.
+                          No notifications.
                         </div>
                       ) : (
                         filteredNotifications.map((n) => (
@@ -340,24 +299,9 @@ export default function RootLayout({
                               !n.read ? 'bg-amber-500/5' : 'hover:bg-neutral-900/40'
                             }`}
                           >
-                            {n.cover_url ? (
-                              <img
-                                src={n.cover_url}
-                                alt="cover"
-                                className="w-10 h-14 object-cover rounded bg-neutral-900 shrink-0"
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <div className="w-10 h-14 rounded bg-neutral-900 flex items-center justify-center text-xs text-neutral-600 shrink-0">
-                                📖
-                              </div>
-                            )}
                             <div className="flex-1 min-w-0">
                               <p className="text-xs font-semibold text-white truncate">{n.title}</p>
                               <p className="text-[11px] text-neutral-400 line-clamp-2 mt-0.5">{n.message}</p>
-                              <span className="text-[9px] text-neutral-600 mt-1 block">
-                                {new Date(n.created_at).toLocaleDateString()}
-                              </span>
                             </div>
                           </div>
                         ))
@@ -367,7 +311,6 @@ export default function RootLayout({
                 )}
               </div>
 
-              {/* Clean Silhouette User Avatar Menu */}
               {user ? (
                 <div className="relative" ref={userMenuRef}>
                   <button
@@ -375,11 +318,7 @@ export default function RootLayout({
                     className="w-8 h-8 rounded-full bg-neutral-800 border border-neutral-700 hover:border-amber-400/80 transition flex items-center justify-center overflow-hidden focus:outline-none"
                     aria-label="User Menu"
                   >
-                    <svg
-                      className="w-4 h-4 text-neutral-300"
-                      fill="currentColor"
-                      viewBox="0 0 24 24"
-                    >
+                    <svg className="w-4 h-4 text-neutral-300" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
                     </svg>
                   </button>
@@ -412,7 +351,7 @@ export default function RootLayout({
                         Import / Export
                       </Link>
                       <Link
-                        href="/profile/settings"
+                        href="/settings"
                         onClick={() => setUserMenuOpen(false)}
                         className="w-full text-left px-3 py-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 flex items-center gap-2"
                       >
@@ -444,10 +383,7 @@ export default function RootLayout({
         {/* SEARCH OVERLAY MODAL */}
         {searchOpen && (
           <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4">
-            <div
-              className="fixed inset-0 bg-black/80 backdrop-blur-sm"
-              onClick={() => setSearchOpen(false)}
-            />
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSearchOpen(false)} />
             <div className="relative w-full max-w-xl bg-[#0d0e14] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden z-10 flex flex-col">
               <div className="p-3 border-b border-neutral-800 flex items-center gap-2.5">
                 <span className="text-neutral-400 text-sm">🔍</span>
@@ -467,7 +403,6 @@ export default function RootLayout({
                 </button>
               </div>
 
-              {/* Live search results */}
               <div className="max-h-96 overflow-y-auto divide-y divide-neutral-800/50 p-2">
                 {isSearching ? (
                   <div className="py-8 text-center text-xs text-neutral-500">Searching catalog...</div>
@@ -483,24 +418,9 @@ export default function RootLayout({
                       onClick={() => setSearchOpen(false)}
                       className="p-2.5 rounded-xl hover:bg-neutral-900 flex items-center gap-3 transition group"
                     >
-                      {s.cover_url ? (
-                        <img
-                          src={s.cover_url}
-                          alt={s.title}
-                          className="w-10 h-14 object-cover rounded bg-neutral-950 shrink-0"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="w-10 h-14 rounded bg-neutral-950 flex items-center justify-center text-neutral-600 text-xs">
-                          📖
-                        </div>
-                      )}
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-bold text-white group-hover:text-amber-400 transition truncate">
                           {s.english_title || s.title}
-                        </p>
-                        <p className="text-[10px] text-neutral-500 capitalize mt-0.5">
-                          {s.reading_mode || 'Comic'}
                         </p>
                       </div>
                     </Link>
@@ -512,7 +432,7 @@ export default function RootLayout({
         )}
 
         {/* MAIN APPLICATION VIEWPORT */}
-        <div className="flex-1 flex flex-col w-full">
+        <div className="flex-1 flex flex-col w-full max-w-full overflow-x-hidden min-w-0">
           {children}
         </div>
 
@@ -524,7 +444,7 @@ export default function RootLayout({
               <span>— Graphic Comic Platform Engine</span>
             </div>
             <div className="flex items-center gap-6">
-              <Link href="/browse" className="hover:text-neutral-300 transition">Catalog Directory</Link>
+              <Link href="/filter" className="hover:text-neutral-300 transition">Catalog Directory</Link>
               <Link href="/trending" className="hover:text-neutral-300 transition">Trending</Link>
               <Link href="/popular" className="hover:text-neutral-300 transition">Popular</Link>
               <Link href="/latest" className="hover:text-neutral-300 transition">Latest</Link>
