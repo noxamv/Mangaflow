@@ -144,15 +144,26 @@ export default function SeriesDetailsPage() {
     return Array.from(new Set(list.map((s) => s.trim()).filter((s) => s.length > 0)));
   }, [series]);
 
+  // Frontend Deduplication Guard
   const displayedChapters = useMemo(() => {
-    let list = [...chapters];
+    const seenNumbers = new Set<number>();
+    const deduped: Chapter[] = [];
+
+    for (const c of chapters) {
+      if (!seenNumbers.has(c.chapter_number)) {
+        seenNumbers.add(c.chapter_number);
+        deduped.push(c);
+      }
+    }
+
+    let list = deduped;
     if (chapterSearch.trim()) {
       const q = chapterSearch.trim().toLowerCase();
       list = list.filter(
         (c) => String(c.chapter_number).includes(q) || c.title?.toLowerCase().includes(q)
       );
     }
-    return sortDesc ? list : list.reverse();
+    return sortDesc ? list : [...list].reverse();
   }, [chapters, chapterSearch, sortDesc]);
 
   if (loading) {
@@ -200,7 +211,7 @@ export default function SeriesDetailsPage() {
               {series.status || 'Ongoing'}
             </span>
             <span className="text-[11px] text-neutral-500">
-              {chapters.length} Chapters Indexed
+              {displayedChapters.length} Chapters Indexed
             </span>
           </div>
 
@@ -264,7 +275,6 @@ export default function SeriesDetailsPage() {
               </button>
             </div>
 
-            {/* Subtle timestamp line under the follow action */}
             <p className="text-[10px] text-neutral-500 font-medium pl-0.5">
               Latest update: {lastUpdatedDisplay}
             </p>
@@ -299,7 +309,7 @@ export default function SeriesDetailsPage() {
           </div>
         </div>
 
-        {/* Scrollable container with vertical scrollbar */}
+        {/* Scrollable Container */}
         <div className="max-h-[480px] overflow-y-auto pr-1 space-y-2 rounded-xl border border-neutral-800/50 p-2 bg-[#0d0e14]/40 scrollbar-thin scrollbar-thumb-neutral-800 scrollbar-track-transparent">
           {displayedChapters.length === 0 ? (
             <div className="py-12 text-center text-xs text-neutral-500">
