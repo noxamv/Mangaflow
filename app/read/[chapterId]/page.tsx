@@ -28,15 +28,15 @@ export default function ReaderPage() {
   const [seriesTitle, setSeriesTitle] = useState<string>('');
   const [seriesSlug, setSeriesSlug] = useState<string>('');
   const [allChapters, setAllChapters] = useState<SiblingChapter[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
 
   useEffect(() => {
     async function loadReaderData() {
       if (!chapterId) return;
       setLoading(true);
 
-      // 1. Fetch current chapter
+      // 1. Fetch current chapter details
       const { data: cData, error: cErr } = await supabase
         .from('chapters')
         .select('id, series_id, chapter_number, title, base_url, pages')
@@ -50,7 +50,7 @@ export default function ReaderPage() {
 
       setChapter(cData);
 
-      // 2. Fetch series metadata and sibling chapters for quick navigation
+      // 2. Fetch series information and sibling chapters for quick navigation
       const [{ data: sData }, { data: siblings }] = await Promise.all([
         supabase
           .from('series')
@@ -70,13 +70,12 @@ export default function ReaderPage() {
       }
 
       if (siblings) {
-        // Deduplicate sibling chapter numbers in memory
         const seen = new Set<number>();
         const deduped: SiblingChapter[] = [];
-        for (const sib of siblings) {
-          if (!seen.has(sib.chapter_number)) {
-            seen.add(sib.chapter_number);
-            deduped.push(sib);
+        for (const item of siblings) {
+          if (!seen.has(item.chapter_number)) {
+            seen.add(item.chapter_number);
+            deduped.push(item);
           }
         }
         setAllChapters(deduped);
@@ -89,12 +88,11 @@ export default function ReaderPage() {
     loadReaderData();
   }, [chapterId]);
 
-  // Compute Previous and Next chapter IDs
+  // Compute Adjacent Chapter Links (Ordered Descending)
   const { prevChapter, nextChapter } = useMemo(() => {
     if (!chapter || allChapters.length === 0) {
       return { prevChapter: null, nextChapter: null };
     }
-    // allChapters is sorted DESC (e.g. Ch 97, 96, 95)
     const currentIndex = allChapters.findIndex((c) => c.id === chapter.id);
     if (currentIndex === -1) {
       return { prevChapter: null, nextChapter: null };
@@ -106,7 +104,7 @@ export default function ReaderPage() {
     return { prevChapter: prev, nextChapter: next };
   }, [chapter, allChapters]);
 
-  // Keyboard navigation support: ArrowLeft (Prev), ArrowRight (Next)
+  // Keyboard shortcut listener (Arrows and A/D)
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -124,7 +122,7 @@ export default function ReaderPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  // Image URL Resolver: guarantees valid absolute URL
+  // Construct absolute panel URL
   const resolveImageUrl = useCallback(
     (page: string): string => {
       if (!page) return '';
@@ -143,26 +141,27 @@ export default function ReaderPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#090a0d] flex items-center justify-center text-neutral-500">
+      <div className="min-h-screen bg-[#090a0d] flex flex-col items-center justify-center space-y-3">
         <div className="w-8 h-8 border-2 border-neutral-700 border-t-amber-400 rounded-full animate-spin" />
+        <span className="text-xs text-neutral-500 font-medium tracking-wide">Loading chapter...</span>
       </div>
     );
   }
 
   if (!chapter || !chapter.pages || chapter.pages.length === 0) {
     return (
-      <div className="min-h-screen bg-[#090a0d] flex flex-col items-center justify-center text-neutral-400 space-y-4">
-        <p className="text-sm">Chapter panels are currently being re-indexed.</p>
+      <div className="min-h-screen bg-[#090a0d] flex flex-col items-center justify-center text-neutral-400 space-y-4 px-4 text-center">
+        <p className="text-sm font-medium">Chapter panels are currently being re-indexed.</p>
         {seriesSlug ? (
           <Link
             href={`/series/${seriesSlug}`}
-            className="text-xs text-amber-400 hover:underline border border-neutral-800 bg-neutral-900 px-4 py-2 rounded-lg"
+            className="text-xs text-amber-400 hover:text-amber-300 border border-neutral-800 bg-neutral-900 px-4 py-2 rounded-lg transition"
           >
-            ← Return to Overview
+            ← Return to Series Details
           </Link>
         ) : (
-          <Link href="/" className="text-xs text-amber-400 hover:underline">
-            ← Return to Library
+          <Link href="/" className="text-xs text-amber-400 hover:text-amber-300 transition">
+            ← Return to Home
           </Link>
         )}
       </div>
@@ -171,14 +170,14 @@ export default function ReaderPage() {
 
   return (
     <div className="min-h-screen bg-[#060709] text-neutral-200 flex flex-col select-none">
-      {/* Top Header Bar */}
-      <header className="sticky top-0 z-40 bg-[#090a0d]/90 backdrop-blur-md border-b border-neutral-800/80 px-4 py-2.5 flex items-center justify-between">
+      {/* Top Header Navigation */}
+      <header className="sticky top-0 z-40 bg-[#090a0d]/90 backdrop-blur-md border-b border-neutral-800 px-4 py-2.5 flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
           <Link
             href={seriesSlug ? `/series/${seriesSlug}` : '/'}
             className="text-xs text-neutral-400 hover:text-white transition flex items-center gap-1 shrink-0"
           >
-            ← <span className="hidden sm:inline">Back</span>
+            ← <span className="hidden sm:inline">Overview</span>
           </Link>
           <div className="min-w-0">
             <h1 className="text-xs sm:text-sm font-bold text-white truncate">
@@ -204,7 +203,7 @@ export default function ReaderPage() {
         </div>
       </header>
 
-      {/* Main Comic Viewer Panel Container */}
+      {/* Main Comic Panel Scroll Container */}
       <main className="flex-1 flex flex-col items-center w-full max-w-4xl mx-auto py-2">
         {chapter.pages.map((page, idx) => {
           const resolvedSrc = resolveImageUrl(page);
@@ -212,23 +211,22 @@ export default function ReaderPage() {
           return (
             <div
               key={idx}
-              className="w-full flex justify-center bg-[#090a0d] min-h-[300px] border-b border-neutral-900/40 relative group"
+              className="w-full flex justify-center bg-[#090a0d] min-h-[350px] border-b border-neutral-900/40 relative"
             >
               <img
                 src={resolvedSrc}
                 alt={`Page ${idx + 1}`}
                 loading="lazy"
                 decoding="async"
-                // Crucial hotlink protection bypass
+                // Crucial hotlink bypass attributes
                 referrerPolicy="no-referrer"
                 crossOrigin="anonymous"
                 className="w-full h-auto object-contain block max-w-full"
                 onError={(e) => {
                   const target = e.currentTarget;
-                  target.onerror = null;
-                  // Retry without base URL if direct link was attempted
-                  if (!page.startsWith('http') && !target.src.includes('comick.pictures')) {
-                    target.src = `https://meo3.comick.pictures/${page.replace(/^\/+/, '')}`;
+                  // If direct CDN access fails with 403 or network drop, route through Edge proxy
+                  if (!target.src.includes('/api/proxy-image')) {
+                    target.src = `/api/proxy-image?url=${encodeURIComponent(resolvedSrc)}`;
                   }
                 }}
               />
@@ -237,7 +235,7 @@ export default function ReaderPage() {
         })}
       </main>
 
-      {/* Bottom Floating Navigation Toolbar */}
+      {/* Bottom Sticky Navigation Bar */}
       <footer className="sticky bottom-0 z-40 bg-[#090a0d]/95 backdrop-blur-md border-t border-neutral-800 px-4 py-3 flex items-center justify-between max-w-3xl mx-auto w-full rounded-t-xl shadow-2xl">
         {prevChapter ? (
           <Link
@@ -270,11 +268,11 @@ export default function ReaderPage() {
         )}
       </footer>
 
-      {/* Chapter Selection Slide-out Drawer */}
+      {/* Slide-out Chapter Drawer */}
       {drawerOpen && (
         <div className="fixed inset-0 z-50 flex">
           <div
-            className="fixed inset-0 bg-black/70 backdrop-blur-sm"
+            className="fixed inset-0 bg-black/75 backdrop-blur-sm"
             onClick={() => setDrawerOpen(false)}
           />
           <div className="relative ml-auto w-80 max-w-full bg-[#0d0e14] border-l border-neutral-800 h-full p-4 flex flex-col z-10 shadow-2xl">
@@ -282,12 +280,12 @@ export default function ReaderPage() {
               <h2 className="text-sm font-bold text-white">Select Chapter</h2>
               <button
                 onClick={() => setDrawerOpen(false)}
-                className="text-neutral-400 hover:text-white text-xs px-2 py-1 rounded-md bg-neutral-900"
+                className="text-neutral-400 hover:text-white text-xs px-2 py-1 rounded-md bg-neutral-900 transition"
               >
                 ✕ Close
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto py-2 space-y-1.5 scrollbar-thin scrollbar-thumb-neutral-800">
+            <div className="flex-1 overflow-y-auto py-2 space-y-1.5">
               {allChapters.map((c) => {
                 const isCurrent = c.id === chapter.id;
                 return (
@@ -304,7 +302,7 @@ export default function ReaderPage() {
                     }`}
                   >
                     <span>Chapter {c.chapter_number}</span>
-                    {isCurrent && <span className="text-[10px] text-amber-400">Reading</span>}
+                    {isCurrent && <span className="text-[10px] text-amber-400 font-semibold">Reading</span>}
                   </button>
                 );
               })}
