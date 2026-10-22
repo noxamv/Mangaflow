@@ -295,18 +295,18 @@ export default function HomePage() {
   const Row = ({ title, items, color }: { title: string; items: SeriesItem[]; color: string }) => {
     if (items.length === 0) return null;
     return (
-      <section className="space-y-3">
+      <section className="space-y-3 w-full max-w-full overflow-hidden">
         <div className="flex items-center justify-between px-3 sm:px-0">
           <div className="flex items-center gap-2">
             <span className={`w-1.5 h-4 ${color} rounded-sm`} />
             <h2 className="text-sm sm:text-base font-bold text-white">{title}</h2>
           </div>
-          <Link href="/browse" className="text-[11px] font-semibold text-neutral-400 hover:text-indigo-400">
+          <Link href="/filter" className="text-[11px] font-semibold text-neutral-400 hover:text-indigo-400 transition">
             View all →
           </Link>
         </div>
 
-        <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 px-3 sm:px-0">
+        <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 px-3 sm:px-0 w-full max-w-full">
           {items.map((item) => {
             const coverUrl = resolveCoverUrl(item);
 
@@ -342,7 +342,7 @@ export default function HomePage() {
   }
 
   return (
-    <main className="max-w-7xl mx-auto px-0 sm:px-6 lg:px-8 py-4 space-y-6 sm:space-y-8">
+    <main className="max-w-7xl mx-auto w-full max-w-full overflow-x-hidden min-w-0 px-0 sm:px-6 lg:px-8 py-4 space-y-6 sm:space-y-8">
       <div className="px-3 sm:px-0">
         <SpotlightSlider items={trendingList.slice(0, 7)} />
       </div>
@@ -352,12 +352,12 @@ export default function HomePage() {
       </div>
 
       {continueList.length > 0 && (
-        <section className="space-y-3 px-3 sm:px-0">
+        <section className="space-y-3 px-3 sm:px-0 w-full max-w-full overflow-hidden">
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-4 bg-emerald-500 rounded-sm" />
             <h2 className="text-sm sm:text-base font-bold text-white">Continue Reading</h2>
           </div>
-          <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2">
+          <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 w-full max-w-full">
             {continueList.map((entry) => {
               const coverUrl = resolveCoverUrl(entry.series);
 
