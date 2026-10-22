@@ -1,4 +1,4 @@
-l LPUser-agent: *
+User-agent: *
 Allow: /
 Allow: /series/
 Allow: /browse
