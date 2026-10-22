@@ -168,6 +168,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           />
         )}
 
+        {/* Global Navigation Header: Hidden inside Reader */}
         {!isReader && (
           <header className="sticky top-0 z-40 w-full border-b border-neutral-800/80 bg-[#0f1117]/95 backdrop-blur-md">
             <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
