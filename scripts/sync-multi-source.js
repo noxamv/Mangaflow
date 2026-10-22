@@ -22,7 +22,6 @@ const HEADERS = {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Parallel execution worker pool
 async function asyncPool(poolLimit, array, iteratorFn) {
   const ret = [];
   const executing = new Set();
@@ -79,6 +78,18 @@ function toKey(num) {
   return Number.isInteger(num) ? String(num) : String(parseFloat(num.toFixed(2)));
 }
 
+function isNovelKeyword(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes('(novel)') ||
+    lower.includes('[novel]') ||
+    lower.includes('- novel') ||
+    lower.includes('web novel') ||
+    lower.includes('light novel')
+  );
+}
+
 function slugify(text) {
   return text
     .toString()
@@ -91,26 +102,23 @@ function slugify(text) {
     .replace(/-+$/, '');
 }
 
-// ---------------- COMICK (STRICT NOVEL FILTERING) ----------------
+// ================= 1. COMICK: PERMANENT GRAPHIC ONLY =================
 async function searchComicK(title) {
-  // Pull top 5 results to separate graphic webtoons from text novels
+  // Pass strict comic_types filter parameter
   const json = await fetchJson(
-    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=5&type=comic`
+    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=6&type=comic&comic_types=manga,manhwa,manhua`
   );
   if (!Array.isArray(json) || json.length === 0) return null;
 
-  // 1. Strict match: must be graphic comic/manhwa, NOT novel
-  const comicMatch = json.find(
-    (c) =>
-      c.comic_type !== 'novel' &&
-      c.type !== 'novel' &&
-      (c.comic_types?.includes('manhwa') || c.country === 'kr' || c.country === 'jp')
-  );
-  if (comicMatch?.hid) return comicMatch.hid;
+  // Filter out any results that are text novels
+  const validComics = json.filter((c) => {
+    if (c.comic_type === 'novel' || c.type === 'novel') return false;
+    if (isNovelKeyword(c.title)) return false;
+    // Must be marked as manga, manhwa, or manhua
+    return c.country === 'kr' || c.country === 'jp' || c.country === 'cn' || c.comic_types?.length > 0;
+  });
 
-  // 2. Fallback to any non-novel entry
-  const nonNovel = json.find((c) => c.comic_type !== 'novel' && c.type !== 'novel');
-  return nonNovel?.hid || json[0]?.hid || null;
+  return validComics[0]?.hid || null;
 }
 
 async function getComicKChapters(hid) {
@@ -137,14 +145,24 @@ async function getComicKPages(hid) {
   const json = await fetchJson(`https://api.comick.io/chapter/${hid}`);
   if (!json?.chapter?.images?.length) return null;
   return json.chapter.images
-    .filter((img) => img.url)
+    .filter((img) => img.url && typeof img.url === 'string')
     .map((img) => (img.url.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.url}`));
 }
 
-// ---------------- MANGADEX ----------------
+// ================= 2. MANGADEX: STRICT COMIC FILTER =================
 async function searchMangaDex(title) {
-  const json = await fetchJson(`https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=1&order[relevance]=desc`);
-  return json?.data?.[0]?.id || null;
+  const json = await fetchJson(
+    `https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=5&order[relevance]=desc&excludedTags[]=novel`
+  );
+  if (!json?.data?.length) return null;
+
+  // Filter out any title with novel in its name
+  const valid = json.data.filter((m) => {
+    const enTitle = m.attributes?.title?.en || Object.values(m.attributes?.title || {})[0] || '';
+    return !isNovelKeyword(enTitle);
+  });
+
+  return valid[0]?.id || null;
 }
 
 async function getMangaDexChapters(mangaId) {
@@ -152,7 +170,9 @@ async function getMangaDexChapters(mangaId) {
   let offset = 0;
   const limit = 100;
   while (offset <= 1000) {
-    const json = await fetchJson(`https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&limit=${limit}&offset=${offset}&order[chapter]=desc`);
+    const json = await fetchJson(
+      `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&limit=${limit}&offset=${offset}&order[chapter]=desc`
+    );
     if (!json?.data?.length) break;
     for (const item of json.data) {
       if (item.attributes?.externalUrl) continue;
@@ -175,8 +195,9 @@ async function getMangaDexPages(chapterId) {
   return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
 }
 
-// ---------------- MANGAPILL ----------------
+// ================= 3. MANGAPILL: GRAPHIC ONLY =================
 async function searchMangaPill(title) {
+  if (isNovelKeyword(title)) return null;
   const html = await fetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(title)}`);
   const match = html?.match(/href="\/manga\/([0-9]+\/[^"]+)"/i);
   return match ? match[1] : null;
@@ -205,7 +226,7 @@ async function getMangaPillPages(chapterSlug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// ---------------- MULTI-ALIAS RESOLUTION ----------------
+// ================= MULTI-ALIAS SEARCH & MERGE =================
 async function buildAggregatedChapterMap(searchTitles) {
   const unifiedMap = new Map();
   const checkedQueries = new Set();
@@ -220,7 +241,9 @@ async function buildAggregatedChapterMap(searchTitles) {
   for (const rawQuery of searchTitles) {
     if (!rawQuery) continue;
     const cleanQuery = rawQuery.trim();
-    if (cleanQuery.length < 2 || checkedQueries.has(cleanQuery.toLowerCase())) continue;
+    if (cleanQuery.length < 2 || isNovelKeyword(cleanQuery) || checkedQueries.has(cleanQuery.toLowerCase())) {
+      continue;
+    }
     checkedQueries.add(cleanQuery.toLowerCase());
 
     const [ckHid, mdId, mpSlug] = await Promise.all([
@@ -240,16 +263,18 @@ async function buildAggregatedChapterMap(searchTitles) {
   return unifiedMap;
 }
 
-// ---------------- NEW DISCOVERY (20%) ----------------
+// ================= NEW DISCOVERY (20% - GRAPHIC ONLY) =================
 async function discoverNewTrendingSeries(count = 3) {
-  console.log(`[Discovery] Checking upstream feeds for new releases...`);
+  console.log(`[Discovery] Checking upstream feeds for new comics/manhwa...`);
   const newDiscovered = [];
 
   try {
-    const topComics = await fetchJson('https://api.comick.io/top?type=trending&comic_types=manhwa&accept_mature_content=true');
+    const topComics = await fetchJson(
+      'https://api.comick.io/top?type=trending&comic_types=manhwa,manga,manhua&accept_mature_content=true'
+    );
     if (Array.isArray(topComics)) {
       for (const item of topComics) {
-        if (!item.title || item.comic_type === 'novel') continue;
+        if (!item.title || item.comic_type === 'novel' || isNovelKeyword(item.title)) continue;
         const slug = slugify(item.title);
 
         const { data: exists } = await supabase.from('series').select('id').eq('slug', slug).single();
@@ -258,16 +283,20 @@ async function discoverNewTrendingSeries(count = 3) {
             ? `https://meo3.comick.pictures/${item.md_covers[0].b2key}`
             : null;
 
-          const { data: inserted } = await supabase.from('series').insert({
-            title: item.title,
-            english_title: item.title,
-            slug: slug,
-            synopsis: item.desc || 'Discovered new trending release.',
-            cover_image_url: cover,
-            reading_mode: item.country === 'kr' ? 'webtoon' : 'manga',
-            status: 'releasing',
-            updated_at: new Date(0).toISOString(),
-          }).select('id, title, english_title, synonyms, native_title').single();
+          const { data: inserted } = await supabase
+            .from('series')
+            .insert({
+              title: item.title,
+              english_title: item.title,
+              slug: slug,
+              synopsis: item.desc || 'Trending graphic release.',
+              cover_image_url: cover,
+              reading_mode: item.country === 'kr' ? 'webtoon' : 'manga',
+              status: 'releasing',
+              updated_at: new Date(0).toISOString(),
+            })
+            .select('id, title, english_title, synonyms, native_title')
+            .single();
 
           if (inserted) {
             console.log(`   + Discovered & Indexed: ${inserted.title}`);
@@ -284,7 +313,7 @@ async function discoverNewTrendingSeries(count = 3) {
   return newDiscovered;
 }
 
-// ---------------- MAIN WORKER LOOP ----------------
+// ================= MAIN SYNC ENGINE =================
 async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
   await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
@@ -301,11 +330,11 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
     }
   }
 
-  console.log(`\n=> [${s.title}] Resolving releases across aliases...`);
+  console.log(`\n=> [${s.title}] Resolving comic releases across aliases...`);
   const unifiedMap = await buildAggregatedChapterMap(searchTitles);
 
   if (unifiedMap.size === 0) {
-    console.log('   No online releases matched.');
+    console.log('   No online graphic releases matched.');
     return;
   }
 
@@ -323,7 +352,7 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
   const tasks = [];
   for (const [key, candidates] of unifiedMap.entries()) {
     const chNum = parseFloat(key);
-    // Sanity limit: manhwa chapters never legitimately exceed 350
+    // Hard sanity guard: Webtoons never legitimately exceed 300-350 chapters
     if (s.reading_mode === 'webtoon' && chNum > 350) continue;
 
     const existing = existingMap.get(key);
@@ -356,7 +385,21 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
       } catch {}
     }
 
-    if (!pages?.length) return;
+    // STRICT CHECK: Must be a non-empty array of image panels
+    if (!Array.isArray(pages) || pages.length === 0) return;
+
+    // Reject if the page URLs do not look like graphic image files
+    const firstUrl = pages[0].toLowerCase();
+    const isImage =
+      firstUrl.includes('.jpg') ||
+      firstUrl.includes('.jpeg') ||
+      firstUrl.includes('.png') ||
+      firstUrl.includes('.webp') ||
+      firstUrl.includes('.avif') ||
+      firstUrl.includes('meo3.comick') ||
+      firstUrl.includes('mangadex.org');
+
+    if (!isImage) return;
 
     let baseUrl = '';
     let compressedPages = pages;
@@ -384,7 +427,7 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
     }
   });
 
-  // Conflict-safe bulk upsert: completely prevents unique constraint crashes
+  // Conflict-free upsert: updates existing chapters without throwing key duplicate exceptions
   if (upsertBatch.length > 0) {
     const { error: batchErr } = await supabase
       .from('chapters')
@@ -402,7 +445,7 @@ async function runWorker() {
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 12 * 60 * 1000;
 
-  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting Ultra-Fast Multi-Alias Engine...`);
+  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting Graphic-Only Multi-Alias Engine...`);
 
   const { data: queue } = await supabase
     .from('series')
