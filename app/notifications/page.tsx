@@ -19,6 +19,7 @@ export default function NotificationsPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'unread' | 'read'>('all');
   const [items, setItems] = useState<NotificationCard[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -28,6 +29,7 @@ export default function NotificationsPage() {
         setLoading(false);
         return;
       }
+      setUserId(auth.user.id);
 
       const { data: follows } = await supabase
         .from('user_follows')
@@ -36,15 +38,24 @@ export default function NotificationsPage() {
 
       if (follows && follows.length > 0) {
         const sIds = follows.map((f: any) => f.series_id);
-        const { data: chapters } = await supabase
-          .from('chapters')
-          .select('id, series_id, chapter_number, created_at, series (title, slug, cover_image_url)')
-          .in('series_id', sIds)
-          .order('chapter_number', { ascending: false });
 
-        if (chapters) {
+        const [chapsRes, readsRes] = await Promise.all([
+          supabase
+            .from('chapters')
+            .select('id, series_id, chapter_number, created_at, series:series_id(title, slug, cover_image_url)')
+            .in('series_id', sIds)
+            .order('chapter_number', { ascending: false }),
+          supabase
+            .from('notification_reads')
+            .select('chapter_id')
+            .eq('user_id', auth.user.id),
+        ]);
+
+        const readSet = new Set((readsRes.data || []).map((r: any) => r.chapter_id));
+
+        if (chapsRes.data) {
           const latestMap = new Map<string, NotificationCard>();
-          for (const c of chapters) {
+          for (const c of chapsRes.data) {
             if (!latestMap.has(c.series_id)) {
               const sObj = Array.isArray(c.series) ? c.series[0] : c.series;
               latestMap.set(c.series_id, {
@@ -55,7 +66,7 @@ export default function NotificationsPage() {
                 chapter_number: c.chapter_number,
                 cover_url: sObj?.cover_image_url || '',
                 time_ago: 'Latest Release',
-                is_read: false,
+                is_read: readSet.has(c.id),
               });
             }
           }
@@ -66,6 +77,19 @@ export default function NotificationsPage() {
     }
     load();
   }, []);
+
+  const markAllRead = async () => {
+    if (!userId) return;
+    const unread = items.filter((i) => !i.is_read);
+    setItems((prev) => prev.map((i) => ({ ...i, is_read: true })));
+
+    if (unread.length > 0) {
+      await supabase.from('notification_reads').upsert(
+        unread.map((i) => ({ user_id: userId, chapter_id: i.chapter_id })),
+        { onConflict: 'user_id,chapter_id' }
+      );
+    }
+  };
 
   const filtered = items.filter((item) => {
     if (activeTab === 'unread') return !item.is_read;
@@ -81,7 +105,7 @@ export default function NotificationsPage() {
           <p className="text-xs text-neutral-400 mt-0.5">Newest release from each title you bookmark</p>
         </div>
         <button
-          onClick={() => setItems((prev) => prev.map((i) => ({ ...i, is_read: true })))}
+          onClick={markAllRead}
           className="px-3.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-xl text-xs font-bold text-indigo-400 transition"
         >
           Mark as read
@@ -105,7 +129,7 @@ export default function NotificationsPage() {
       {loading ? (
         <div className="py-20 text-center text-xs text-neutral-500">Loading alerts...</div>
       ) : filtered.length === 0 ? (
-        <div className="py-20 text-center text-xs text-neutral-500">No bookmarked chapter drops yet.</div>
+        <div className="py-20 text-center text-xs text-neutral-500">No chapter drops in this category.</div>
       ) : (
         <div className="bg-[#13151f] border border-neutral-800 rounded-2xl overflow-hidden divide-y divide-neutral-800/60">
           {filtered.map((item) => (
@@ -127,7 +151,7 @@ export default function NotificationsPage() {
                 <span className="text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md font-bold">
                   {item.time_ago}
                 </span>
-                {!item.is_read && <span className="w-2 h-2 rounded-full bg-indigo-500" />}
+                {!item.is_read && <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" />}
               </div>
             </Link>
           ))}
