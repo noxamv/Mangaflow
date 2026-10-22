@@ -7,16 +7,6 @@ import { supabase } from '../lib/supabase';
 import AuthModal from '../components/AuthModal';
 import './globals.css';
 
-function getNaturalAvatarStyle(name: string) {
-  const styles = [
-    { bg: 'bg-[#252c38]', border: 'border-[#384355]', text: 'text-[#9eb5d1]' },
-    { bg: 'bg-[#332c22]', border: 'border-[#4a4031]', text: 'text-[#d6b47c]' },
-    { bg: 'bg-[#22302a]', border: 'border-[#33473e]', text: 'text-[#88bfa8]' },
-  ];
-  const charCode = (name || 'U').charCodeAt(0);
-  return styles[charCode % styles.length];
-}
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<any>(null);
   const [authOpen, setAuthOpen] = useState(false);
@@ -24,9 +14,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [searchOpen, setSearchOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notifMenuOpen, setNotifMenuOpen] = useState(false);
-  const [editProfileOpen, setEditProfileOpen] = useState(false);
 
   const [displayName, setDisplayName] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -42,6 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       setUser(u);
       if (u) {
         setDisplayName(u.user_metadata?.display_name || u.email?.split('@')[0] || 'Reader');
+        setAvatarUrl(u.user_metadata?.avatar_url || null);
         loadNotifications(u.id);
       }
     }
@@ -52,6 +43,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       setUser(u);
       if (u) {
         setDisplayName(u.user_metadata?.display_name || u.email?.split('@')[0] || 'Reader');
+        setAvatarUrl(u.user_metadata?.avatar_url || null);
         loadNotifications(u.id);
       } else {
         setNotifications([]);
@@ -74,7 +66,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       const [chapsRes, readRes] = await Promise.all([
         supabase
           .from('chapters')
-          .select('id, series_id, chapter_number, created_at, series:series_id(title, slug, cover_image_url)')
+          .select('id, series_id, chapter_number, created_at, series:series_id(title, english_title, slug, cover_image_url)')
           .in('series_id', sIds)
           .order('chapter_number', { ascending: false }),
         supabase
@@ -91,18 +83,28 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           const sObj = Array.isArray(c.series) ? c.series[0] : c.series;
           map.set(c.series_id, {
             id: c.id,
-            series_title: sObj?.title || 'Series',
+            series_title: sObj?.english_title || sObj?.title || 'Series',
             series_slug: sObj?.slug || '',
             chapter_id: c.id,
             chapter_number: c.chapter_number,
             cover_url: sObj?.cover_image_url || '',
-            time_ago: 'Latest Drop',
+            time_ago: formatTimeAgo(c.created_at),
             is_read: readSet.has(c.id),
           });
         }
       }
-      setNotifications(Array.from(map.values()).slice(0, 8));
+      setNotifications(Array.from(map.values()).slice(0, 6));
     } catch {}
+  }
+
+  function formatTimeAgo(dateStr?: string) {
+    if (!dateStr) return 'Recent';
+    const diffMs = Date.now() - new Date(dateStr).getTime();
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    if (diffHours < 1) return 'Just now';
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
   }
 
   const markAllAsRead = async () => {
@@ -135,18 +137,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     return () => clearTimeout(timer);
   }, [query]);
 
-  const handleSaveProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user) return;
-    await supabase.auth.updateUser({
-      data: { display_name: displayName.trim() },
-    });
-    setEditProfileOpen(false);
-  };
-
   const hasUnread = notifications.some((n) => !n.is_read);
-  const avatarStyle = getNaturalAvatarStyle(displayName);
-  const initial = displayName ? displayName.charAt(0).toUpperCase() : 'U';
 
   return (
     <html lang="en">
@@ -155,7 +146,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="manifest" href="/manifest.json" />
         <meta name="theme-color" content="#090a0d" />
       </head>
-      <body className="bg-[#090a0d] text-neutral-200 antialiased min-h-screen flex flex-col selection:bg-neutral-700 selection:text-white">
+      <body className="bg-[#090a0d] text-neutral-200 antialiased min-h-screen flex flex-col selection:bg-neutral-800 selection:text-white">
         {(menuOpen || searchOpen || userMenuOpen || notifMenuOpen) && (
           <div
             onClick={() => {
@@ -168,10 +159,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           />
         )}
 
-        {/* Global Navigation Header: Hidden inside Reader */}
         {!isReader && (
           <header className="sticky top-0 z-40 w-full border-b border-neutral-800/80 bg-[#0f1117]/95 backdrop-blur-md">
             <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
+              {/* Left: Navigation Menu */}
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -190,16 +181,33 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   </span>
                 </Link>
 
+                {/* Updated Navigation Dropdown (Removed Following Titles & Notifications) */}
                 {menuOpen && (
-                  <div className="absolute top-14 left-4 w-48 bg-[#14161f] border border-neutral-800 rounded-xl shadow-2xl py-1 z-50">
-                    <Link href="/" onClick={() => setMenuOpen(false)} className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60">Home</Link>
-                    <Link href="/filter" onClick={() => setMenuOpen(false)} className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60">Browse & Filter</Link>
-                    <Link href="/profile/following" onClick={() => setMenuOpen(false)} className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60">Followed Comics</Link>
-                    <Link href="/notifications" onClick={() => setMenuOpen(false)} className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60">Notifications</Link>
+                  <div className="absolute top-14 left-4 w-52 bg-[#14161f] border border-neutral-800 rounded-xl shadow-2xl py-1.5 z-50 divide-y divide-neutral-800/60">
+                    <div className="py-1">
+                      <Link href="/" onClick={() => setMenuOpen(false)} className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60">
+                        Home
+                      </Link>
+                      <Link href="/trending" onClick={() => setMenuOpen(false)} className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60">
+                        Trending Series
+                      </Link>
+                      <Link href="/popular" onClick={() => setMenuOpen(false)} className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60">
+                        Popular Series
+                      </Link>
+                      <Link href="/latest" onClick={() => setMenuOpen(false)} className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60">
+                        Latest Releases
+                      </Link>
+                    </div>
+                    <div className="py-1">
+                      <Link href="/filter" onClick={() => setMenuOpen(false)} className="block px-3.5 py-2 text-xs font-medium text-amber-400 hover:text-amber-300 hover:bg-neutral-800/60">
+                        Browse & Filter
+                      </Link>
+                    </div>
                   </div>
                 )}
               </div>
 
+              {/* Right: Actions */}
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -212,6 +220,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   </svg>
                 </button>
 
+                {/* Notifications Bell */}
                 {user && (
                   <div className="relative">
                     <button
@@ -231,22 +240,23 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                       )}
                     </button>
 
+                    {/* Notification Dropdown with Images and View All Footer */}
                     {notifMenuOpen && (
                       <div className="absolute top-10 right-0 w-80 bg-[#14161f] border border-neutral-800 rounded-xl shadow-2xl overflow-hidden z-50">
                         <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
                           <span className="text-xs font-bold text-white">Notifications</span>
                           <button
                             onClick={markAllAsRead}
-                            className="text-[10px] font-semibold text-neutral-400 hover:text-white"
+                            className="text-[11px] font-semibold text-neutral-400 hover:text-white transition"
                           >
-                            Mark all read
+                            ✓ Mark as read
                           </button>
                         </div>
 
                         <div className="max-h-64 overflow-y-auto divide-y divide-neutral-800/60">
                           {notifications.length === 0 ? (
                             <div className="p-6 text-center text-xs text-neutral-500">
-                              No unread releases.
+                              No unread notifications.
                             </div>
                           ) : (
                             notifications.map((item) => (
@@ -254,24 +264,43 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                                 key={item.id}
                                 href={`/read/${item.chapter_id}`}
                                 onClick={() => setNotifMenuOpen(false)}
-                                className={`p-3 flex items-center justify-between gap-3 transition ${
+                                className={`p-3 flex items-center gap-3 transition ${
                                   !item.is_read ? 'bg-neutral-800/30 hover:bg-neutral-800/50' : 'hover:bg-neutral-800/30'
                                 }`}
                               >
-                                <div className="min-w-0">
+                                <img
+                                  src={item.cover_url || '/placeholder.png'}
+                                  alt=""
+                                  className="w-9 h-12 rounded object-cover bg-neutral-900 border border-neutral-800 shrink-0"
+                                />
+                                <div className="min-w-0 flex-1">
                                   <p className="text-xs font-semibold text-white truncate">{item.series_title}</p>
-                                  <p className="text-[11px] text-neutral-400">Chapter {item.chapter_number}</p>
+                                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                                    Ch. {item.chapter_number} · <span className="text-neutral-500">{item.time_ago}</span>
+                                  </p>
                                 </div>
                                 {!item.is_read && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />}
                               </Link>
                             ))
                           )}
                         </div>
+
+                        {/* MangaFire-style 'View all notifications' footer */}
+                        <div className="p-2 border-t border-neutral-800 bg-[#0f1117] text-center">
+                          <Link
+                            href="/notifications"
+                            onClick={() => setNotifMenuOpen(false)}
+                            className="text-xs font-semibold text-neutral-300 hover:text-amber-400 transition block py-1"
+                          >
+                            View all notifications
+                          </Link>
+                        </div>
                       </div>
                     )}
                   </div>
                 )}
 
+                {/* Clean Default Profile Icon & User Navigation */}
                 {user ? (
                   <div className="relative">
                     <button
@@ -280,44 +309,75 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                         setUserMenuOpen(!userMenuOpen);
                         setNotifMenuOpen(false);
                       }}
-                      className={`w-8 h-8 rounded-full border flex items-center justify-center text-xs font-bold transition shadow-sm ${avatarStyle.bg} ${avatarStyle.border} ${avatarStyle.text}`}
+                      className="w-8 h-8 rounded-full border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 flex items-center justify-center transition overflow-hidden text-neutral-300"
+                      aria-label="User profile menu"
                     >
-                      {initial}
+                      {avatarUrl ? (
+                        <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                        </svg>
+                      )}
                     </button>
 
+                    {/* Full User Menu */}
                     {userMenuOpen && (
-                      <div className="absolute top-10 right-0 w-48 bg-[#14161f] border border-neutral-800 rounded-xl shadow-2xl overflow-hidden py-1 z-50">
-                        <div className="px-3 py-2 border-b border-neutral-800">
-                          <p className="text-xs font-semibold text-white truncate">{displayName}</p>
+                      <div className="absolute top-10 right-0 w-52 bg-[#14161f] border border-neutral-800 rounded-xl shadow-2xl overflow-hidden py-1.5 z-50 divide-y divide-neutral-800/60">
+                        <div className="px-3.5 py-2">
+                          <p className="text-xs font-bold text-white truncate">{displayName}</p>
                           <p className="text-[10px] text-neutral-400 truncate">{user.email}</p>
                         </div>
-                        <button
-                          onClick={() => {
-                            setUserMenuOpen(false);
-                            setEditProfileOpen(true);
-                          }}
-                          className="w-full text-left px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60"
-                        >
-                          Edit Profile
-                        </button>
-                        <Link
-                          href="/profile/following"
-                          onClick={() => setUserMenuOpen(false)}
-                          className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60"
-                        >
-                          Followed Comics
-                        </Link>
-                        <button
-                          onClick={async () => {
-                            await supabase.auth.signOut();
-                            setUser(null);
-                            setUserMenuOpen(false);
-                            router.refresh();
-                          }}
-                          className="w-full text-left px-3.5 py-2 text-xs font-medium text-rose-400 hover:bg-rose-500/10"
-                        >
-                          Log Out
-                        </button>
+                        <div className="py-1">
+                          <Link
+                            href="/profile/edit"
+                            onClick={() => setUserMenuOpen(false)}
+                            className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60 transition"
+                          >
+                            Edit Profile
+                          </Link>
+                          <Link
+                            href="/profile/following"
+                            onClick={() => setUserMenuOpen(false)}
+                            className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60 transition"
+                          >
+                            Following Titles
+                          </Link>
+                          <Link
+                            href="/notifications"
+                            onClick={() => setUserMenuOpen(false)}
+                            className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60 transition"
+                          >
+                            Notifications
+                          </Link>
+                          <Link
+                            href="/profile/import-export"
+                            onClick={() => setUserMenuOpen(false)}
+                            className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60 transition"
+                          >
+                            Import & Export
+                          </Link>
+                          <Link
+                            href="/profile/settings"
+                            onClick={() => setUserMenuOpen(false)}
+                            className="block px-3.5 py-2 text-xs font-medium text-neutral-300 hover:text-white hover:bg-neutral-800/60 transition"
+                          >
+                            Settings
+                          </Link>
+                        </div>
+                        <div className="py-1">
+                          <button
+                            onClick={async () => {
+                              await supabase.auth.signOut();
+                              setUser(null);
+                              setUserMenuOpen(false);
+                              router.refresh();
+                            }}
+                            className="w-full text-left px-3.5 py-2 text-xs font-medium text-rose-400 hover:bg-rose-500/10 transition"
+                          >
+                            Log Out
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -335,6 +395,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </header>
         )}
 
+        {/* Global Search Overlay */}
         {searchOpen && (
           <div className="fixed top-16 inset-x-0 z-50 flex justify-center px-4">
             <div className="w-full max-w-lg bg-[#14161f] border border-neutral-800 rounded-xl p-3 shadow-2xl">
@@ -355,53 +416,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                       onClick={() => setSearchOpen(false)}
                       className="p-2 flex items-center gap-3 hover:bg-neutral-800/40 rounded-lg"
                     >
-                      <img src={r.cover_image_url} alt="" className="w-8 h-10 object-cover rounded bg-neutral-900" />
+                      <img src={r.cover_image_url || '/placeholder.png'} alt="" className="w-8 h-10 object-cover rounded bg-neutral-900" />
                       <div className="truncate text-xs font-medium text-white">{r.english_title || r.title}</div>
                     </Link>
                   ))}
                 </div>
               )}
-            </div>
-          </div>
-        )}
-
-        {editProfileOpen && (
-          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="w-full max-w-sm bg-[#14161f] border border-neutral-800 rounded-xl p-5 shadow-2xl">
-              <div className="flex items-center justify-between pb-3 border-b border-neutral-800 mb-4">
-                <h3 className="text-xs font-bold text-white">Customize Profile</h3>
-                <button type="button" onClick={() => setEditProfileOpen(false)} className="text-neutral-400 hover:text-white text-sm">✕</button>
-              </div>
-
-              <form onSubmit={handleSaveProfile} className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-full border flex items-center justify-center text-sm font-bold shadow-sm ${avatarStyle.bg} ${avatarStyle.border} ${avatarStyle.text}`}>
-                    {initial}
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-white">{displayName || 'User'}</p>
-                    <p className="text-[10px] text-neutral-500">Natural Profile Tone</p>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-semibold text-neutral-400 block mb-1">Display Username</label>
-                  <input
-                    type="text"
-                    required
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-neutral-600"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  className="w-full py-2 bg-neutral-800 hover:bg-neutral-700 font-semibold text-xs text-white rounded-lg transition"
-                >
-                  Save Profile
-                </button>
-              </form>
             </div>
           </div>
         )}
