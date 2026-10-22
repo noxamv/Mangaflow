@@ -29,8 +29,7 @@ jobs:
       - name: Setup Node.js Runtime
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          check-latest: false
+          node-version: 22
 
       - name: Install Dependencies
         run: npm install --no-audit --no-fund
