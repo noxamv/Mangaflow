@@ -10,7 +10,6 @@ export async function GET(req: NextRequest) {
     return new NextResponse('Invalid or missing target image URL', { status: 400 });
   }
 
-  // Determine the correct upstream referer required by the specific CDN
   let upstreamReferer = '';
   if (imageUrl.includes('readdetectiveconan.com') || imageUrl.includes('mangapill.com')) {
     upstreamReferer = 'https://mangapill.com/';
