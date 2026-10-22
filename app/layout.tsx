@@ -9,13 +9,19 @@ import './globals.css';
 interface UserProfile {
   id: string;
   email?: string;
+  user_metadata?: {
+    avatar_url?: string;
+    full_name?: string;
+  };
 }
 
 interface NotificationItem {
   id: string;
   title: string;
   message: string;
+  series_title?: string;
   cover_url?: string;
+  chapter_id?: string;
   read: boolean;
   created_at: string;
 }
@@ -51,6 +57,16 @@ export default function RootLayout({
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
+  // 1. PWA Service Worker Registration
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch((err) => {
+        console.error('ServiceWorker registration error:', err);
+      });
+    }
+  }, []);
+
+  // 2. Supabase Auth State Listener
   useEffect(() => {
     async function checkAuth() {
       const { data: { session } } = await supabase.auth.getSession();
@@ -67,6 +83,7 @@ export default function RootLayout({
     };
   }, []);
 
+  // 3. Click outside handler for dropdowns
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -83,6 +100,7 @@ export default function RootLayout({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // 4. Live Search logic
   useEffect(() => {
     if (!searchQuery.trim()) {
       setSearchResults([]);
@@ -106,6 +124,7 @@ export default function RootLayout({
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  // 5. Global Hotkeys
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -150,6 +169,9 @@ export default function RootLayout({
         <title>MangaFlow - High Performance Comic Reader</title>
         <meta name="description" content="Read trending and popular manga, manhwa, and manhua with instant high-speed chapters." />
         <meta name="referrer" content="no-referrer" />
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#090a0d" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </head>
 
       <body className="bg-[#090a0d] text-neutral-200 antialiased min-h-screen w-full max-w-full overflow-x-hidden flex flex-col selection:bg-amber-500/20 selection:text-amber-300">
