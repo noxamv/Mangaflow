@@ -101,24 +101,24 @@ export default function NotificationsPage() {
     <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
       <div className="flex items-center justify-between border-b border-neutral-800 pb-4">
         <div>
-          <h1 className="text-2xl font-black text-white">Notifications</h1>
-          <p className="text-xs text-neutral-400 mt-0.5">Newest release from each title you bookmark</p>
+          <h1 className="text-xl font-bold text-white">Notifications</h1>
+          <p className="text-xs text-neutral-400 mt-0.5">Updates from followed titles</p>
         </div>
         <button
           onClick={markAllRead}
-          className="px-3.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-xl text-xs font-bold text-indigo-400 transition"
+          className="px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-semibold text-neutral-300 transition"
         >
-          Mark as read
+          Mark all as read
         </button>
       </div>
 
-      <div className="flex bg-[#13151f] border border-neutral-800 rounded-xl p-1 gap-1">
+      <div className="flex bg-[#14161f] border border-neutral-800 rounded-xl p-1 gap-1">
         {(['all', 'unread', 'read'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`flex-1 py-1.5 text-xs font-bold rounded-lg capitalize transition ${
-              activeTab === tab ? 'bg-indigo-600 text-white' : 'text-neutral-400 hover:text-white'
+            className={`flex-1 py-1.5 text-xs font-semibold rounded-lg capitalize transition ${
+              activeTab === tab ? 'bg-neutral-800 text-white' : 'text-neutral-400 hover:text-white'
             }`}
           >
             {tab}
@@ -129,9 +129,9 @@ export default function NotificationsPage() {
       {loading ? (
         <div className="py-20 text-center text-xs text-neutral-500">Loading alerts...</div>
       ) : filtered.length === 0 ? (
-        <div className="py-20 text-center text-xs text-neutral-500">No chapter drops in this category.</div>
+        <div className="py-20 text-center text-xs text-neutral-500">No releases in this tab.</div>
       ) : (
-        <div className="bg-[#13151f] border border-neutral-800 rounded-2xl overflow-hidden divide-y divide-neutral-800/60">
+        <div className="bg-[#14161f] border border-neutral-800 rounded-xl overflow-hidden divide-y divide-neutral-800/60">
           {filtered.map((item) => (
             <Link
               key={item.id}
@@ -139,19 +139,23 @@ export default function NotificationsPage() {
               className="p-3.5 hover:bg-neutral-800/40 flex items-center justify-between gap-3 transition group"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <img src={item.cover_url} alt="" className="w-9 h-12 rounded object-cover bg-neutral-900 shrink-0" />
+                <img
+                  src={item.cover_url || '/placeholder.png'}
+                  alt=""
+                  className="w-10 h-14 rounded-lg object-cover bg-neutral-900 shrink-0 border border-neutral-800"
+                />
                 <div className="min-w-0">
-                  <p className="text-xs font-bold text-white group-hover:text-indigo-400 truncate transition">
+                  <p className="text-xs font-semibold text-white group-hover:text-amber-400 truncate transition">
                     {item.series_title}
                   </p>
                   <p className="text-[11px] text-neutral-400 mt-0.5">Chapter {item.chapter_number}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md font-bold">
+                <span className="text-[10px] bg-neutral-800 text-neutral-300 border border-neutral-700/60 px-2 py-0.5 rounded font-medium">
                   {item.time_ago}
                 </span>
-                {!item.is_read && <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" />}
+                {!item.is_read && <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />}
               </div>
             </Link>
           ))}
