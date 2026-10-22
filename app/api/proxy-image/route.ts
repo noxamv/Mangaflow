@@ -10,6 +10,16 @@ export async function GET(req: NextRequest) {
     return new NextResponse('Invalid or missing target image URL', { status: 400 });
   }
 
+  // Determine the correct upstream referer required by the specific CDN
+  let upstreamReferer = '';
+  if (imageUrl.includes('readdetectiveconan.com') || imageUrl.includes('mangapill.com')) {
+    upstreamReferer = 'https://mangapill.com/';
+  } else if (imageUrl.includes('comick.pictures') || imageUrl.includes('comick')) {
+    upstreamReferer = 'https://comick.io/';
+  } else if (imageUrl.includes('mangadex.org') || imageUrl.includes('mangadex.network')) {
+    upstreamReferer = 'https://mangadex.org/';
+  }
+
   try {
     const upstreamRes = await fetch(imageUrl, {
       method: 'GET',
@@ -17,7 +27,7 @@ export async function GET(req: NextRequest) {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        'Referer': '',
+        'Referer': upstreamReferer,
       },
     });
 
@@ -34,13 +44,12 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        // Cache at browser and Vercel edge network for 7 days
         'Cache-Control': 'public, max-age=604800, stale-while-revalidate=86400',
         'Access-Control-Allow-Origin': '*',
       },
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown proxy error';
-    return new NextResponse(`Image Proxy Internal Failure: ${message}`, { status: 500 });
+    return new NextResponse(`Image Proxy Failure: ${message}`, { status: 500 });
   }
 }
