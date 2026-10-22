@@ -1,6 +1,5 @@
-const CACHE_NAME = 'mangaflow-v4';
+const CACHE_NAME = 'mangaflow-v5';
 
-// 1. Static UI shell assets pre-cached for native PWA performance
 const STATIC_SHELL_ASSETS = [
   '/',
   '/manifest.json',
@@ -34,8 +33,6 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
-  // 2. Chapter Data API: Stale-While-Revalidate
-  // Caches chapter metadata & page URL lists so the reader can reopen offline
   if (url.pathname.startsWith('/api/chapter/')) {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {
@@ -48,15 +45,12 @@ self.addEventListener('fetch', (event) => {
             return res;
           })
           .catch(() => cached);
-
         return cached || networkFetch;
       })
     );
     return;
   }
 
-  // 3. Chapter Panel Images: Cache-First
-  // Ensures panels already requested are instantly served offline (e.g. in Airplane Mode)
   if (url.pathname.startsWith('/api/proxy') || event.request.destination === 'image') {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {
@@ -65,7 +59,6 @@ self.addEventListener('fetch', (event) => {
 
         try {
           const networkResponse = await fetch(event.request);
-          // Only cache successful image responses (never cache 403 or 500 errors)
           if (networkResponse && networkResponse.status === 200) {
             cache.put(event.request, networkResponse.clone());
           }
@@ -78,7 +71,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4. Standard Site Navigation: Network-First with Cache Fallback
   event.respondWith(
     fetch(event.request).catch(async () => {
       const cached = await caches.match(event.request);
