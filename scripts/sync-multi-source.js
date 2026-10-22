@@ -12,6 +12,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
+  realtime: { transport: null },
 });
 
 const HEADERS = {
@@ -307,7 +308,7 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
 
 async function runWorker() {
   const startTime = Date.now();
-  const MAX_RUNTIME_MS = 12 * 60 * 1000; // Strict 12-minute ceiling
+  const MAX_RUNTIME_MS = 12 * 60 * 1000;
 
   console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting 80/20 Sync & Discovery Engine...`);
 
