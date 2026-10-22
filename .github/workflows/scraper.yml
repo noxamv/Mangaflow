@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 concurrency:
   group: mangaflow-sync-pass
@@ -27,15 +26,16 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js Runtime
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
+          check-latest: false
 
       - name: Install Dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
-      - name: Run Accelerated Multi-Source Worker Pass
+      - name: Run 80/20 Multi-Source Sync & Discovery Engine
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
