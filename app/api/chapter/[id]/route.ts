@@ -33,9 +33,10 @@ export async function GET(
   }
 
   try {
+    // FIX: Added `base_url` to the select query!
     const { data: chapter, error } = await supabase
       .from('chapters')
-      .select('id, series_id, chapter_number, pages, series (title, english_title, slug)')
+      .select('id, series_id, chapter_number, base_url, pages, series (title, english_title, slug, cover_image_url)')
       .eq('id', chapterId)
       .single();
 
@@ -72,13 +73,25 @@ export async function GET(
 
         if (targetChapter?.hid) {
           const freshPages = await fetchComicKPages(targetChapter.hid);
+          
           if (freshPages && freshPages.length > 0) {
+            // METHOD A: COMPRESS URLs TO SAVE STORAGE ON SELF-HEAL
+            let baseUrl = '';
+            let compressedPages = freshPages;
+            
+            try {
+              const urlObj = new URL(freshPages[0]);
+              baseUrl = `${urlObj.protocol}//${urlObj.hostname}/`;
+              compressedPages = freshPages.map((p: string) => p.startsWith(baseUrl) ? p.replace(baseUrl, '') : p);
+            } catch {}
+
             await supabase
               .from('chapters')
-              .update({ pages: freshPages })
+              .update({ base_url: baseUrl, pages: compressedPages })
               .eq('id', chapter.id);
 
-            chapter.pages = freshPages;
+            chapter.base_url = baseUrl;
+            chapter.pages = compressedPages;
           }
         }
       }
