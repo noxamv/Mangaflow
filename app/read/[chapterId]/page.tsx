@@ -122,19 +122,28 @@ export default function ReaderPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  // Construct absolute panel URL
+  // Image URL Resolver: Auto-routes strict CDNs (MangaPill/Conan) directly through the Edge proxy
   const resolveImageUrl = useCallback(
     (page: string): string => {
       if (!page) return '';
-      if (page.startsWith('http://') || page.startsWith('https://')) {
-        return page;
+      let fullUrl = page;
+
+      if (!page.startsWith('http://') && !page.startsWith('https://')) {
+        if (chapter?.base_url) {
+          const cleanBase = chapter.base_url.replace(/\/+$/, '');
+          const cleanPage = page.replace(/^\/+/, '');
+          fullUrl = `${cleanBase}/${cleanPage}`;
+        } else {
+          fullUrl = page.startsWith('/') ? page : `/${page}`;
+        }
       }
-      if (chapter?.base_url) {
-        const cleanBase = chapter.base_url.replace(/\/+$/, '');
-        const cleanPage = page.replace(/^\/+/, '');
-        return `${cleanBase}/${cleanPage}`;
+
+      // Automatically route MangaPill / Conan CDN images through Edge proxy with valid Referer
+      if (fullUrl.includes('readdetectiveconan.com') || fullUrl.includes('mangapill.com')) {
+        return `/api/proxy-image?url=${encodeURIComponent(fullUrl)}`;
       }
-      return page.startsWith('/') ? page : `/${page}`;
+
+      return fullUrl;
     },
     [chapter?.base_url]
   );
@@ -218,13 +227,12 @@ export default function ReaderPage() {
                 alt={`Page ${idx + 1}`}
                 loading="lazy"
                 decoding="async"
-                // Crucial hotlink bypass attributes
                 referrerPolicy="no-referrer"
                 crossOrigin="anonymous"
                 className="w-full h-auto object-contain block max-w-full"
                 onError={(e) => {
                   const target = e.currentTarget;
-                  // If direct CDN access fails with 403 or network drop, route through Edge proxy
+                  // Fallback to proxy route if direct source fails
                   if (!target.src.includes('/api/proxy-image')) {
                     target.src = `/api/proxy-image?url=${encodeURIComponent(resolvedSrc)}`;
                   }
