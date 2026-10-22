@@ -158,7 +158,8 @@ export default function RootLayout({
     <html lang="en" className="dark scroll-smooth">
       <head>
         <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+        {/* Ensures phone browsers render at native mobile app scale */}
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
         <title>MangaFlow - High Performance Comic Reader</title>
         <meta name="description" content="Read trending and popular manga, manhwa, and manhua with instant high-speed chapters." />
         {/* Hotlink Defense: Strips the Referer header to stop 403 Forbidden image CDN blocks */}
@@ -374,7 +375,6 @@ export default function RootLayout({
                     className="w-8 h-8 rounded-full bg-neutral-800 border border-neutral-700 hover:border-amber-400/80 transition flex items-center justify-center overflow-hidden focus:outline-none"
                     aria-label="User Menu"
                   >
-                    {/* Minimal clean silhouette avatar with no initial letter badges */}
                     <svg
                       className="w-4 h-4 text-neutral-300"
                       fill="currentColor"
@@ -395,28 +395,28 @@ export default function RootLayout({
                         onClick={() => setUserMenuOpen(false)}
                         className="w-full text-left px-3 py-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 flex items-center gap-2"
                       >
-                        <span>👤</span> Profile
+                        Profile
                       </Link>
                       <Link
-                        href="/following"
+                        href="/profile/following"
                         onClick={() => setUserMenuOpen(false)}
                         className="w-full text-left px-3 py-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 flex items-center gap-2"
                       >
-                        <span>🔖</span> Following List
+                        Following List
                       </Link>
                       <Link
-                        href="/import-export"
+                        href="/profile/import-export"
                         onClick={() => setUserMenuOpen(false)}
                         className="w-full text-left px-3 py-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 flex items-center gap-2"
                       >
-                        <span>🔄</span> Import / Export
+                        Import / Export
                       </Link>
                       <Link
-                        href="/settings"
+                        href="/profile/settings"
                         onClick={() => setUserMenuOpen(false)}
                         className="w-full text-left px-3 py-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 flex items-center gap-2"
                       >
-                        <span>⚙️</span> Settings
+                        Settings
                       </Link>
                       <div className="border-t border-neutral-800/80 my-1" />
                       <button
@@ -473,7 +473,7 @@ export default function RootLayout({
                   <div className="py-8 text-center text-xs text-neutral-500">Searching catalog...</div>
                 ) : searchResults.length === 0 ? (
                   <div className="py-8 text-center text-xs text-neutral-500">
-                    {searchQuery.trim() ? 'No series found matching query.' : 'Type to search across 471+ indexed titles.'}
+                    {searchQuery.trim() ? 'No series found matching query.' : 'Type to search across indexed titles.'}
                   </div>
                 ) : (
                   searchResults.map((s) => (
@@ -531,26 +531,6 @@ export default function RootLayout({
             </div>
           </div>
         </footer>
-
-        {/* MOBILE BOTTOM NAVIGATION DOCK */}
-        <div className="md:hidden sticky bottom-0 z-40 bg-[#090a0d]/95 backdrop-blur-md border-t border-neutral-800 px-6 py-2 flex items-center justify-around text-[10px] font-medium text-neutral-400">
-          <Link href="/" className={`flex flex-col items-center gap-1 ${pathname === '/' ? 'text-amber-400' : ''}`}>
-            <span>🏠</span>
-            <span>Home</span>
-          </Link>
-          <Link href="/trending" className={`flex flex-col items-center gap-1 ${pathname === '/trending' ? 'text-amber-400' : ''}`}>
-            <span>🔥</span>
-            <span>Trending</span>
-          </Link>
-          <Link href="/browse" className={`flex flex-col items-center gap-1 ${pathname.startsWith('/browse') ? 'text-amber-400' : ''}`}>
-            <span>📚</span>
-            <span>Browse</span>
-          </Link>
-          <Link href="/following" className={`flex flex-col items-center gap-1 ${pathname === '/following' ? 'text-amber-400' : ''}`}>
-            <span>🔖</span>
-            <span>Library</span>
-          </Link>
-        </div>
 
       </body>
     </html>
