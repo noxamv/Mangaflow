@@ -12,6 +12,9 @@ const ALLOWED_PATTERNS = [
   'mpcdn.xyz',
   'readdetectiveconan.com',
   'consumet.org',
+  'meo.comick.pictures',
+  'meo2.comick.pictures',
+  'meo3.comick.pictures',
 ];
 
 export const runtime = 'nodejs';
@@ -40,6 +43,20 @@ export async function GET(request: NextRequest) {
     return new NextResponse(`Target domain "${hostname}" not permitted`, { status: 403 });
   }
 
+  // Anti-hotlinking
+  const referer = request.headers.get('referer');
+  const origin = request.headers.get('origin');
+  const host = request.headers.get('host') || '';
+
+  if (process.env.NODE_ENV === 'production' && !host.includes('localhost')) {
+    const isAllowedReferer =
+      !referer || referer.includes(host) || (origin && origin.includes(host));
+
+    if (!isAllowedReferer) {
+      return new NextResponse('Forbidden: Hotlinking is not permitted', { status: 403 });
+    }
+  }
+
   // Proper upstream referer headers
   let upstreamReferer = 'https://mangadex.org/';
   if (hostname.includes('comick')) upstreamReferer = 'https://comick.io/';
@@ -60,12 +77,13 @@ export async function GET(request: NextRequest) {
 
     const contentType = res.headers.get('content-type') || 'image/jpeg';
 
-    // Stream the body directly to avoid Vercel memory and buffer limits
+    // Stream body to avoid Vercel memory limits
     return new NextResponse(res.body, {
       status: 200,
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=31536000, immutable',
+        'X-Content-Type-Options': 'nosniff',
         'Access-Control-Allow-Origin': '*',
       },
     });
