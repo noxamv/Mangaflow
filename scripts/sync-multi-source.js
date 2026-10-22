@@ -1,87 +1,60 @@
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
-const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '5', 10);
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('Fatal: Missing SUPABASE credentials.');
+  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables.');
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-  realtime: { transport: null },
-});
-
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'application/json, text/html, */*',
-};
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Parallel execution worker pool
-async function asyncPool(poolLimit, array, iteratorFn) {
-  const ret = [];
-  const executing = new Set();
-  for (const item of array) {
-    const p = Promise.resolve().then(() => iteratorFn(item));
-    ret.push(p);
-    executing.add(p);
-    const clean = () => executing.delete(p);
-    p.then(clean).catch(clean);
-    if (executing.size >= poolLimit) {
-      await Promise.race(executing);
-    }
-  }
-  return Promise.all(ret);
-}
-
-async function fetchJson(url) {
-  for (let i = 0; i < 2; i++) {
-    try {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 7000);
-      const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
-      clearTimeout(id);
-      if (res.ok) return await res.json();
-      if (res.status === 429) await delay(2000);
-    } catch {
-      await delay(400);
-    }
-  }
-  return null;
-}
-
-async function fetchHtml(url) {
+async function fetchJson(url, options = {}) {
   try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 7000);
-    const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
-    clearTimeout(id);
-    if (res.ok) return await res.text();
-  } catch {}
-  return null;
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        ...(options.headers || {}),
+      },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
 
-// ---------------- NUMBER NORMALIZATION & DEDUPLICATION ----------------
-function cleanNum(val) {
-  if (val == null) return null;
-  const str = String(val).trim().toLowerCase();
-  if (['prologue', 'oneshot', 'intro', 'teaser'].includes(str)) return 0;
-  
-  const match = str.match(/[0-9]+(?:\.[0-9]+)?/);
-  if (!match) return null;
-  const parsed = parseFloat(match[0]);
-  return isNaN(parsed) ? null : parseFloat(parsed.toFixed(2));
+async function fetchHtml(url, options = {}) {
+  try {
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        ...(options.headers || {}),
+      },
+    });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  }
+}
+
+function cleanNum(str) {
+  if (!str) return null;
+  const match = String(str).match(/[0-9]+(?:\.[0-9]+)?/);
+  return match ? parseFloat(match[0]) : null;
 }
 
 function toKey(num) {
   if (num === null || isNaN(num)) return null;
-  // Standardize 12.0 -> "12", 12.5 -> "12.5"
-  return Number.isInteger(num) ? String(num) : String(parseFloat(num.toFixed(2)));
+  return Number.isInteger(num) ? String(num) : String(num);
 }
 
 function isNovelKeyword(text) {
@@ -90,22 +63,10 @@ function isNovelKeyword(text) {
   return (
     lower.includes('(novel)') ||
     lower.includes('[novel]') ||
-    lower.includes('- novel') ||
+    lower.includes('light novel') ||
     lower.includes('web novel') ||
-    lower.includes('light novel')
+    lower.endsWith(' novel')
   );
-}
-
-function slugify(text) {
-  return text
-    .toString()
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w\-]+/g, '')
-    .replace(/\-\-+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
 }
 
 // ---------------- COMICK ----------------
@@ -148,12 +109,12 @@ async function getComicKChapters(hid) {
   return map;
 }
 
-async function getComicKPages(hid) {
-  const json = await fetchJson(`https://api.comick.io/chapter/${hid}`);
+async function getComicKPages(chapterHid) {
+  const json = await fetchJson(`https://api.comick.io/chapter/${chapterHid}`);
   if (!json?.chapter?.images?.length) return null;
   return json.chapter.images
-    .filter((img) => img.url && typeof img.url === 'string')
-    .map((img) => (img.url.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.url}`));
+    .map((img) => img.url || (img.b2key ? `https://meo3.comick.pictures/${img.b2key}` : null))
+    .filter(Boolean);
 }
 
 // ---------------- MANGADEX ----------------
@@ -181,15 +142,14 @@ async function getMangaDexChapters(mangaId) {
     );
     if (!json?.data?.length) break;
     for (const item of json.data) {
-      if (item.attributes?.externalUrl) continue;
       const key = toKey(cleanNum(item.attributes?.chapter));
-      if (key) {
+      if (key && item.id) {
         if (!map.has(key)) map.set(key, []);
         map.get(key).push({ id: item.id, type: 'mangadex', order: 2 });
       }
     }
+    if (json.data.length < limit) break;
     offset += limit;
-    if (offset >= (json.total || 0)) break;
     await delay(60);
   }
   return map;
@@ -203,10 +163,23 @@ async function getMangaDexPages(chapterId) {
 
 // ---------------- MANGAPILL ----------------
 async function searchMangaPill(title) {
+  // Reject non-ASCII / Japanese kanji queries to prevent empty-search sidebar fallback
+  if (!/^[\x00-\x7F]+$/.test(title)) return null;
+
   const cleanTitle = title.replace(/['’]/g, '').trim();
   const html = await fetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(cleanTitle)}`);
-  const match = html?.match(/href="\/manga\/([0-9]+\/[^"]+)"/i);
-  return match ? match[1] : null;
+  if (!html) return null;
+
+  const matches = [...html.matchAll(/href="\/manga\/([0-9]+\/([^"]+))"/gi)];
+  if (!matches.length) return null;
+
+  const targetSlug = cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const exact = matches.find((m) => {
+    const slug = m[2].toLowerCase();
+    return slug.includes(targetSlug) || targetSlug.includes(slug);
+  });
+
+  return exact ? exact[1] : matches[0][1];
 }
 
 async function getMangaPillChapters(slug) {
@@ -232,7 +205,7 @@ async function getMangaPillPages(chapterSlug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// ---------------- MULTI-ALIAS DEDUPLICATING AGGREGATION ----------------
+// ---------------- MULTI-ALIAS AGGREGATION ----------------
 async function buildAggregatedChapterMap(searchTitles) {
   const unifiedMap = new Map();
   const checkedQueries = new Set();
@@ -278,7 +251,6 @@ async function buildAggregatedChapterMap(searchTitles) {
     await delay(60);
   }
 
-  // Deduplicate candidates per chapter number and sort by source priority
   for (const [key, candidates] of unifiedMap.entries()) {
     const seen = new Set();
     const unique = [];
@@ -289,15 +261,14 @@ async function buildAggregatedChapterMap(searchTitles) {
         unique.push(c);
       }
     }
-    unique.sort((a, b) => (a.order || 9) - (b.order || 9));
+    unique.sort((a, b) => a.order - b.order);
     unifiedMap.set(key, unique);
   }
 
   return unifiedMap;
 }
 
-// ---------------- MAIN WORKER LOOP ----------------
-async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
+async function syncSeries(s) {
   await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
   const searchTitles = [s.english_title, s.title, s.native_title];
@@ -327,46 +298,64 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
     .eq('series_id', s.id);
 
   const existingMap = new Map();
-  for (const ex of existingChapters || []) {
-    const key = toKey(cleanNum(ex.chapter_number));
-    if (key) existingMap.set(key, ex);
+  for (const ec of existingChapters || []) {
+    const k = toKey(ec.chapter_number);
+    if (k) existingMap.set(k, ec);
   }
 
   const tasks = [];
-  for (const [key, candidates] of unifiedMap.entries()) {
-    const chNum = parseFloat(key);
-    // Sanity limit: manhwa chapters never legitimately exceed 350
-    if (s.reading_mode === 'webtoon' && chNum > 350) continue;
+  for (const [k, candidates] of unifiedMap.entries()) {
+    const existing = existingMap.get(k);
+    const isCorrupted =
+      existing &&
+      (!existing.pages ||
+        existing.pages.length === 0 ||
+        (existing.pages[0] &&
+          (existing.pages[0].includes('example.com') || existing.pages[0].includes('/mangap/2560/'))));
 
-    const existing = existingMap.get(key);
-    // If the chapter already has a complete set of panels, skip it to avoid duplicate scan ingestion
-    if (existing && Array.isArray(existing.pages) && existing.pages.length >= 5) {
-      continue;
+    if (!existing || isCorrupted) {
+      tasks.push({
+        chNum: parseFloat(k),
+        candidates,
+        existing: existing || null,
+      });
     }
-    tasks.push({ key, candidates, existing, chNum });
   }
 
   if (tasks.length === 0) {
-    console.log('   Already 100% up to date.');
+    console.log(`   All ${existingChapters?.length || 0} chapters already intact.`);
     return;
   }
+
+  console.log(`   Ingesting / Repairing ${tasks.length} missing or corrupted chapters...`);
 
   let addedCount = 0;
   let repairedCount = 0;
   const upsertBatch = [];
 
-  // Parallel pool fetching 5 chapters concurrently
-  await asyncPool(5, tasks, async (task) => {
-    if (Date.now() - startTime > MAX_RUNTIME_MS) return;
+  const runWithConcurrency = async (items, concurrency, fn) => {
+    let index = 0;
+    const workers = new Array(concurrency).fill(null).map(async () => {
+      while (index < items.length) {
+        const cur = items[index++];
+        await fn(cur);
+      }
+    });
+    await Promise.all(workers);
+  };
 
+  await runWithConcurrency(tasks, 3, async (task) => {
     let pages = null;
     for (const cand of task.candidates) {
       try {
         if (cand.type === 'comick') pages = await getComicKPages(cand.id);
         else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
         else if (cand.type === 'mangapill') pages = await getMangaPillPages(cand.id);
-        if (pages?.length > 0) break;
-      } catch {}
+
+        if (Array.isArray(pages) && pages.length > 0) break;
+      } catch {
+        continue;
+      }
     }
 
     if (!Array.isArray(pages) || pages.length === 0) return;
@@ -379,7 +368,8 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
       firstUrl.includes('.webp') ||
       firstUrl.includes('.avif') ||
       firstUrl.includes('meo3.comick') ||
-      firstUrl.includes('mangadex.org');
+      firstUrl.includes('mangadex.org') ||
+      firstUrl.includes('readdetectiveconan.com');
 
     if (!isImage) return;
 
@@ -409,7 +399,6 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
     }
   });
 
-  // Bulk upsert against the unique (series_id, chapter_number) constraint
   if (upsertBatch.length > 0) {
     const { error: batchErr } = await supabase
       .from('chapters')
@@ -423,31 +412,29 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
   console.log(`   + Added: ${addedCount} | Repaired: ${repairedCount}`);
 }
 
-async function runWorker() {
-  const startTime = Date.now();
-  const MAX_RUNTIME_MS = 12 * 60 * 1000;
+async function main() {
+  console.log('=== MangaFlow Multi-Source Sync Runner Started ===');
 
-  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting Graphic-Only Deduplicating Engine...`);
-
-  const { data: queue } = await supabase
+  const { data: targetSeries, error } = await supabase
     .from('series')
-    .select('id, title, english_title, native_title, synonyms, reading_mode, updated_at')
-    .order('updated_at', { ascending: true, nullsFirst: true })
-    .limit(200);
+    .select('id, title, english_title, native_title, synonyms')
+    .order('updated_at', { ascending: true })
+    .limit(20);
 
-  const assignedSync = (queue || []).filter((_, idx) => (idx % TOTAL_WORKERS) + 1 === WORKER_ID);
-  console.log(`[80% Sync Queue] Assigned ${assignedSync.length} series to Worker ${WORKER_ID}.`);
-
-  for (const s of assignedSync) {
-    if (Date.now() - startTime > MAX_RUNTIME_MS) break;
-    await processSeriesSync(s, startTime, MAX_RUNTIME_MS);
+  if (error || !targetSeries) {
+    console.error('Failed to query series:', error?.message);
+    process.exit(1);
   }
 
-  console.log(`[Worker ${WORKER_ID}] Sync pass complete.`);
-  process.exit(0);
+  console.log(`Processing batch of ${targetSeries.length} series...`);
+  for (const s of targetSeries) {
+    await syncSeries(s);
+  }
+
+  console.log('=== Sync Cycle Complete ===');
 }
 
-runWorker().catch((err) => {
-  console.error('Fatal engine failure:', err);
+main().catch((err) => {
+  console.error('Fatal execution error:', err);
   process.exit(1);
 });
