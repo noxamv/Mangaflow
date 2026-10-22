@@ -11,7 +11,6 @@ interface Chapter {
   id: string;
   chapter_number: number;
   title: string | null;
-  pages?: string[] | null;
   created_at?: string;
 }
 
@@ -23,10 +22,11 @@ interface Series {
   synonyms?: any;
   slug: string;
   cover_image_url?: string;
-  cover_url?: string;
   synopsis?: string;
   status?: string;
+  reading_mode?: string;
   author?: string;
+  rating?: number;
 }
 
 export default function SeriesDetailsPage() {
@@ -37,376 +37,243 @@ export default function SeriesDetailsPage() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [loading, setLoading] = useState(true);
   const [isFollowing, setIsFollowing] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
 
-  const [resumeId, setResumeId] = useState<string | null>(null);
-  const [resumeNum, setResumeNum] = useState<number | null>(null);
-
-  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [aliasesExpanded, setAliasesExpanded] = useState(false);
   const [chapterSearch, setChapterSearch] = useState('');
+  const [sortDesc, setSortDesc] = useState(true);
 
   useEffect(() => {
-    async function fetchSeriesData() {
+    async function loadData() {
       if (!rawSlug) return;
       setLoading(true);
 
-      try {
-        const decoded = decodeURIComponent(rawSlug).trim();
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(decoded);
+      const { data: sData } = await supabase
+        .from('series')
+        .select('*')
+        .eq('slug', decodeURIComponent(rawSlug))
+        .single();
 
-        let seriesData: Series | null = null;
-
-        if (isUuid) {
-          const { data } = await supabase
-            .from('series')
-            .select('*')
-            .or(`id.eq.${decoded},slug.eq."${decoded}"`)
-            .limit(1);
-          if (data && data.length > 0) seriesData = data[0];
-        } else {
-          const { data: bySlug } = await supabase
-            .from('series')
-            .select('*')
-            .eq('slug', decoded)
-            .limit(1);
-
-          if (bySlug && bySlug.length > 0) {
-            seriesData = bySlug[0];
-          } else {
-            const cleanedQuery = decoded.replace(/-/g, ' ');
-            const { data: byTitle } = await supabase
-              .from('series')
-              .select('*')
-              .or(`english_title.ilike.%${cleanedQuery}%,title.ilike.%${cleanedQuery}%`)
-              .limit(1);
-
-            if (byTitle && byTitle.length > 0) {
-              seriesData = byTitle[0];
-            }
-          }
-        }
-
-        if (!seriesData) {
-          setLoading(false);
-          return;
-        }
-
-        setSeries(seriesData);
-
-        try {
-          const local = JSON.parse(localStorage.getItem('mangaflow_reading_history') || '{}');
-          if (local[seriesData.id]) {
-            setResumeId(local[seriesData.id].chapterId);
-            setResumeNum(local[seriesData.id].chapterNumber);
-          }
-        } catch {}
-
-        const { data: userData } = await supabase.auth.getUser();
-        if (userData?.user) {
-          const { data: followRecord } = await supabase
-            .from('user_follows')
-            .select('id')
-            .eq('user_id', userData.user.id)
-            .eq('series_id', seriesData.id)
-            .maybeSingle();
-
-          if (followRecord) setIsFollowing(true);
-
-          const { data: cloudHistory } = await supabase
-            .from('reading_history')
-            .select('chapter_id, chapter_number')
-            .eq('user_id', userData.user.id)
-            .eq('series_id', seriesData.id)
-            .maybeSingle();
-
-          if (cloudHistory) {
-            setResumeId(cloudHistory.chapter_id);
-            setResumeNum(cloudHistory.chapter_number);
-          }
-        }
-
-        const { data: chapterData } = await supabase
-          .from('chapters')
-          .select('id, chapter_number, title, pages')
-          .eq('series_id', seriesData.id)
-          .order('chapter_number', { ascending: false });
-
-        if (chapterData) {
-          setChapters(chapterData);
-        }
-      } catch (err) {
-        console.error('Series fetch error:', err);
-      } finally {
+      if (!sData) {
         setLoading(false);
+        return;
       }
-    }
+      setSeries(sData);
 
-    fetchSeriesData();
+      const { data: cData } = await supabase
+        .from('chapters')
+        .select('id, chapter_number, title, created_at')
+        .eq('series_id', sData.id)
+        .order('chapter_number', { ascending: false });
+
+      if (cData) setChapters(cData);
+
+      const { data: auth } = await supabase.auth.getUser();
+      if (auth?.user) {
+        const { data: follow } = await supabase
+          .from('user_follows')
+          .select('id')
+          .eq('user_id', auth.user.id)
+          .eq('series_id', sData.id)
+          .single();
+        setIsFollowing(!!follow);
+      }
+      setLoading(false);
+    }
+    loadData();
   }, [rawSlug]);
 
-  const handleFollowToggle = async () => {
-    const { data: userData } = await supabase.auth.getUser();
-    if (!userData?.user) {
-      setShowAuthModal(true);
+  const toggleFollow = async () => {
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth?.user) {
+      setAuthOpen(true);
       return;
     }
-
     if (!series) return;
 
     if (isFollowing) {
-      await supabase
-        .from('user_follows')
-        .delete()
-        .eq('user_id', userData.user.id)
-        .eq('series_id', series.id);
+      await supabase.from('user_follows').delete().eq('user_id', auth.user.id).eq('series_id', series.id);
       setIsFollowing(false);
     } else {
-      await supabase.from('user_follows').insert({
-        user_id: userData.user.id,
-        series_id: series.id,
-      });
+      await supabase.from('user_follows').insert({ user_id: auth.user.id, series_id: series.id });
       setIsFollowing(true);
     }
   };
 
-  // Prevents "Chapter 5 - Chapter 5" repetition
-  const formatChapterTitle = (num: number, rawTitle?: string | null) => {
-    if (!rawTitle || rawTitle.trim() === '' || rawTitle.toLowerCase().includes('null')) {
-      return num === 0 ? 'Prologue' : `Chapter ${num}`;
+  const aliasList = useMemo(() => {
+    if (!series) return [];
+    const list: string[] = [];
+    if (series.native_title) list.push(series.native_title);
+    if (Array.isArray(series.synonyms)) list.push(...series.synonyms);
+    else if (typeof series.synonyms === 'string') {
+      try {
+        const parsed = JSON.parse(series.synonyms);
+        if (Array.isArray(parsed)) list.push(...parsed);
+        else list.push(series.synonyms);
+      } catch {
+        list.push(...series.synonyms.split(/[,;\n]/));
+      }
     }
-    const clean = rawTitle.trim();
-    const lower = clean.toLowerCase();
-    if (
-      lower === `chapter ${num}`.toLowerCase() ||
-      lower === `ch. ${num}`.toLowerCase() ||
-      lower === `ch ${num}`.toLowerCase() ||
-      lower === `${num}`
-    ) {
-      return `Chapter ${num}`;
-    }
-    return `Chapter ${num} - ${clean}`;
-  };
+    return Array.from(new Set(list.map((s) => s.trim()).filter((s) => s.length > 0)));
+  }, [series]);
 
-  const filteredChapters = useMemo(() => {
+  const displayedChapters = useMemo(() => {
     let list = [...chapters];
-
     if (chapterSearch.trim()) {
       const q = chapterSearch.trim().toLowerCase();
-      list = list.filter((c) =>
-        String(c.chapter_number).includes(q) || (c.title && c.title.toLowerCase().includes(q))
-      );
+      list = list.filter((c) => String(c.chapter_number).includes(q) || c.title?.toLowerCase().includes(q));
     }
-
-    list.sort((a, b) =>
-      sortOrder === 'desc'
-        ? b.chapter_number - a.chapter_number
-        : a.chapter_number - b.chapter_number
-    );
-
-    return list;
-  }, [chapters, sortOrder, chapterSearch]);
+    return sortDesc ? list : list.reverse();
+  }, [chapters, chapterSearch, sortDesc]);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#07080b] flex items-center justify-center text-xs text-neutral-500">
-        Loading series...
+      <div className="min-h-screen bg-[#090a0d] flex items-center justify-center text-neutral-500">
+        <div className="w-8 h-8 border-2 border-neutral-700 border-t-white rounded-full animate-spin" />
       </div>
     );
   }
 
   if (!series) {
     return (
-      <div className="min-h-screen bg-[#07080b] flex flex-col items-center justify-center text-white space-y-3">
-        <h1 className="text-xl font-bold">Series Not Found</h1>
-        <Link href="/" className="px-4 py-2 bg-indigo-600 rounded-lg text-xs font-bold">
-          Return Home
-        </Link>
+      <div className="min-h-screen bg-[#090a0d] flex flex-col items-center justify-center text-neutral-400">
+        <p className="text-sm">Series not found.</p>
+        <Link href="/" className="mt-3 text-xs text-amber-400 hover:underline">Back to library</Link>
       </div>
     );
   }
 
-  const primaryTitle = series.english_title || series.title;
-  const playableChapters = chapters.filter((c) => Array.isArray(c.pages) && (c.pages?.length ?? 0) > 0);
-  const firstChapter = playableChapters[playableChapters.length - 1] || chapters[chapters.length - 1];
-  const latestChapter = playableChapters[0] || chapters[0];
-
-  let synList: string[] = [];
-  if (Array.isArray(series.synonyms)) {
-    synList = series.synonyms;
-  } else if (typeof series.synonyms === 'string') {
-    try {
-      synList = JSON.parse(series.synonyms);
-    } catch {
-      synList = [series.synonyms];
-    }
-  }
-
-  const rawCover = series.cover_image_url || series.cover_url || '';
+  const latestChapter = chapters[0];
+  const firstChapter = chapters[chapters.length - 1];
 
   return (
-    <div className="min-h-screen bg-[#07080b] px-4 py-8 text-white sm:px-8">
-      <div className="mx-auto max-w-5xl space-y-8">
-        <div className="relative overflow-hidden rounded-3xl border border-neutral-800/80 bg-[#10121a] p-6 shadow-2xl">
-          <div className="relative z-10 flex flex-col gap-6 md:flex-row md:items-start md:gap-8">
-            <div className="mx-auto aspect-[3/4.2] w-48 shrink-0 overflow-hidden rounded-2xl bg-neutral-900 border border-white/10 shadow-xl">
-              <img
-                src={rawCover}
-                alt={primaryTitle}
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  const target = e.currentTarget;
-                  if (rawCover && !target.src.includes('/api/proxy')) {
-                    target.src = `/api/proxy?url=${encodeURIComponent(rawCover)}`;
-                  }
-                }}
-              />
-            </div>
-
-            <div className="flex flex-1 flex-col justify-between space-y-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="rounded-lg bg-indigo-500/20 px-2.5 py-0.5 text-[10px] font-black uppercase text-indigo-400 border border-indigo-500/30">
-                    {series.status || 'Ongoing'}
-                  </span>
-                  <span className="rounded-lg bg-black/60 px-2.5 py-0.5 text-[10px] font-semibold text-neutral-300 border border-white/10">
-                    {chapters.length} Chapters Indexed
-                  </span>
-                </div>
-
-                <h1 className="mt-3 text-2xl font-black text-white sm:text-3xl tracking-tight">
-                  {primaryTitle}
-                </h1>
-
-                <div className="mt-2 space-y-1 text-xs text-neutral-400">
-                  {series.title !== primaryTitle && (
-                    <p>
-                      <span className="text-neutral-500 font-semibold">Original:</span> {series.title}
-                    </p>
-                  )}
-                  {series.native_title && (
-                    <p>
-                      <span className="text-neutral-500 font-semibold">Native:</span> {series.native_title}
-                    </p>
-                  )}
-                  {synList.length > 0 && (
-                    <p className="line-clamp-2">
-                      <span className="text-neutral-500 font-semibold">Also Known As:</span>{' '}
-                      {synList.slice(0, 4).join(', ')}
-                    </p>
-                  )}
-                </div>
-
-                <p className="mt-4 text-xs text-neutral-300 sm:text-sm line-clamp-4 leading-relaxed">
-                  {series.synopsis || 'Read online for free in high definition on MangaFlow.'}
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-neutral-800">
-                {resumeId ? (
-                  <Link
-                    href={`/read/${resumeId}`}
-                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-black shadow-lg transition"
-                  >
-                    ▶ Continue Reading (Ch. {resumeNum})
-                  </Link>
-                ) : firstChapter ? (
-                  <Link
-                    href={`/read/${firstChapter.id}`}
-                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-black shadow-lg transition"
-                  >
-                    Start Reading (Ch. {firstChapter.chapter_number})
-                  </Link>
-                ) : null}
-
-                {latestChapter && (!resumeId || latestChapter.id !== resumeId) && (
-                  <Link
-                    href={`/read/${latestChapter.id}`}
-                    className="px-4 py-2.5 bg-neutral-800 hover:bg-neutral-700 rounded-xl text-xs font-bold text-neutral-200 transition"
-                  >
-                    Latest (Ch. {latestChapter.chapter_number})
-                  </Link>
-                )}
-
-                <button
-                  type="button"
-                  onClick={handleFollowToggle}
-                  className={`rounded-xl px-4 py-2.5 text-xs font-bold transition flex items-center gap-1.5 ${
-                    isFollowing
-                      ? 'border border-neutral-700 bg-neutral-800 text-emerald-400 hover:bg-neutral-700'
-                      : 'border border-indigo-500/40 bg-indigo-950/40 text-indigo-300 hover:bg-indigo-900/50'
-                  }`}
-                >
-                  <span>{isFollowing ? '✓' : '+'}</span>
-                  <span>{isFollowing ? 'Following' : 'Follow Series'}</span>
-                </button>
-
-                <ShareBar />
-              </div>
-            </div>
-          </div>
+    <main className="max-w-5xl mx-auto px-4 py-8 space-y-8 min-h-screen text-neutral-200">
+      <div className="flex flex-col sm:flex-row gap-6 sm:gap-8 items-start">
+        <div className="w-36 sm:w-48 aspect-[3/4.2] rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 shrink-0 shadow-xl">
+          <img
+            src={series.cover_image_url || '/placeholder.png'}
+            alt={series.title}
+            className="w-full h-full object-cover"
+          />
         </div>
 
-        {/* Chapters Section with Filter & Sort */}
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-800 pb-3">
-            <div className="flex items-center gap-2">
-              <h2 className="text-base font-black text-white sm:text-lg">Chapters List</h2>
-              <span className="text-xs text-neutral-500">({filteredChapters.length} shown)</span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="Find chapter..."
-                value={chapterSearch}
-                onChange={(e) => setChapterSearch(e.target.value)}
-                className="bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 w-32 sm:w-40"
-              />
-
-              <button
-                type="button"
-                onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
-                className="px-2.5 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-semibold text-neutral-300 transition"
-              >
-                {sortOrder === 'desc' ? 'Sort: 9 → 1' : 'Sort: 1 → 9'}
-              </button>
-            </div>
+        <div className="flex-1 space-y-3 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-neutral-800 text-neutral-300 border border-neutral-700">
+              {series.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
+            </span>
+            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-neutral-800 text-amber-400 border border-neutral-700">
+              {series.status || 'Ongoing'}
+            </span>
+            <span className="text-[10px] text-neutral-500">
+              {chapters.length} Chapters Indexed[span_14](start_span)[span_14](end_span)
+            </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-[600px] overflow-y-auto">
-            {filteredChapters.map((ch) => {
-              const hasPages = Array.isArray(ch.pages) && (ch.pages?.length ?? 0) > 0;
-              return (
-                <Link
-                  key={ch.id}
-                  href={`/read/${ch.id}`}
-                  className={`flex items-center justify-between p-3.5 rounded-xl border transition ${
-                    resumeId === ch.id
-                      ? 'border-emerald-500/50 bg-emerald-950/20'
-                      : hasPages
-                      ? 'border-neutral-800/80 bg-[#10121a] hover:border-indigo-500/40'
-                      : 'border-neutral-800/40 bg-[#0d0e14] opacity-60'
-                  }`}
-                >
-                  <span className="truncate text-xs font-semibold text-neutral-200">
-                    {formatChapterTitle(ch.chapter_number, ch.title)}
-                  </span>
-                  <span
-                    className={`text-xs font-bold shrink-0 ml-2 ${
-                      hasPages ? 'text-indigo-400' : 'text-neutral-500 text-[11px]'
-                    }`}
-                  >
-                    {hasPages ? 'Read →' : 'Syncing...'}
-                  </span>
-                </Link>
-              );
-            })}
+          <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+            {series.english_title || series.title}
+          </h1>
+
+          {/* Collapsible Alternative Titles Accordion */}
+          {aliasList.length > 0 && (
+            <div className="text-xs text-neutral-400 bg-neutral-900/60 border border-neutral-800 rounded-lg p-2.5">
+              <button
+                type="button"
+                onClick={() => setAliasesExpanded(!aliasesExpanded)}
+                className="w-full flex items-center justify-between font-semibold text-neutral-300 text-left"
+              >
+                <span>Also Known As ({aliasList.length})[span_15](start_span)[span_15](end_span)</span>
+                <span className="text-[10px] text-neutral-500">{aliasesExpanded ? '▲ Hide' : '▼ View'}</span>
+              </button>
+              {aliasesExpanded && (
+                <div className="mt-2 pt-2 border-t border-neutral-800 space-y-1 text-[11px] text-neutral-400">
+                  {aliasList.map((al, idx) => (
+                    <p key={idx} className="truncate">• {al}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <p className="text-xs text-neutral-400 leading-relaxed line-clamp-4">
+            {series.synopsis || 'No synopsis provided.'}
+          </p>
+
+          <div className="flex flex-wrap gap-2.5 pt-2">
+            {firstChapter && (
+              <Link
+                href={`/read/${firstChapter.id}`}
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white font-semibold text-xs rounded-lg transition"
+              >
+                Start Reading (Ch. {firstChapter.chapter_number})[span_16](start_span)[span_16](end_span)
+              </Link>
+            )}
+            {latestChapter && (
+              <Link
+                href={`/read/${latestChapter.id}`}
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-semibold text-xs rounded-lg transition"
+              >
+                Latest (Ch. {latestChapter.chapter_number})[span_17](start_span)[span_17](end_span)
+              </Link>
+            )}
+            <button
+              onClick={toggleFollow}
+              className={`px-4 py-2 font-semibold text-xs rounded-lg transition ${
+                isFollowing ? 'bg-neutral-800 text-neutral-400 border border-neutral-700' : 'bg-white text-black hover:bg-neutral-200'
+              }`}
+            >
+              {isFollowing ? '✓ In Library' : '+ Follow Series'}[span_18](start_span)[span_18](end_span)
+            </button>
+          </div>
+
+          <div className="pt-2">
+            <ShareBar />
           </div>
         </div>
       </div>
 
-      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
-    </div>
+      {/* Chapters Search and Filter Bar */}
+      <div className="space-y-4 pt-4 border-t border-neutral-800/80">
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-center justify-between">
+          <h2 className="text-sm font-bold text-white">
+            Chapters List ({displayedChapters.length} shown)[span_19](start_span)[span_19](end_span)
+          </h2>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="Find chapter..."
+              value={chapterSearch}
+              onChange={(e) => setChapterSearch(e.target.value)}
+              className="bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-1.5 text-xs text-white outline-none focus:border-neutral-600 w-36 sm:w-44"
+            />
+            <button
+              onClick={() => setSortDesc(!sortDesc)}
+              className="px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-medium text-neutral-300"
+            >
+              Sort: {sortDesc ? '9 → 1' : '1 → 9'}[span_20](start_span)[span_20](end_span)
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {displayedChapters.map((c) => (
+            <Link
+              key={c.id}
+              href={`/read/${c.id}`}
+              className="p-3 bg-[#12141c] hover:bg-neutral-800/50 border border-neutral-800/80 rounded-xl flex items-center justify-between transition group"
+            >
+              <span className="text-xs font-semibold text-neutral-200 group-hover:text-amber-400 transition">
+                Chapter {c.chapter_number}[span_21](start_span)[span_21](end_span)
+              </span>
+              <span className="text-[11px] text-neutral-500 group-hover:text-neutral-300">
+                Read →[span_22](start_span)[span_22](end_span)
+              </span>
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
+    </main>
   );
 }
