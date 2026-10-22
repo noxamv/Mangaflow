@@ -6,7 +6,7 @@ const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
 const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '5', 10);
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('Missing Supabase credentials.');
+  console.error('Missing credentials.');
   process.exit(1);
 }
 
@@ -61,7 +61,7 @@ function toKey(num) {
   return Number.isInteger(num) ? String(num) : String(parseFloat(num.toFixed(2)));
 }
 
-// ComicK Source
+// ComicK
 async function searchComicK(title) {
   const json = await fetchJson(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=1&type=comic`);
   return json?.[0]?.hid || null;
@@ -70,7 +70,7 @@ async function searchComicK(title) {
 async function getComicKChapters(hid) {
   const map = new Map();
   let page = 1;
-  while (page <= 20) {
+  while (page <= 25) {
     const json = await fetchJson(`https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`);
     if (!json?.chapters?.length) break;
     for (const item of json.chapters) {
@@ -95,7 +95,7 @@ async function getComicKPages(hid) {
     .map((img) => (img.url.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.url}`));
 }
 
-// MangaDex Source
+// MangaDex
 async function searchMangaDex(title) {
   const json = await fetchJson(`https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=1&order[relevance]=desc`);
   return json?.data?.[0]?.id || null;
@@ -129,7 +129,7 @@ async function getMangaDexPages(chapterId) {
   return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
 }
 
-// MangaPill Source
+// MangaPill
 async function searchMangaPill(title) {
   const html = await fetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(title)}`);
   const match = html?.match(/href="\/manga\/([0-9]+\/[^"]+)"/i);
@@ -159,12 +159,11 @@ async function getMangaPillPages(chapterSlug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// Main Queue Worker
 async function runWorker() {
   const startTime = Date.now();
-  const MAX_RUNTIME_MS = 12 * 60 * 1000; // 12-minute safety limit to prevent cancellations
+  const MAX_RUNTIME_MS = 12 * 60 * 1000;
 
-  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Initializing priority pass...`);
+  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Running prioritized sync queue...`);
 
   const { data: queue } = await supabase
     .from('series')
@@ -178,18 +177,18 @@ async function runWorker() {
   }
 
   const assigned = queue.filter((_, idx) => (idx % TOTAL_WORKERS) + 1 === WORKER_ID);
-  console.log(`Assigned ${assigned.length} series.`);
+  console.log(`Processing ${assigned.length} priority titles.`);
 
   for (const s of assigned) {
     if (Date.now() - startTime > MAX_RUNTIME_MS) {
-      console.log('12-minute safety duration reached. Completing pass.');
+      console.log('12-minute safety limit reached. Exiting cleanly.');
       break;
     }
 
     await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
     const mainTitle = s.english_title || s.title;
-    console.log(`\n=> [${s.title}] Checking releases...`);
+    console.log(`\n=> [${s.title}] Querying sources...`);
 
     const unifiedMap = new Map();
     const merge = (map) => {
@@ -274,7 +273,7 @@ async function runWorker() {
     console.log(`   + Added: ${addedCount} | Repaired: ${repairedCount}`);
   }
 
-  console.log(`[Worker ${WORKER_ID}] Pass complete.`);
+  console.log(`[Worker ${WORKER_ID}] Priority pass complete.`);
   process.exit(0);
 }
 
