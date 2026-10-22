@@ -42,7 +42,7 @@ export default function NotificationsPage() {
         const [chapsRes, readsRes] = await Promise.all([
           supabase
             .from('chapters')
-            .select('id, series_id, chapter_number, created_at, series:series_id(title, slug, cover_image_url)')
+            .select('id, series_id, chapter_number, created_at, series:series_id(title, english_title, slug, cover_image_url)')
             .in('series_id', sIds)
             .order('chapter_number', { ascending: false }),
           supabase
@@ -61,11 +61,11 @@ export default function NotificationsPage() {
               latestMap.set(c.series_id, {
                 id: c.id,
                 chapter_id: c.id,
-                series_title: sObj?.title || 'Series',
+                series_title: sObj?.english_title || sObj?.title || 'Series',
                 series_slug: sObj?.slug || '',
                 chapter_number: c.chapter_number,
                 cover_url: sObj?.cover_image_url || '',
-                time_ago: 'Latest Release',
+                time_ago: formatTimeAgo(c.created_at),
                 is_read: readSet.has(c.id),
               });
             }
@@ -77,6 +77,16 @@ export default function NotificationsPage() {
     }
     load();
   }, []);
+
+  function formatTimeAgo(dateStr?: string) {
+    if (!dateStr) return 'Recently';
+    const diffMs = Date.now() - new Date(dateStr).getTime();
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    if (diffHours < 1) return 'Just now';
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays}d ago`;
+  }
 
   const markAllRead = async () => {
     if (!userId) return;
@@ -102,16 +112,17 @@ export default function NotificationsPage() {
       <div className="flex items-center justify-between border-b border-neutral-800 pb-4">
         <div>
           <h1 className="text-xl font-bold text-white">Notifications</h1>
-          <p className="text-xs text-neutral-400 mt-0.5">Updates from followed titles</p>
+          <p className="text-xs text-neutral-400 mt-0.5">Releases from your library</p>
         </div>
         <button
           onClick={markAllRead}
           className="px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-semibold text-neutral-300 transition"
         >
-          Mark all as read
+          ✓ Mark all as read
         </button>
       </div>
 
+      {/* Tabs: All, Unread, Read */}
       <div className="flex bg-[#14161f] border border-neutral-800 rounded-xl p-1 gap-1">
         {(['all', 'unread', 'read'] as const).map((tab) => (
           <button
@@ -127,9 +138,9 @@ export default function NotificationsPage() {
       </div>
 
       {loading ? (
-        <div className="py-20 text-center text-xs text-neutral-500">Loading alerts...</div>
+        <div className="py-20 text-center text-xs text-neutral-500">Loading notifications...</div>
       ) : filtered.length === 0 ? (
-        <div className="py-20 text-center text-xs text-neutral-500">No releases in this tab.</div>
+        <div className="py-20 text-center text-xs text-neutral-500">No notifications found.</div>
       ) : (
         <div className="bg-[#14161f] border border-neutral-800 rounded-xl overflow-hidden divide-y divide-neutral-800/60">
           {filtered.map((item) => (
@@ -142,19 +153,18 @@ export default function NotificationsPage() {
                 <img
                   src={item.cover_url || '/placeholder.png'}
                   alt=""
-                  className="w-10 h-14 rounded-lg object-cover bg-neutral-900 shrink-0 border border-neutral-800"
+                  className="w-10 h-14 rounded object-cover bg-neutral-900 shrink-0 border border-neutral-800"
                 />
                 <div className="min-w-0">
                   <p className="text-xs font-semibold text-white group-hover:text-amber-400 truncate transition">
                     {item.series_title}
                   </p>
-                  <p className="text-[11px] text-neutral-400 mt-0.5">Chapter {item.chapter_number}</p>
+                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                    Chapter {item.chapter_number} · <span className="text-neutral-500">{item.time_ago}</span>
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] bg-neutral-800 text-neutral-300 border border-neutral-700/60 px-2 py-0.5 rounded font-medium">
-                  {item.time_ago}
-                </span>
                 {!item.is_read && <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />}
               </div>
             </Link>
