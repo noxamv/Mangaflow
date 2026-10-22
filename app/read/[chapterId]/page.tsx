@@ -10,6 +10,7 @@ interface Chapter {
   series_id: string;
   chapter_number: number;
   title: string | null;
+  base_url?: string | null;
   pages: string[] | null;
   series?: {
     id: string;
@@ -29,22 +30,18 @@ export default function ReaderPage() {
   const [allChapters, setAllChapters] = useState<{ id: string; chapter_number: number; title: string | null }[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // MangaFire View Modes: 'long_strip' (webtoon), 'single', 'double'
   const [layoutMode, setLayoutMode] = useState<'long_strip' | 'single' | 'double'>('long_strip');
   const [pageMargin, setPageMargin] = useState<number>(0);
   const [pageIdx, setPageIdx] = useState(0);
 
-  // UI Visibility & Overlays
   const [showUi, setShowUi] = useState(true);
   const [showChaptersDrawer, setShowChaptersDrawer] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [drawerSearch, setDrawerSearch] = useState('');
   const [drawerSort, setDrawerSort] = useState<'desc' | 'asc'>('desc');
 
-  // Container ref for scroll position in Webtoon mode
   const webtoonContainerRef = useRef<HTMLDivElement>(null);
 
-  // 1. Load Chapter Data (Handles Offline Cache & Online Supabase)
   useEffect(() => {
     async function load() {
       if (!chapterId) return;
@@ -69,7 +66,6 @@ export default function ReaderPage() {
         if (!chData) return;
         setChapter(chData);
 
-        // Fetch sibling chapters for navigation
         const { data: sibs } = await supabase
           .from('chapters')
           .select('id, chapter_number, title')
@@ -78,7 +74,6 @@ export default function ReaderPage() {
 
         if (sibs) setAllChapters(sibs);
 
-        // Restore saved position (Exact page left off)
         const savedPage = localStorage.getItem(`mangaflow_page_${chapterId}`);
         if (savedPage !== null) {
           const parsed = parseInt(savedPage, 10);
@@ -87,7 +82,6 @@ export default function ReaderPage() {
           }
         }
 
-        // Restore scroll position in long strip mode
         const savedScroll = localStorage.getItem(`mangaflow_scroll_${chapterId}`);
         if (savedScroll !== null) {
           setTimeout(() => {
@@ -95,7 +89,6 @@ export default function ReaderPage() {
           }, 150);
         }
 
-        // Update local reading history
         const local = JSON.parse(localStorage.getItem('mangaflow_reading_history') || '{}');
         const sObj = chData.series;
         local[chData.series_id] = {
@@ -109,7 +102,6 @@ export default function ReaderPage() {
         };
         localStorage.setItem('mangaflow_reading_history', JSON.stringify(local));
 
-        // Sync to Supabase reading_history if logged in
         const { data: auth } = await supabase.auth.getUser();
         if (auth?.user) {
           await supabase.from('reading_history').upsert({
@@ -129,13 +121,11 @@ export default function ReaderPage() {
     load();
   }, [chapterId]);
 
-  // 2. Save Exact Page Index in Single/Double Mode
   useEffect(() => {
     if (!chapterId) return;
     localStorage.setItem(`mangaflow_page_${chapterId}`, String(pageIdx));
   }, [chapterId, pageIdx]);
 
-  // 3. Save Exact Scroll Position in Long Strip / Webtoon Mode
   useEffect(() => {
     if (!chapterId || layoutMode !== 'long_strip') return;
 
@@ -154,16 +144,17 @@ export default function ReaderPage() {
     };
   }, [chapterId, layoutMode]);
 
-  // Sibling Chapter Navigation
   const currentIndex = allChapters.findIndex((c) => c.id === chapterId);
   const prevChapter = currentIndex > 0 ? allChapters[currentIndex - 1] : null;
   const nextChapter = currentIndex >= 0 && currentIndex < allChapters.length - 1 ? allChapters[currentIndex + 1] : null;
 
+  // METHOD A: STITCH COMPRESSED URLS BACK INSTANTLY
   const pages = useMemo(() => {
-    return Array.isArray(chapter?.pages) ? chapter!.pages : [];
+    if (!chapter || !Array.isArray(chapter.pages)) return [];
+    const base = chapter.base_url || '';
+    return chapter.pages.map((p) => (p.startsWith('http') ? p : `${base}${p}`));
   }, [chapter]);
 
-  // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (showChaptersDrawer || showSettingsModal) return;
@@ -185,7 +176,6 @@ export default function ReaderPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [layoutMode, pages.length, nextChapter, prevChapter, router, showChaptersDrawer, showSettingsModal]);
 
-  // Filtered Chapters Drawer
   const filteredChapters = useMemo(() => {
     return allChapters
       .filter((c) => {
@@ -231,7 +221,6 @@ export default function ReaderPage() {
 
   return (
     <div className="min-h-screen bg-[#090a0d] text-white flex flex-col relative select-none">
-      {/* Top Floating Header */}
       <header
         className={`fixed top-0 inset-x-0 z-40 bg-[#121319]/95 backdrop-blur border-b border-gray-800/80 px-4 py-3 flex items-center justify-between transition-transform duration-300 ${
           showUi ? 'translate-y-0' : '-translate-y-full'
@@ -270,12 +259,10 @@ export default function ReaderPage() {
         </div>
       </header>
 
-      {/* Reader Viewport */}
       <main
         className="flex-1 flex flex-col items-center justify-center py-16 px-0 w-full"
         onClick={() => setShowUi((prev) => !prev)}
       >
-        {/* Mode 1: Long Strip / Webtoon Mode */}
         {layoutMode === 'long_strip' && (
           <div
             ref={webtoonContainerRef}
@@ -289,7 +276,6 @@ export default function ReaderPage() {
                 alt={`Page ${i + 1}`}
                 loading={i < 4 ? 'eager' : 'lazy'}
                 onError={(e) => {
-                  // Direct upstream fallback if proxy rejects or encounters issue
                   const target = e.currentTarget;
                   if (target.src.includes('/api/proxy')) {
                     target.src = url;
@@ -301,7 +287,6 @@ export default function ReaderPage() {
           </div>
         )}
 
-        {/* Mode 2: Single Page Mode */}
         {layoutMode === 'single' && (
           <div className="flex flex-col items-center justify-center min-h-[75vh] max-w-4xl px-2">
             <img
@@ -321,7 +306,6 @@ export default function ReaderPage() {
           </div>
         )}
 
-        {/* Mode 3: Double Page Manga Spread */}
         {layoutMode === 'double' && (
           <div className="flex items-center justify-center min-h-[75vh] max-w-6xl px-2 gap-1">
             {pageIdx + 1 < pages.length && (
@@ -352,7 +336,6 @@ export default function ReaderPage() {
         )}
       </main>
 
-      {/* Bottom Floating Navigation Bar */}
       <footer
         className={`fixed bottom-0 inset-x-0 z-40 bg-[#121319]/95 backdrop-blur border-t border-gray-800/80 px-4 py-2.5 flex items-center justify-between transition-transform duration-300 ${
           showUi ? 'translate-y-0' : 'translate-y-full'
@@ -379,7 +362,6 @@ export default function ReaderPage() {
         </button>
       </footer>
 
-      {/* Chapter Quick Jump Drawer */}
       {showChaptersDrawer && (
         <div className="fixed inset-0 z-50 flex">
           <div
@@ -443,7 +425,6 @@ export default function ReaderPage() {
         </div>
       )}
 
-      {/* Reading Options Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
