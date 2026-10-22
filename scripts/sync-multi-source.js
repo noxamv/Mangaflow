@@ -22,17 +22,34 @@ const HEADERS = {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Concurrent task pool runner
+async function asyncPool(poolLimit, array, iteratorFn) {
+  const ret = [];
+  const executing = new Set();
+  for (const item of array) {
+    const p = Promise.resolve().then(() => iteratorFn(item));
+    ret.push(p);
+    executing.add(p);
+    const clean = () => executing.delete(p);
+    p.then(clean).catch(clean);
+    if (executing.size >= poolLimit) {
+      await Promise.race(executing);
+    }
+  }
+  return Promise.all(ret);
+}
+
 async function fetchJson(url) {
   for (let i = 0; i < 2; i++) {
     try {
       const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 8000);
+      const id = setTimeout(() => controller.abort(), 7000);
       const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
       clearTimeout(id);
       if (res.ok) return await res.json();
-      if (res.status === 429) await delay(2500);
+      if (res.status === 429) await delay(2000);
     } catch {
-      await delay(600);
+      await delay(400);
     }
   }
   return null;
@@ -41,7 +58,7 @@ async function fetchJson(url) {
 async function fetchHtml(url) {
   try {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 8000);
+    const id = setTimeout(() => controller.abort(), 7000);
     const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
     clearTimeout(id);
     if (res.ok) return await res.text();
@@ -74,7 +91,7 @@ function slugify(text) {
     .replace(/-+$/, '');
 }
 
-// ---------------- SOURCE: COMICK ----------------
+// ---------------- COMICK ----------------
 async function searchComicK(title) {
   const json = await fetchJson(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=1&type=comic`);
   return json?.[0]?.hid || null;
@@ -83,7 +100,7 @@ async function searchComicK(title) {
 async function getComicKChapters(hid) {
   const map = new Map();
   let page = 1;
-  while (page <= 30) {
+  while (page <= 25) {
     const json = await fetchJson(`https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`);
     if (!json?.chapters?.length) break;
     for (const item of json.chapters) {
@@ -95,7 +112,7 @@ async function getComicKChapters(hid) {
     }
     if (json.chapters.length < 100) break;
     page++;
-    await delay(100);
+    await delay(60);
   }
   return map;
 }
@@ -108,7 +125,7 @@ async function getComicKPages(hid) {
     .map((img) => (img.url.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.url}`));
 }
 
-// ---------------- SOURCE: MANGADEX ----------------
+// ---------------- MANGADEX ----------------
 async function searchMangaDex(title) {
   const json = await fetchJson(`https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=1&order[relevance]=desc`);
   return json?.data?.[0]?.id || null;
@@ -131,7 +148,7 @@ async function getMangaDexChapters(mangaId) {
     }
     offset += limit;
     if (offset >= (json.total || 0)) break;
-    await delay(100);
+    await delay(60);
   }
   return map;
 }
@@ -142,7 +159,7 @@ async function getMangaDexPages(chapterId) {
   return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
 }
 
-// ---------------- SOURCE: MANGAPILL ----------------
+// ---------------- MANGAPILL ----------------
 async function searchMangaPill(title) {
   const html = await fetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(title)}`);
   const match = html?.match(/href="\/manga\/([0-9]+\/[^"]+)"/i);
@@ -200,9 +217,8 @@ async function buildAggregatedChapterMap(searchTitles) {
     if (mdId) merge(await getMangaDexChapters(mdId));
     if (mpSlug) merge(await getMangaPillChapters(mpSlug));
 
-    // Stop searching aliases if a strong candidate pool (>40 chapters) was found
     if (unifiedMap.size >= 40) break;
-    await delay(150);
+    await delay(60);
   }
 
   return unifiedMap;
@@ -256,7 +272,6 @@ async function discoverNewTrendingSeries(count = 3) {
 async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
   await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
-  // 1. Gather all potential aliases
   const searchTitles = [s.english_title, s.title, s.native_title];
   if (Array.isArray(s.synonyms)) {
     searchTitles.push(...s.synonyms);
@@ -270,15 +285,14 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
     }
   }
 
-  console.log(`\n=> [${s.title}] Searching releases across all known aliases...`);
+  console.log(`\n=> [${s.title}] Resolving releases across aliases...`);
   const unifiedMap = await buildAggregatedChapterMap(searchTitles);
 
   if (unifiedMap.size === 0) {
-    console.log('   No online releases matched aliases.');
+    console.log('   No online releases matched.');
     return;
   }
 
-  // 2. Fetch existing chapters to detect sequence gaps
   const { data: existingChapters } = await supabase
     .from('chapters')
     .select('id, chapter_number, pages')
@@ -290,23 +304,30 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
     if (key) existingMap.set(key, ex);
   }
 
-  let addedCount = 0;
-  let repairedCount = 0;
-
-  // 3. Process every missing or empty chapter
+  const tasks = [];
   for (const [key, candidates] of unifiedMap.entries()) {
-    if (Date.now() - startTime > MAX_RUNTIME_MS) break;
-
-    const chNum = parseFloat(key);
     const existing = existingMap.get(key);
-
-    // Skip chapters that already have valid image panels
     if (existing && Array.isArray(existing.pages) && existing.pages.length > 0) {
       continue;
     }
+    tasks.push({ key, candidates, existing });
+  }
+
+  if (tasks.length === 0) {
+    console.log('   Already 100% up to date.');
+    return;
+  }
+
+  let addedCount = 0;
+  let repairedCount = 0;
+  const insertBatch = [];
+
+  // Parallel pool fetching 5 chapters concurrently
+  await asyncPool(5, tasks, async (task) => {
+    if (Date.now() - startTime > MAX_RUNTIME_MS) return;
 
     let pages = null;
-    for (const cand of candidates) {
+    for (const cand of task.candidates) {
       try {
         if (cand.type === 'comick') pages = await getComicKPages(cand.id);
         else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
@@ -315,9 +336,8 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
       } catch {}
     }
 
-    if (!pages?.length) continue;
+    if (!pages?.length) return;
 
-    // Method A: Hybrid URL Storage Compression
     let baseUrl = '';
     let compressedPages = pages;
     try {
@@ -326,11 +346,16 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
       compressedPages = pages.map((p) => (p.startsWith(baseUrl) ? p.replace(baseUrl, '') : p));
     } catch {}
 
-    if (existing) {
-      await supabase.from('chapters').update({ base_url: baseUrl, pages: compressedPages }).eq('id', existing.id);
+    const chNum = parseFloat(task.key);
+
+    if (task.existing) {
+      await supabase
+        .from('chapters')
+        .update({ base_url: baseUrl, pages: compressedPages })
+        .eq('id', task.existing.id);
       repairedCount++;
     } else {
-      await supabase.from('chapters').insert({
+      insertBatch.push({
         series_id: s.id,
         chapter_number: chNum,
         title: `Chapter ${chNum}`,
@@ -339,7 +364,14 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
       });
       addedCount++;
     }
-    await delay(80);
+  });
+
+  // Single bulk insert for all newly discovered chapters
+  if (insertBatch.length > 0) {
+    const { error: batchErr } = await supabase.from('chapters').insert(insertBatch);
+    if (batchErr) {
+      console.error('Batch insert warning:', batchErr.message);
+    }
   }
 
   console.log(`   + Added: ${addedCount} | Repaired: ${repairedCount}`);
@@ -349,14 +381,13 @@ async function runWorker() {
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 12 * 60 * 1000;
 
-  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting 80/20 Multi-Alias Sync Engine...`);
+  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting Ultra-Fast Multi-Alias Engine...`);
 
-  // Pull 150 series so all 5 workers run productively for 3-5 minutes
   const { data: queue } = await supabase
     .from('series')
     .select('id, title, english_title, native_title, synonyms, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
-    .limit(150);
+    .limit(200);
 
   const assignedSync = (queue || []).filter((_, idx) => (idx % TOTAL_WORKERS) + 1 === WORKER_ID);
   console.log(`[80% Sync Queue] Assigned ${assignedSync.length} series to Worker ${WORKER_ID}.`);
@@ -366,7 +397,6 @@ async function runWorker() {
     await processSeriesSync(s, startTime, MAX_RUNTIME_MS);
   }
 
-  // 20% Discovery Pass handled by Worker 1
   if (WORKER_ID === 1 && Date.now() - startTime < MAX_RUNTIME_MS) {
     console.log(`\n[20% Discovery Pass] Discovering new releases...`);
     const newSeries = await discoverNewTrendingSeries(3);
