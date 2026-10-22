@@ -66,16 +66,21 @@ async function fetchHtml(url) {
   return null;
 }
 
+// ---------------- NUMBER NORMALIZATION & DEDUPLICATION ----------------
 function cleanNum(val) {
   if (val == null) return null;
   const str = String(val).trim().toLowerCase();
-  if (['prologue', 'oneshot', 'intro'].includes(str)) return 0;
+  if (['prologue', 'oneshot', 'intro', 'teaser'].includes(str)) return 0;
+  
   const match = str.match(/[0-9]+(?:\.[0-9]+)?/);
-  return match ? parseFloat(parseFloat(match[0]).toFixed(2)) : null;
+  if (!match) return null;
+  const parsed = parseFloat(match[0]);
+  return isNaN(parsed) ? null : parseFloat(parsed.toFixed(2));
 }
 
 function toKey(num) {
   if (num === null || isNaN(num)) return null;
+  // Standardize 12.0 -> "12", 12.5 -> "12.5"
   return Number.isInteger(num) ? String(num) : String(parseFloat(num.toFixed(2)));
 }
 
@@ -103,7 +108,7 @@ function slugify(text) {
     .replace(/-+$/, '');
 }
 
-// ================= 1. COMICK =================
+// ---------------- COMICK ----------------
 async function searchComicK(title) {
   const json = await fetchJson(
     `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=6&type=comic`
@@ -133,7 +138,7 @@ async function getComicKChapters(hid) {
       const key = toKey(cleanNum(item.chap));
       if (key && item.hid) {
         if (!map.has(key)) map.set(key, []);
-        map.get(key).push({ id: item.hid, type: 'comick' });
+        map.get(key).push({ id: item.hid, type: 'comick', order: 1 });
       }
     }
     if (json.chapters.length < 100) break;
@@ -151,7 +156,7 @@ async function getComicKPages(hid) {
     .map((img) => (img.url.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.url}`));
 }
 
-// ================= 2. MANGADEX =================
+// ---------------- MANGADEX ----------------
 async function searchMangaDex(title) {
   const json = await fetchJson(
     `https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=5&order[relevance]=desc`
@@ -180,7 +185,7 @@ async function getMangaDexChapters(mangaId) {
       const key = toKey(cleanNum(item.attributes?.chapter));
       if (key) {
         if (!map.has(key)) map.set(key, []);
-        map.get(key).push({ id: item.id, type: 'mangadex' });
+        map.get(key).push({ id: item.id, type: 'mangadex', order: 2 });
       }
     }
     offset += limit;
@@ -196,7 +201,7 @@ async function getMangaDexPages(chapterId) {
   return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
 }
 
-// ================= 3. MANGAPILL =================
+// ---------------- MANGAPILL ----------------
 async function searchMangaPill(title) {
   const cleanTitle = title.replace(/['’]/g, '').trim();
   const html = await fetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(cleanTitle)}`);
@@ -214,7 +219,7 @@ async function getMangaPillChapters(slug) {
     const key = toKey(cleanNum(match[2]));
     if (key) {
       if (!map.has(key)) map.set(key, []);
-      map.get(key).push({ id: match[1], type: 'mangapill' });
+      map.get(key).push({ id: match[1], type: 'mangapill', order: 3 });
     }
   }
   return map;
@@ -227,7 +232,7 @@ async function getMangaPillPages(chapterSlug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// ================= MULTI-ALIAS SEARCH & QUERY SANITIZATION =================
+// ---------------- MULTI-ALIAS DEDUPLICATING AGGREGATION ----------------
 async function buildAggregatedChapterMap(searchTitles) {
   const unifiedMap = new Map();
   const checkedQueries = new Set();
@@ -273,60 +278,25 @@ async function buildAggregatedChapterMap(searchTitles) {
     await delay(60);
   }
 
+  // Deduplicate candidates per chapter number and sort by source priority
+  for (const [key, candidates] of unifiedMap.entries()) {
+    const seen = new Set();
+    const unique = [];
+    for (const c of candidates) {
+      const uKey = `${c.type}:${c.id}`;
+      if (!seen.has(uKey)) {
+        seen.add(uKey);
+        unique.push(c);
+      }
+    }
+    unique.sort((a, b) => (a.order || 9) - (b.order || 9));
+    unifiedMap.set(key, unique);
+  }
+
   return unifiedMap;
 }
 
-// ================= NEW DISCOVERY (20%) =================
-async function discoverNewTrendingSeries(count = 3) {
-  console.log(`[Discovery] Checking upstream feeds for new graphic releases...`);
-  const newDiscovered = [];
-
-  try {
-    const topComics = await fetchJson(
-      'https://api.comick.io/top?type=trending&comic_types=manhwa&accept_mature_content=true'
-    );
-    if (Array.isArray(topComics)) {
-      for (const item of topComics) {
-        if (!item.title || item.comic_type === 'novel' || isNovelKeyword(item.title)) continue;
-        const slug = slugify(item.title);
-
-        const { data: exists } = await supabase.from('series').select('id').eq('slug', slug).single();
-        if (!exists) {
-          const cover = item.md_covers?.[0]?.b2key
-            ? `https://meo3.comick.pictures/${item.md_covers[0].b2key}`
-            : null;
-
-          const { data: inserted } = await supabase
-            .from('series')
-            .insert({
-              title: item.title,
-              english_title: item.title,
-              slug: slug,
-              synopsis: item.desc || 'Trending graphic release.',
-              cover_image_url: cover,
-              reading_mode: item.country === 'kr' ? 'webtoon' : 'manga',
-              status: 'releasing',
-              updated_at: new Date(0).toISOString(),
-            })
-            .select('id, title, english_title, synonyms, native_title')
-            .single();
-
-          if (inserted) {
-            console.log(`   + Discovered & Indexed: ${inserted.title}`);
-            newDiscovered.push(inserted);
-            if (newDiscovered.length >= count) break;
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Discovery error:', err.message);
-  }
-
-  return newDiscovered;
-}
-
-// ================= MAIN SYNC ENGINE =================
+// ---------------- MAIN WORKER LOOP ----------------
 async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
   await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
@@ -365,10 +335,12 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
   const tasks = [];
   for (const [key, candidates] of unifiedMap.entries()) {
     const chNum = parseFloat(key);
+    // Sanity limit: manhwa chapters never legitimately exceed 350
     if (s.reading_mode === 'webtoon' && chNum > 350) continue;
 
     const existing = existingMap.get(key);
-    if (existing && Array.isArray(existing.pages) && existing.pages.length > 0) {
+    // If the chapter already has a complete set of panels, skip it to avoid duplicate scan ingestion
+    if (existing && Array.isArray(existing.pages) && existing.pages.length >= 5) {
       continue;
     }
     tasks.push({ key, candidates, existing, chNum });
@@ -437,7 +409,7 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
     }
   });
 
-  // Conflict-free upsert: handles duplicate keys cleanly
+  // Bulk upsert against the unique (series_id, chapter_number) constraint
   if (upsertBatch.length > 0) {
     const { error: batchErr } = await supabase
       .from('chapters')
@@ -455,7 +427,7 @@ async function runWorker() {
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 12 * 60 * 1000;
 
-  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting Graphic-Only Multi-Alias Engine...`);
+  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting Graphic-Only Deduplicating Engine...`);
 
   const { data: queue } = await supabase
     .from('series')
@@ -469,15 +441,6 @@ async function runWorker() {
   for (const s of assignedSync) {
     if (Date.now() - startTime > MAX_RUNTIME_MS) break;
     await processSeriesSync(s, startTime, MAX_RUNTIME_MS);
-  }
-
-  if (WORKER_ID === 1 && Date.now() - startTime < MAX_RUNTIME_MS) {
-    console.log(`\n[20% Discovery Pass] Discovering new releases...`);
-    const newSeries = await discoverNewTrendingSeries(3);
-    for (const s of newSeries) {
-      if (Date.now() - startTime > MAX_RUNTIME_MS) break;
-      await processSeriesSync(s, startTime, MAX_RUNTIME_MS);
-    }
   }
 
   console.log(`[Worker ${WORKER_ID}] Sync pass complete.`);
