@@ -30,9 +30,9 @@ async function fetchJson(url) {
       const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
       clearTimeout(id);
       if (res.ok) return await res.json();
-      if (res.status === 429) await delay(3000);
+      if (res.status === 429) await delay(2500);
     } catch {
-      await delay(800);
+      await delay(600);
     }
   }
   return null;
@@ -74,7 +74,7 @@ function slugify(text) {
     .replace(/-+$/, '');
 }
 
-// ================= COMICK API =================
+// ---------------- SOURCE: COMICK ----------------
 async function searchComicK(title) {
   const json = await fetchJson(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=1&type=comic`);
   return json?.[0]?.hid || null;
@@ -83,7 +83,7 @@ async function searchComicK(title) {
 async function getComicKChapters(hid) {
   const map = new Map();
   let page = 1;
-  while (page <= 25) {
+  while (page <= 30) {
     const json = await fetchJson(`https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`);
     if (!json?.chapters?.length) break;
     for (const item of json.chapters) {
@@ -95,7 +95,7 @@ async function getComicKChapters(hid) {
     }
     if (json.chapters.length < 100) break;
     page++;
-    await delay(120);
+    await delay(100);
   }
   return map;
 }
@@ -108,7 +108,7 @@ async function getComicKPages(hid) {
     .map((img) => (img.url.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.url}`));
 }
 
-// ================= MANGADEX API =================
+// ---------------- SOURCE: MANGADEX ----------------
 async function searchMangaDex(title) {
   const json = await fetchJson(`https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=1&order[relevance]=desc`);
   return json?.data?.[0]?.id || null;
@@ -118,7 +118,7 @@ async function getMangaDexChapters(mangaId) {
   const map = new Map();
   let offset = 0;
   const limit = 100;
-  while (offset <= 800) {
+  while (offset <= 1000) {
     const json = await fetchJson(`https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&limit=${limit}&offset=${offset}&order[chapter]=desc`);
     if (!json?.data?.length) break;
     for (const item of json.data) {
@@ -131,7 +131,7 @@ async function getMangaDexChapters(mangaId) {
     }
     offset += limit;
     if (offset >= (json.total || 0)) break;
-    await delay(120);
+    await delay(100);
   }
   return map;
 }
@@ -142,7 +142,7 @@ async function getMangaDexPages(chapterId) {
   return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
 }
 
-// ================= MANGAPILL SCRAPER =================
+// ---------------- SOURCE: MANGAPILL ----------------
 async function searchMangaPill(title) {
   const html = await fetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(title)}`);
   const match = html?.match(/href="\/manga\/([0-9]+\/[^"]+)"/i);
@@ -172,7 +172,43 @@ async function getMangaPillPages(chapterSlug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// ================= NEW SERIES DISCOVERY (20%) =================
+// ---------------- MULTI-ALIAS SEARCH & MERGE ----------------
+async function buildAggregatedChapterMap(searchTitles) {
+  const unifiedMap = new Map();
+  const checkedQueries = new Set();
+
+  const merge = (map) => {
+    for (const [k, cands] of map.entries()) {
+      if (!unifiedMap.has(k)) unifiedMap.set(k, []);
+      unifiedMap.get(k).push(...cands);
+    }
+  };
+
+  for (const rawQuery of searchTitles) {
+    if (!rawQuery) continue;
+    const cleanQuery = rawQuery.trim();
+    if (cleanQuery.length < 2 || checkedQueries.has(cleanQuery.toLowerCase())) continue;
+    checkedQueries.add(cleanQuery.toLowerCase());
+
+    const [ckHid, mdId, mpSlug] = await Promise.all([
+      searchComicK(cleanQuery),
+      searchMangaDex(cleanQuery),
+      searchMangaPill(cleanQuery),
+    ]);
+
+    if (ckHid) merge(await getComicKChapters(ckHid));
+    if (mdId) merge(await getMangaDexChapters(mdId));
+    if (mpSlug) merge(await getMangaPillChapters(mpSlug));
+
+    // Stop searching aliases if a strong candidate pool (>40 chapters) was found
+    if (unifiedMap.size >= 40) break;
+    await delay(150);
+  }
+
+  return unifiedMap;
+}
+
+// ---------------- NEW DISCOVERY (20%) ----------------
 async function discoverNewTrendingSeries(count = 3) {
   console.log(`[Discovery] Checking upstream feeds for new releases...`);
   const newDiscovered = [];
@@ -194,12 +230,12 @@ async function discoverNewTrendingSeries(count = 3) {
             title: item.title,
             english_title: item.title,
             slug: slug,
-            synopsis: item.desc || 'Discovered new trending series.',
+            synopsis: item.desc || 'Discovered new trending release.',
             cover_image_url: cover,
             reading_mode: item.country === 'kr' ? 'webtoon' : 'manga',
             status: 'releasing',
             updated_at: new Date(0).toISOString(),
-          }).select('id, title, english_title').single();
+          }).select('id, title, english_title, synonyms, native_title').single();
 
           if (inserted) {
             console.log(`   + Discovered & Indexed: ${inserted.title}`);
@@ -216,33 +252,33 @@ async function discoverNewTrendingSeries(count = 3) {
   return newDiscovered;
 }
 
-// ================= MAIN SYNC ENGINE =================
+// ---------------- MAIN WORKER LOOP ----------------
 async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
   await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
-  const mainTitle = s.english_title || s.title;
-  console.log(`\n=> [${s.title}] Querying sources...`);
-
-  const unifiedMap = new Map();
-  const merge = (map) => {
-    for (const [k, cands] of map.entries()) {
-      if (!unifiedMap.has(k)) unifiedMap.set(k, []);
-      unifiedMap.get(k).push(...cands);
+  // 1. Gather all potential aliases
+  const searchTitles = [s.english_title, s.title, s.native_title];
+  if (Array.isArray(s.synonyms)) {
+    searchTitles.push(...s.synonyms);
+  } else if (typeof s.synonyms === 'string') {
+    try {
+      const parsed = JSON.parse(s.synonyms);
+      if (Array.isArray(parsed)) searchTitles.push(...parsed);
+      else searchTitles.push(s.synonyms);
+    } catch {
+      searchTitles.push(...s.synonyms.split(/[,;\n]/));
     }
-  };
+  }
 
-  const [ckHid, mdId, mpSlug] = await Promise.all([
-    searchComicK(mainTitle),
-    searchMangaDex(mainTitle),
-    searchMangaPill(mainTitle),
-  ]);
+  console.log(`\n=> [${s.title}] Searching releases across all known aliases...`);
+  const unifiedMap = await buildAggregatedChapterMap(searchTitles);
 
-  if (ckHid) merge(await getComicKChapters(ckHid));
-  if (mdId) merge(await getMangaDexChapters(mdId));
-  if (mpSlug) merge(await getMangaPillChapters(mpSlug));
+  if (unifiedMap.size === 0) {
+    console.log('   No online releases matched aliases.');
+    return;
+  }
 
-  if (unifiedMap.size === 0) return;
-
+  // 2. Fetch existing chapters to detect sequence gaps
   const { data: existingChapters } = await supabase
     .from('chapters')
     .select('id, chapter_number, pages')
@@ -257,12 +293,14 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
   let addedCount = 0;
   let repairedCount = 0;
 
+  // 3. Process every missing or empty chapter
   for (const [key, candidates] of unifiedMap.entries()) {
     if (Date.now() - startTime > MAX_RUNTIME_MS) break;
 
     const chNum = parseFloat(key);
     const existing = existingMap.get(key);
 
+    // Skip chapters that already have valid image panels
     if (existing && Array.isArray(existing.pages) && existing.pages.length > 0) {
       continue;
     }
@@ -279,6 +317,7 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
 
     if (!pages?.length) continue;
 
+    // Method A: Hybrid URL Storage Compression
     let baseUrl = '';
     let compressedPages = pages;
     try {
@@ -300,7 +339,7 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
       });
       addedCount++;
     }
-    await delay(100);
+    await delay(80);
   }
 
   console.log(`   + Added: ${addedCount} | Repaired: ${repairedCount}`);
@@ -310,34 +349,34 @@ async function runWorker() {
   const startTime = Date.now();
   const MAX_RUNTIME_MS = 12 * 60 * 1000;
 
-  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting 80/20 Sync & Discovery Engine...`);
+  console.log(`[Worker ${WORKER_ID}/${TOTAL_WORKERS}] Booting 80/20 Multi-Alias Sync Engine...`);
 
-  // PART A: 80% WORKLOAD -> Sync & Repair Oldest/Missing Catalog
+  // Pull 150 series so all 5 workers run productively for 3-5 minutes
   const { data: queue } = await supabase
     .from('series')
-    .select('id, title, english_title, updated_at')
+    .select('id, title, english_title, native_title, synonyms, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
-    .limit(32);
+    .limit(150);
 
   const assignedSync = (queue || []).filter((_, idx) => (idx % TOTAL_WORKERS) + 1 === WORKER_ID);
-  console.log(`[80% Sync Queue] Assigned ${assignedSync.length} priority series.`);
+  console.log(`[80% Sync Queue] Assigned ${assignedSync.length} series to Worker ${WORKER_ID}.`);
 
   for (const s of assignedSync) {
     if (Date.now() - startTime > MAX_RUNTIME_MS) break;
     await processSeriesSync(s, startTime, MAX_RUNTIME_MS);
   }
 
-  // PART B: 20% WORKLOAD -> Discover and Seed Brand New Releases
+  // 20% Discovery Pass handled by Worker 1
   if (WORKER_ID === 1 && Date.now() - startTime < MAX_RUNTIME_MS) {
-    console.log(`\n[20% Discovery Pass] Worker 1 scanning new releases...`);
-    const newSeries = await discoverNewTrendingSeries(2);
+    console.log(`\n[20% Discovery Pass] Discovering new releases...`);
+    const newSeries = await discoverNewTrendingSeries(3);
     for (const s of newSeries) {
       if (Date.now() - startTime > MAX_RUNTIME_MS) break;
       await processSeriesSync(s, startTime, MAX_RUNTIME_MS);
     }
   }
 
-  console.log(`[Worker ${WORKER_ID}] 80/20 Pass Completed Successfully.`);
+  console.log(`[Worker ${WORKER_ID}] Sync pass complete.`);
   process.exit(0);
 }
 
