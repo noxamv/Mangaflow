@@ -36,7 +36,6 @@ export default function ReaderPage() {
       if (!chapterId) return;
       setLoading(true);
 
-      // 1. Fetch current chapter details
       const { data: cData, error: cErr } = await supabase
         .from('chapters')
         .select('id, series_id, chapter_number, title, base_url, pages')
@@ -50,7 +49,6 @@ export default function ReaderPage() {
 
       setChapter(cData);
 
-      // 2. Fetch series information and sibling chapters for quick navigation
       const [{ data: sData }, { data: siblings }] = await Promise.all([
         supabase
           .from('series')
@@ -88,7 +86,6 @@ export default function ReaderPage() {
     loadReaderData();
   }, [chapterId]);
 
-  // Compute Adjacent Chapter Links (Ordered Descending)
   const { prevChapter, nextChapter } = useMemo(() => {
     if (!chapter || allChapters.length === 0) {
       return { prevChapter: null, nextChapter: null };
@@ -104,7 +101,6 @@ export default function ReaderPage() {
     return { prevChapter: prev, nextChapter: next };
   }, [chapter, allChapters]);
 
-  // Keyboard shortcut listener (Arrows and A/D)
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -122,7 +118,6 @@ export default function ReaderPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
-  // Image URL Resolver: Auto-routes strict CDNs (MangaPill/Conan) directly through the Edge proxy
   const resolveImageUrl = useCallback(
     (page: string): string => {
       if (!page) return '';
@@ -138,7 +133,6 @@ export default function ReaderPage() {
         }
       }
 
-      // Automatically route MangaPill / Conan CDN images through Edge proxy with valid Referer
       if (fullUrl.includes('readdetectiveconan.com') || fullUrl.includes('mangapill.com')) {
         return `/api/proxy-image?url=${encodeURIComponent(fullUrl)}`;
       }
@@ -179,7 +173,6 @@ export default function ReaderPage() {
 
   return (
     <div className="min-h-screen bg-[#060709] text-neutral-200 flex flex-col select-none">
-      {/* Top Header Navigation */}
       <header className="sticky top-0 z-40 bg-[#090a0d]/90 backdrop-blur-md border-b border-neutral-800 px-4 py-2.5 flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
           <Link
@@ -212,7 +205,6 @@ export default function ReaderPage() {
         </div>
       </header>
 
-      {/* Main Comic Panel Scroll Container */}
       <main className="flex-1 flex flex-col items-center w-full max-w-4xl mx-auto py-2">
         {chapter.pages.map((page, idx) => {
           const resolvedSrc = resolveImageUrl(page);
@@ -232,7 +224,6 @@ export default function ReaderPage() {
                 className="w-full h-auto object-contain block max-w-full"
                 onError={(e) => {
                   const target = e.currentTarget;
-                  // Fallback to proxy route if direct source fails
                   if (!target.src.includes('/api/proxy-image')) {
                     target.src = `/api/proxy-image?url=${encodeURIComponent(resolvedSrc)}`;
                   }
@@ -243,7 +234,6 @@ export default function ReaderPage() {
         })}
       </main>
 
-      {/* Bottom Sticky Navigation Bar */}
       <footer className="sticky bottom-0 z-40 bg-[#090a0d]/95 backdrop-blur-md border-t border-neutral-800 px-4 py-3 flex items-center justify-between max-w-3xl mx-auto w-full rounded-t-xl shadow-2xl">
         {prevChapter ? (
           <Link
@@ -276,7 +266,6 @@ export default function ReaderPage() {
         )}
       </footer>
 
-      {/* Slide-out Chapter Drawer */}
       {drawerOpen && (
         <div className="fixed inset-0 z-50 flex">
           <div
