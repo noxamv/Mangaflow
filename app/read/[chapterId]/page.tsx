@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
@@ -32,7 +32,6 @@ export default function ReaderPage() {
 
   const [showUi, setShowUi] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
-  const [currentPage, setCurrentPage] = useState(1);
   const [showChaptersDrawer, setShowChaptersDrawer] = useState(false);
 
   useEffect(() => {
@@ -67,7 +66,6 @@ export default function ReaderPage() {
 
         if (sibs) setAllChapters(sibs);
 
-        // Record reading history in background
         const { data: auth } = await supabase.auth.getUser();
         if (auth?.user) {
           await supabase.from('reading_history').upsert({
@@ -87,11 +85,10 @@ export default function ReaderPage() {
     load();
   }, [chapterId]);
 
-  // MangaFire-style auto-hiding navigation bars on scroll
   useEffect(() => {
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
-      if (currentScrollY > lastScrollY && currentScrollY > 100) {
+      if (currentScrollY > lastScrollY && currentScrollY > 80) {
         setShowUi(false);
       } else {
         setShowUi(true);
@@ -115,20 +112,20 @@ export default function ReaderPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#08090b] flex flex-col items-center justify-center text-neutral-400 gap-3">
-        <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-xs font-semibold">Loading chapter panels...</p>
+      <div className="min-h-screen bg-[#07080a] flex flex-col items-center justify-center text-neutral-400 gap-3">
+        <div className="w-8 h-8 border-2 border-neutral-600 border-t-white rounded-full animate-spin" />
+        <p className="text-xs">Loading panels...</p>
       </div>
     );
   }
 
   if (!chapter || pages.length === 0) {
     return (
-      <div className="min-h-screen bg-[#08090b] flex flex-col items-center justify-center text-neutral-300 p-6 text-center">
-        <h2 className="text-base font-bold mb-2">No panels available</h2>
+      <div className="min-h-screen bg-[#07080a] flex flex-col items-center justify-center text-neutral-300 p-6 text-center">
+        <h2 className="text-sm font-semibold mb-2">No pages available for this chapter</h2>
         <Link
           href={`/series/${chapter?.series?.slug || ''}`}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs transition"
+          className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white font-medium rounded-lg text-xs transition"
         >
           Back to Series
         </Link>
@@ -137,7 +134,8 @@ export default function ReaderPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#060709] text-white flex flex-col relative select-none">
+    <div className="min-h-screen bg-[#07080a] text-white flex flex-col relative select-none">
+      {/* Top Floating Control Bar */}
       <header
         className={`fixed top-0 inset-x-0 z-40 bg-[#0d0e14]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 py-3 flex items-center justify-between transition-transform duration-300 ${
           showUi ? 'translate-y-0' : '-translate-y-full'
@@ -146,30 +144,30 @@ export default function ReaderPage() {
         <div className="flex items-center gap-3 min-w-0">
           <Link
             href={`/series/${chapter.series?.slug || ''}`}
-            className="text-neutral-400 hover:text-white transition text-xs font-bold shrink-0"
+            className="text-neutral-400 hover:text-white transition text-xs font-semibold shrink-0"
           >
             ← Back
           </Link>
           <span className="text-neutral-700">/</span>
           <div className="truncate">
-            <h1 className="text-xs font-black truncate text-neutral-200">
+            <h1 className="text-xs font-semibold truncate text-neutral-200">
               {chapter.series?.english_title || chapter.series?.title}
             </h1>
-            <p className="text-[10px] text-indigo-400 font-bold">Chapter {chapter.chapter_number}</p>
+            <p className="text-[10px] text-amber-400">Chapter {chapter.chapter_number}</p>
           </div>
         </div>
 
         <button
           onClick={() => setShowChaptersDrawer(true)}
-          className="px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700/80 rounded-xl text-xs font-bold text-neutral-200 transition"
+          className="px-3 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700/80 rounded-lg text-xs font-medium text-neutral-200 transition"
         >
           📑 Chapters
         </button>
       </header>
 
-      {/* Reading Canvas: -mt-[1px] eliminates browser sub-pixel seam gaps */}
+      {/* Reading Canvas: -mt-[1px] eliminates browser sub-pixel gap lines */}
       <main
-        className="flex-1 flex flex-col items-center w-full max-w-3xl mx-auto py-14"
+        className="flex-1 flex flex-col items-center w-full max-w-3xl mx-auto py-12"
         onClick={() => setShowUi((prev) => !prev)}
       >
         {pages.map((url, i) => (
@@ -189,19 +187,19 @@ export default function ReaderPage() {
         ))}
 
         <div className="w-full max-w-xl px-4 py-12 flex flex-col items-center gap-4 text-center">
-          <p className="text-xs text-neutral-500 font-semibold">End of Chapter {chapter.chapter_number}</p>
+          <p className="text-xs text-neutral-500">End of Chapter {chapter.chapter_number}</p>
           <div className="flex items-center gap-3 w-full justify-center">
             <button
               disabled={!prevChapter}
               onClick={() => prevChapter && router.push(`/read/${prevChapter.id}`)}
-              className="flex-1 max-w-[160px] py-2.5 bg-neutral-900 hover:bg-neutral-800 disabled:opacity-30 border border-neutral-800 rounded-xl text-xs font-bold transition"
+              className="flex-1 max-w-[150px] py-2 bg-neutral-900 hover:bg-neutral-800 disabled:opacity-30 border border-neutral-800 rounded-lg text-xs font-medium transition"
             >
               ← Previous
             </button>
             <button
               disabled={!nextChapter}
               onClick={() => nextChapter && router.push(`/read/${nextChapter.id}`)}
-              className="flex-1 max-w-[160px] py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-30 rounded-xl text-xs font-bold transition"
+              className="flex-1 max-w-[150px] py-2 bg-amber-500 hover:bg-amber-400 text-black font-semibold disabled:opacity-30 rounded-lg text-xs transition"
             >
               Next Chapter →
             </button>
@@ -209,6 +207,7 @@ export default function ReaderPage() {
         </div>
       </main>
 
+      {/* Bottom Floating Status Bar */}
       <footer
         className={`fixed bottom-0 inset-x-0 z-40 bg-[#0d0e14]/95 backdrop-blur-md border-t border-neutral-800/80 px-4 py-2.5 flex items-center justify-between transition-transform duration-300 ${
           showUi ? 'translate-y-0' : 'translate-y-full'
@@ -217,30 +216,31 @@ export default function ReaderPage() {
         <button
           disabled={!prevChapter}
           onClick={() => prevChapter && router.push(`/read/${prevChapter.id}`)}
-          className="text-xs font-bold text-neutral-400 hover:text-white disabled:opacity-30"
+          className="text-xs text-neutral-400 hover:text-white disabled:opacity-30"
         >
           ← Ch. {prevChapter?.chapter_number || ''}
         </button>
 
-        <span className="text-[11px] font-bold text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-3 py-1 rounded-full">
+        <span className="text-[11px] font-medium text-neutral-300 bg-neutral-800 px-3 py-1 rounded-full">
           Ch. {chapter.chapter_number} ({pages.length} panels)
         </span>
 
         <button
           disabled={!nextChapter}
           onClick={() => nextChapter && router.push(`/read/${nextChapter.id}`)}
-          className="text-xs font-bold text-indigo-400 hover:text-indigo-300 disabled:opacity-30"
+          className="text-xs text-amber-400 hover:text-amber-300 disabled:opacity-30"
         >
           Ch. {nextChapter?.chapter_number || ''} →
         </button>
       </footer>
 
+      {/* Chapters Drawer */}
       {showChaptersDrawer && (
         <div className="fixed inset-0 z-50 flex">
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowChaptersDrawer(false)} />
           <div className="relative ml-auto w-full max-w-xs bg-[#121319] border-l border-neutral-800 h-full flex flex-col p-4 shadow-2xl z-10">
             <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
-              <h3 className="font-bold text-xs text-white">All Chapters</h3>
+              <h3 className="font-semibold text-xs text-white">All Chapters</h3>
               <button onClick={() => setShowChaptersDrawer(false)} className="text-neutral-400 hover:text-white text-sm">✕</button>
             </div>
             <div className="flex-1 overflow-y-auto space-y-1 py-3 pr-1">
@@ -251,8 +251,8 @@ export default function ReaderPage() {
                     setShowChaptersDrawer(false);
                     router.push(`/read/${c.id}`);
                   }}
-                  className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold transition ${
-                    c.id === chapterId ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-800/60'
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition ${
+                    c.id === chapterId ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30' : 'text-neutral-300 hover:bg-neutral-800/60'
                   }`}
                 >
                   Chapter {c.chapter_number}
