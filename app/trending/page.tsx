@@ -1,4 +1,4 @@
-import CategoryCatalogPage from '../../components/CategoryCatalogPage';
+import CategoryCatalogPage from '../components/CategoryCatalogPage';
 
 export default function TrendingPage() {
   return (
