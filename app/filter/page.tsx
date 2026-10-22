@@ -4,164 +4,211 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { supabase } from '../../lib/supabase';
 
-const ALL_GENRES = [
-  'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Harem',
-  'Historical', 'Horror', 'Isekai', 'Martial Arts', 'Mecha',
-  'Mystery', 'Psychological', 'Romance', 'Sci-Fi', 'Slice of Life',
-  'Supernatural', 'Thriller', 'Cultivation', 'Reincarnation', 'System'
+const GENRES = [
+  'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror',
+  'Martial Arts', 'Mystery', 'Psychological', 'Romance', 'Sci-Fi',
+  'Slice of Life', 'Supernatural', 'Thriller', 'Historical', 'School Life',
+  'Isekai', 'Shounen', 'Shoujo', 'Seinen', 'Josei', 'Reincarnation',
+  'Monster Girls', 'Mecha', 'Tragedy', 'Magic'
 ];
 
 export default function FilterPage() {
-  const [selectedType, setSelectedType] = useState('all');
-  const [selectedGenre, setSelectedGenre] = useState('all');
-  const [selectedStatus, setSelectedStatus] = useState('all');
-  const [sortBy, setSortBy] = useState('latest');
-  const [searchTitle, setSearchTitle] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [type, setType] = useState('All');
+  const [status, setStatus] = useState('All');
+  const [selectedGenre, setSelectedGenre] = useState('All');
+  const [sort, setSort] = useState('latest');
 
   const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
 
-  useEffect(() => {
-    async function executeFilter() {
-      setLoading(true);
-      let query = supabase.from('series').select('id, slug, title, english_title, cover_image_url, reading_mode, rating, status', { count: 'exact' });
+  const fetchFiltered = async () => {
+    setLoading(true);
+    let query = supabase.from('series').select('*', { count: 'exact' });
 
-      if (selectedType === 'manga') query = query.eq('reading_mode', 'manga');
-      else if (selectedType === 'manhwa' || selectedType === 'manhua') query = query.eq('reading_mode', 'webtoon');
-
-      if (selectedStatus !== 'all') query = query.ilike('status', `%${selectedStatus}%`);
-      if (searchTitle.trim()) query = query.or(`title.ilike.%${searchTitle.trim()}%,english_title.ilike.%${searchTitle.trim()}%`);
-
-      if (sortBy === 'rating') query = query.order('rating', { ascending: false, nullsFirst: false });
-      else if (sortBy === 'popular') query = query.order('followed_count', { ascending: false, nullsFirst: false });
-      else if (sortBy === 'title') query = query.order('title', { ascending: true });
-      else query = query.order('created_at', { ascending: false });
-
-      const { data, count } = await query.limit(36);
-      setResults(data || []);
-      setTotalCount(count || 0);
-      setLoading(false);
+    if (searchTerm.trim()) {
+      query = query.or(`title.ilike.%${searchTerm.trim()}%,english_title.ilike.%${searchTerm.trim()}%`);
     }
 
-    const timer = setTimeout(executeFilter, 150);
-    return () => clearTimeout(timer);
-  }, [selectedType, selectedGenre, selectedStatus, sortBy, searchTitle]);
+    if (type !== 'All') {
+      query = query.eq('reading_mode', type === 'Manhwa' ? 'webtoon' : 'manga');
+    }
+
+    if (status !== 'All') {
+      query = query.ilike('status', `%${status}%`);
+    }
+
+    if (selectedGenre !== 'All') {
+      query = query.or(`synopsis.ilike.%${selectedGenre}%,title.ilike.%${selectedGenre}%`);
+    }
+
+    if (sort === 'latest') {
+      query = query.order('updated_at', { ascending: false });
+    } else if (sort === 'rating') {
+      query = query.order('rating', { ascending: false, nullsFirst: false });
+    } else if (sort === 'az') {
+      query = query.order('title', { ascending: true });
+    }
+
+    const { data, count } = await query.limit(36);
+    setResults(data || []);
+    setTotalCount(count || 0);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    fetchFiltered();
+  }, [type, status, selectedGenre, sort]);
+
+  const handleReset = () => {
+    setSearchTerm('');
+    setType('All');
+    setStatus('All');
+    setSelectedGenre('All');
+    setSort('latest');
+  };
 
   return (
-    <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 min-h-screen text-neutral-100">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-black text-white">Browse Catalog</h1>
-          <p className="text-xs text-neutral-400 mt-0.5">{totalCount} titles available</p>
-        </div>
+    <main className="max-w-7xl mx-auto px-4 py-8 space-y-6">
+      <div className="border-b border-neutral-800 pb-4">
+        <h1 className="text-xl font-bold text-white">Browse & Filter</h1>
+        <p className="text-xs text-neutral-400 mt-1">Explore titles using filters and genres</p>
       </div>
 
-      <div className="bg-[#12141c] border border-neutral-800/80 rounded-2xl p-4 sm:p-5 space-y-4 mb-8 shadow-xl">
-        <div className="flex flex-col sm:flex-row gap-3">
+      {/* MangaFire-Style Filter Matrix */}
+      <div className="bg-[#14161f] border border-neutral-800 rounded-xl p-4 sm:p-5 space-y-4 shadow-xl">
+        {/* Search Bar Input */}
+        <div className="flex gap-2">
           <input
             type="text"
-            placeholder="Filter by title..."
-            value={searchTitle}
-            onChange={(e) => setSearchTitle(e.target.value)}
-            className="flex-1 bg-neutral-900/90 border border-neutral-700/80 rounded-xl px-4 py-2.5 text-xs text-white placeholder-neutral-500 outline-none focus:border-indigo-500 transition"
+            placeholder="Search titles..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && fetchFiltered()}
+            className="flex-1 bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-neutral-600"
           />
+          <button
+            onClick={fetchFiltered}
+            className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white font-semibold text-xs rounded-lg transition"
+          >
+            Apply
+          </button>
         </div>
 
+        {/* Dropdown Selectors */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div>
-            <label className="text-[10px] font-bold text-neutral-400 block mb-1.5 uppercase tracking-wider">Format</label>
+            <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-1">Type</label>
             <select
-              value={selectedType}
-              onChange={(e) => setSelectedType(e.target.value)}
-              className="w-full bg-neutral-900 border border-neutral-700/80 rounded-xl px-3 py-2 text-xs text-neutral-200 outline-none focus:border-indigo-500"
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-neutral-600"
             >
-              <option value="all">All Types</option>
-              <option value="manga">Manga</option>
-              <option value="manhwa">Manhwa / Webtoon</option>
+              <option value="All">All Types</option>
+              <option value="Manhwa">Manhwa (Webtoon)</option>
+              <option value="Manga">Manga</option>
             </select>
           </div>
 
           <div>
-            <label className="text-[10px] font-bold text-neutral-400 block mb-1.5 uppercase tracking-wider">Status</label>
+            <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-1">Status</label>
             <select
-              value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
-              className="w-full bg-neutral-900 border border-neutral-700/80 rounded-xl px-3 py-2 text-xs text-neutral-200 outline-none focus:border-indigo-500"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-neutral-600"
             >
-              <option value="all">All Statuses</option>
-              <option value="releasing">Releasing</option>
-              <option value="completed">Completed</option>
+              <option value="All">All Statuses</option>
+              <option value="Releasing">Releasing / Ongoing</option>
+              <option value="Completed">Completed</option>
             </select>
           </div>
 
           <div>
-            <label className="text-[10px] font-bold text-neutral-400 block mb-1.5 uppercase tracking-wider">Genre</label>
+            <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-1">Sort By</label>
             <select
-              value={selectedGenre}
-              onChange={(e) => setSelectedGenre(e.target.value)}
-              className="w-full bg-neutral-900 border border-neutral-700/80 rounded-xl px-3 py-2 text-xs text-neutral-200 outline-none focus:border-indigo-500"
-            >
-              <option value="all">All Genres</option>
-              {ALL_GENRES.map((g) => (
-                <option key={g} value={g.toLowerCase()}>{g}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="text-[10px] font-bold text-neutral-400 block mb-1.5 uppercase tracking-wider">Sort By</label>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="w-full bg-neutral-900 border border-neutral-700/80 rounded-xl px-3 py-2 text-xs text-neutral-200 outline-none focus:border-indigo-500"
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+              className="w-full bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-neutral-600"
             >
               <option value="latest">Latest Release</option>
-              <option value="popular">Most Followed</option>
               <option value="rating">Highest Rated</option>
-              <option value="title">A - Z</option>
+              <option value="az">A to Z</option>
             </select>
+          </div>
+
+          <div className="flex items-end">
+            <button
+              onClick={handleReset}
+              className="w-full py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 font-semibold text-xs rounded-lg transition"
+            >
+              Reset Filters
+            </button>
+          </div>
+        </div>
+
+        {/* 24+ Selectable Genres */}
+        <div>
+          <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-2">Genres</label>
+          <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1">
+            <button
+              type="button"
+              onClick={() => setSelectedGenre('All')}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${selectedGenre === 'All' ? 'bg-amber-400 text-black font-semibold' : 'bg-neutral-900 text-neutral-300 hover:bg-neutral-800 border border-neutral-800'}`}
+            >
+              All
+            </button>
+            {GENRES.map((g) => (
+              <button
+                type="button"
+                key={g}
+                onClick={() => setSelectedGenre(g)}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition ${selectedGenre === g ? 'bg-amber-400 text-black font-semibold' : 'bg-neutral-900 text-neutral-300 hover:bg-neutral-800 border border-neutral-800'}`}
+              >
+                {g}
+              </button>
+            ))}
           </div>
         </div>
       </div>
 
-      {loading ? (
-        <div className="py-24 flex flex-col items-center justify-center gap-3 text-neutral-400">
-          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs">Filtering library...</p>
-        </div>
-      ) : results.length === 0 ? (
-        <div className="py-24 text-center text-xs text-neutral-500">
-          No titles matched the selected criteria.
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3.5 sm:gap-4">
-          {results.map((item) => (
-            <Link
-              key={item.id}
-              href={`/series/${item.slug}`}
-              className="group bg-[#12141c] border border-neutral-800/80 rounded-2xl overflow-hidden hover:border-indigo-500/50 transition-all flex flex-col"
-            >
-              <div className="relative aspect-[3/4.2] overflow-hidden bg-neutral-900">
-                <img
-                  src={item.cover_image_url || '/placeholder.png'}
-                  alt={item.title}
-                  loading="lazy"
-                  className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                />
-                <span className="absolute top-2 left-2 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg bg-black/70 text-indigo-300 border border-white/10 backdrop-blur-md">
-                  {item.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
-                </span>
-              </div>
-              <div className="p-3 flex-1 flex flex-col justify-between">
-                <h3 className="text-xs font-bold text-white group-hover:text-indigo-400 line-clamp-2 transition">
-                  {item.english_title || item.title}
-                </h3>
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
+      {/* Catalog Results Grid */}
+      <div className="space-y-3">
+        <p className="text-xs text-neutral-500 font-medium">{totalCount} titles found</p>
+
+        {loading ? (
+          <div className="py-20 text-center text-xs text-neutral-500">Filtering catalog...</div>
+        ) : results.length === 0 ? (
+          <div className="py-20 text-center text-xs text-neutral-500">No titles match the chosen filters.</div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3 sm:gap-4">
+            {results.map((s) => (
+              <Link
+                key={s.id}
+                href={`/series/${s.slug}`}
+                className="group block bg-[#14161f] border border-neutral-800 rounded-xl overflow-hidden hover:border-neutral-700 transition"
+              >
+                <div className="aspect-[3/4.2] overflow-hidden bg-neutral-900">
+                  <img
+                    src={s.cover_image_url || '/placeholder.png'}
+                    alt={s.title}
+                    className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                  />
+                </div>
+                <div className="p-2.5">
+                  <p className="text-xs font-semibold text-white truncate group-hover:text-amber-400 transition">
+                    {s.english_title || s.title}
+                  </p>
+                  <div className="flex items-center justify-between text-[10px] text-neutral-400 mt-1">
+                    <span className="uppercase">{s.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}</span>
+                    <span className="text-amber-400">{s.status || 'Ongoing'}</span>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
     </main>
   );
 }
