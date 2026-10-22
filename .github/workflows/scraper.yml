@@ -41,4 +41,4 @@ jobs:
           WORKER_ID: ${{ matrix.worker_id }}
           TOTAL_WORKERS: 5
           NODE_NO_WARNINGS: 1
-        run: node scripts/sync-multi-source.js
+        run: node --no-deprecation scripts/sync-multi-source.js
