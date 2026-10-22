@@ -22,7 +22,7 @@ const HEADERS = {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Concurrent task pool runner
+// Parallel execution worker pool
 async function asyncPool(poolLimit, array, iteratorFn) {
   const ret = [];
   const executing = new Set();
@@ -91,10 +91,26 @@ function slugify(text) {
     .replace(/-+$/, '');
 }
 
-// ---------------- COMICK ----------------
+// ---------------- COMICK (STRICT NOVEL FILTERING) ----------------
 async function searchComicK(title) {
-  const json = await fetchJson(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=1&type=comic`);
-  return json?.[0]?.hid || null;
+  // Pull top 5 results to separate graphic webtoons from text novels
+  const json = await fetchJson(
+    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=5&type=comic`
+  );
+  if (!Array.isArray(json) || json.length === 0) return null;
+
+  // 1. Strict match: must be graphic comic/manhwa, NOT novel
+  const comicMatch = json.find(
+    (c) =>
+      c.comic_type !== 'novel' &&
+      c.type !== 'novel' &&
+      (c.comic_types?.includes('manhwa') || c.country === 'kr' || c.country === 'jp')
+  );
+  if (comicMatch?.hid) return comicMatch.hid;
+
+  // 2. Fallback to any non-novel entry
+  const nonNovel = json.find((c) => c.comic_type !== 'novel' && c.type !== 'novel');
+  return nonNovel?.hid || json[0]?.hid || null;
 }
 
 async function getComicKChapters(hid) {
@@ -189,7 +205,7 @@ async function getMangaPillPages(chapterSlug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// ---------------- MULTI-ALIAS SEARCH & MERGE ----------------
+// ---------------- MULTI-ALIAS RESOLUTION ----------------
 async function buildAggregatedChapterMap(searchTitles) {
   const unifiedMap = new Map();
   const checkedQueries = new Set();
@@ -233,7 +249,7 @@ async function discoverNewTrendingSeries(count = 3) {
     const topComics = await fetchJson('https://api.comick.io/top?type=trending&comic_types=manhwa&accept_mature_content=true');
     if (Array.isArray(topComics)) {
       for (const item of topComics) {
-        if (!item.title) continue;
+        if (!item.title || item.comic_type === 'novel') continue;
         const slug = slugify(item.title);
 
         const { data: exists } = await supabase.from('series').select('id').eq('slug', slug).single();
@@ -306,11 +322,15 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
 
   const tasks = [];
   for (const [key, candidates] of unifiedMap.entries()) {
+    const chNum = parseFloat(key);
+    // Sanity limit: manhwa chapters never legitimately exceed 350
+    if (s.reading_mode === 'webtoon' && chNum > 350) continue;
+
     const existing = existingMap.get(key);
     if (existing && Array.isArray(existing.pages) && existing.pages.length > 0) {
       continue;
     }
-    tasks.push({ key, candidates, existing });
+    tasks.push({ key, candidates, existing, chNum });
   }
 
   if (tasks.length === 0) {
@@ -320,7 +340,7 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
 
   let addedCount = 0;
   let repairedCount = 0;
-  const insertBatch = [];
+  const upsertBatch = [];
 
   // Parallel pool fetching 5 chapters concurrently
   await asyncPool(5, tasks, async (task) => {
@@ -346,8 +366,6 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
       compressedPages = pages.map((p) => (p.startsWith(baseUrl) ? p.replace(baseUrl, '') : p));
     } catch {}
 
-    const chNum = parseFloat(task.key);
-
     if (task.existing) {
       await supabase
         .from('chapters')
@@ -355,10 +373,10 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
         .eq('id', task.existing.id);
       repairedCount++;
     } else {
-      insertBatch.push({
+      upsertBatch.push({
         series_id: s.id,
-        chapter_number: chNum,
-        title: `Chapter ${chNum}`,
+        chapter_number: task.chNum,
+        title: `Chapter ${task.chNum}`,
         base_url: baseUrl,
         pages: compressedPages,
       });
@@ -366,11 +384,14 @@ async function processSeriesSync(s, startTime, MAX_RUNTIME_MS) {
     }
   });
 
-  // Single bulk insert for all newly discovered chapters
-  if (insertBatch.length > 0) {
-    const { error: batchErr } = await supabase.from('chapters').insert(insertBatch);
+  // Conflict-safe bulk upsert: completely prevents unique constraint crashes
+  if (upsertBatch.length > 0) {
+    const { error: batchErr } = await supabase
+      .from('chapters')
+      .upsert(upsertBatch, { onConflict: 'series_id,chapter_number' });
+
     if (batchErr) {
-      console.error('Batch insert warning:', batchErr.message);
+      console.error('Batch upsert warning:', batchErr.message);
     }
   }
 
@@ -385,7 +406,7 @@ async function runWorker() {
 
   const { data: queue } = await supabase
     .from('series')
-    .select('id, title, english_title, native_title, synonyms, updated_at')
+    .select('id, title, english_title, native_title, synonyms, reading_mode, updated_at')
     .order('updated_at', { ascending: true, nullsFirst: true })
     .limit(200);
 
