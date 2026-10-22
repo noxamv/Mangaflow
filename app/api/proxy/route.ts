@@ -43,7 +43,6 @@ export async function GET(request: NextRequest) {
     return new NextResponse(`Target domain "${hostname}" not permitted`, { status: 403 });
   }
 
-  // Anti-hotlinking
   const referer = request.headers.get('referer');
   const origin = request.headers.get('origin');
   const host = request.headers.get('host') || '';
@@ -57,7 +56,6 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Proper upstream referer headers
   let upstreamReferer = 'https://mangadex.org/';
   if (hostname.includes('comick')) upstreamReferer = 'https://comick.io/';
   else if (hostname.includes('mangapill') || hostname.includes('mpcdn')) upstreamReferer = 'https://mangapill.com/';
@@ -77,7 +75,6 @@ export async function GET(request: NextRequest) {
 
     const contentType = res.headers.get('content-type') || 'image/jpeg';
 
-    // Stream body to avoid Vercel memory limits
     return new NextResponse(res.body, {
       status: 200,
       headers: {
