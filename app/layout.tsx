@@ -57,7 +57,7 @@ export default function RootLayout({
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
-  // 1. PWA Service Worker Registration
+  // 1. PWA Service Worker Registration for Install Pop-Up
   useEffect(() => {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch((err) => {
@@ -83,7 +83,7 @@ export default function RootLayout({
     };
   }, []);
 
-  // 3. Click outside handler for dropdowns
+  // 3. Dropdown Click Outside Listener
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
