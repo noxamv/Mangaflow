@@ -161,9 +161,8 @@ async function getMangaDexPages(chapterId) {
   return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
 }
 
-// ---------------- MANGAPILL ----------------
+// ---------------- MANGAPILL (VALIDATED) ----------------
 async function searchMangaPill(title) {
-  // Reject non-ASCII / Japanese kanji queries to prevent empty-search sidebar fallback
   if (!/^[\x00-\x7F]+$/.test(title)) return null;
 
   const cleanTitle = title.replace(/['’]/g, '').trim();
