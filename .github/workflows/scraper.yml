@@ -5,6 +5,16 @@ on:
     # Runs automatically every 30 minutes
     - cron: '*/30 * * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Sync Mode'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - scout-only
+          - workers-only
 
 concurrency:
   group: mangaflow-unified-pipeline
@@ -16,6 +26,7 @@ jobs:
   # ==========================================================
   scout-intel:
     name: 🛰️ Intel Scout (Recon)
+    if: ${{ github.event.inputs.mode == 'all' || github.event.inputs.mode == 'scout-only' || github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -51,8 +62,10 @@ jobs:
   # ==========================================================
   token-relay:
     name: 📥 Ingestion Worker (${{ matrix.worker_id }})
+    if: ${{ github.event.inputs.mode == 'all' || github.event.inputs.mode == 'workers-only' || github.event_name == 'schedule' }}
     needs: [scout-intel]
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
