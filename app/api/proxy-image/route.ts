@@ -1,21 +1,45 @@
+// app/api/proxy-image/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'edge';
+
+// Whitelist of legitimate upstream CDNs
+const ALLOWED_CDN_DOMAINS = [
+  'comick.pictures',
+  'meo.comick.pictures',
+  'meo2.comick.pictures',
+  'meo3.comick.pictures',
+  'mangadex.org',
+  'uploads.mangadex.org',
+  'mangapill.com',
+  'readdetectiveconan.com',
+  'mpcdn.top',
+  'mpcdn.xyz',
+  'asuracomic.net',
+  'flamecomics.xyz',
+];
+
+function isSafeOrigin(urlString: string): boolean {
+  try {
+    const url = new URL(urlString);
+    return ALLOWED_CDN_DOMAINS.some((domain) => url.hostname.endsWith(domain));
+  } catch {
+    return false;
+  }
+}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const imageUrl = searchParams.get('url');
 
-  if (!imageUrl || !imageUrl.startsWith('http')) {
-    return new NextResponse('Invalid or missing target image URL', { status: 400 });
+  if (!imageUrl || !imageUrl.startsWith('http') || !isSafeOrigin(imageUrl)) {
+    return new NextResponse('Forbidden or invalid target CDN origin', { status: 403 });
   }
 
-  let upstreamReferer = '';
-  if (imageUrl.includes('readdetectiveconan.com') || imageUrl.includes('mangapill.com')) {
+  let upstreamReferer = 'https://comick.io/';
+  if (imageUrl.includes('mangapill.com') || imageUrl.includes('readdetectiveconan.com')) {
     upstreamReferer = 'https://mangapill.com/';
-  } else if (imageUrl.includes('comick.pictures') || imageUrl.includes('comick')) {
-    upstreamReferer = 'https://comick.io/';
-  } else if (imageUrl.includes('mangadex.org') || imageUrl.includes('mangadex.network')) {
+  } else if (imageUrl.includes('mangadex.org')) {
     upstreamReferer = 'https://mangadex.org/';
   }
 
@@ -24,7 +48,7 @@ export async function GET(req: NextRequest) {
       method: 'GET',
       headers: {
         'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         'Referer': upstreamReferer,
       },
@@ -43,12 +67,13 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=604800, stale-while-revalidate=86400',
+        // Immutable Edge & Browser Caching (1 Year)
+        'Cache-Control': 'public, max-age=31536000, immutable',
         'Access-Control-Allow-Origin': '*',
       },
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown proxy error';
-    return new NextResponse(`Image Proxy Failure: ${message}`, { status: 500 });
+    return new NextResponse(`Proxy error: ${message}`, { status: 500 });
   }
 }
