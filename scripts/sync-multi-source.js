@@ -13,8 +13,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
 const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '1', 10);
 
@@ -22,7 +20,7 @@ const HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Referer': 'https://comick.io/',
+  'Referer': 'https://www.google.com/',
 };
 
 async function fetchJson(url) {
@@ -51,10 +49,10 @@ async function fetchHtml(url) {
 
 function toKey(num) {
   if (num === null || isNaN(num)) return null;
-  return Number.isInteger(num) ? String(num) : String(num);
+  return String(num);
 }
 
-// --- PROVIDER PAGE PARSERS ---
+// --- PAGE PARSERS ---
 async function getHivePages(url) {
   const html = await fetchHtml(url);
   if (!html) return null;
@@ -69,11 +67,11 @@ async function getAsuraPages(url) {
   return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
 }
 
-async function getFlamePages(url) {
+async function getMangaBatPages(url) {
   const html = await fetchHtml(url);
   if (!html) return null;
   const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
-  return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
+  return matches.map((m) => m[1]).filter((u) => !u.includes('banner') && !u.includes('logo'));
 }
 
 async function getComicKPages(hid) {
@@ -95,13 +93,6 @@ async function getMangaPillPages(slug) {
   if (!html) return null;
   const matches = [...html.matchAll(/data-src="([^"]+)"/g)];
   return matches.length ? matches.map((m) => m[1]) : null;
-}
-
-async function getMangaBatPages(url) {
-  const html = await fetchHtml(url);
-  if (!html) return null;
-  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
-  return matches.map((m) => m[1]).filter((u) => !u.includes('banner') && !u.includes('logo'));
 }
 
 // --- SYNC EXECUTOR ---
@@ -127,16 +118,14 @@ async function syncSeries(s) {
         unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', priority: 1, title: item.title });
       } else if (intel.source_platform === 'asura') {
         unifiedMap.get(key).push({ id: item.url, type: 'asura', priority: 2, title: item.title });
-      } else if (intel.source_platform === 'flame') {
-        unifiedMap.get(key).push({ id: item.url, type: 'flame', priority: 3, title: item.title });
-      } else if (intel.source_platform === 'mangadex') {
-        unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 4, title: item.title });
-      } else if (intel.source_platform === 'comick') {
-        unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 5, title: item.title });
       } else if (intel.source_platform === 'mangabat') {
-        unifiedMap.get(key).push({ id: item.url, type: 'mangabat', priority: 6, title: null });
+        unifiedMap.get(key).push({ id: item.url, type: 'mangabat', priority: 3, title: item.title });
+      } else if (intel.source_platform === 'comick') {
+        unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 4, title: item.title });
+      } else if (intel.source_platform === 'mangadex') {
+        unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 5, title: item.title });
       } else if (intel.source_platform === 'mangapill') {
-        unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 7, title: null });
+        unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 6, title: null });
       }
     }
   }
@@ -159,19 +148,14 @@ async function syncSeries(s) {
   const tasks = [];
   for (const [k, candidates] of unifiedMap.entries()) {
     const chNum = parseFloat(k);
-
-    // Filter novel spills
-    if (s.slug === 'doctor-elise' && chNum > 145) continue;
-    if (s.slug === 'a25e46ec-30f7-4db6-89df-cacbc1d9a900' && chNum > 140) continue;
-
     const existing = existingMap.get(k);
+
     const isCorrupted =
       existing &&
       (!existing.pages ||
         existing.pages.length === 0 ||
         (existing.pages[0] && existing.pages[0].includes('example.com')));
 
-    // Enqueue missing gap chapters or corrupted entries
     if (!existing || isCorrupted) {
       tasks.push({ chNum, candidates, existing: existing || null });
     }
@@ -179,7 +163,7 @@ async function syncSeries(s) {
 
   if (tasks.length === 0) return;
 
-  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Processing ${tasks.length} missing chapters...`);
+  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Ingesting ${tasks.length} missing gap chapters...`);
 
   let addedCount = 0;
   let repairedCount = 0;
@@ -204,10 +188,9 @@ async function syncSeries(s) {
       try {
         if (cand.type === 'hivetoons') pages = await getHivePages(cand.id);
         else if (cand.type === 'asura') pages = await getAsuraPages(cand.id);
-        else if (cand.type === 'flame') pages = await getFlamePages(cand.id);
-        else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
-        else if (cand.type === 'comick') pages = await getComicKPages(cand.id);
         else if (cand.type === 'mangabat') pages = await getMangaBatPages(cand.id);
+        else if (cand.type === 'comick') pages = await getComicKPages(cand.id);
+        else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
         else if (cand.type === 'mangapill') pages = await getMangaPillPages(cand.id);
 
         if (Array.isArray(pages) && pages.length > 0) {
@@ -256,13 +239,12 @@ async function syncSeries(s) {
     }
   }
 
-  console.log(`   + [${s.title}] Added: ${addedCount} | Repaired: ${repairedCount}`);
+  console.log(`   + [${s.title}] Ingested: ${addedCount} | Repaired: ${repairedCount}`);
 }
 
 async function main() {
-  console.log(`=== MangaFlow Ingestion Worker ${WORKER_ID} of ${TOTAL_WORKERS} Initialized ===`);
+  console.log(`=== Ingestion Worker ${WORKER_ID} of ${TOTAL_WORKERS} Initialized ===`);
 
-  // Pull series with scouted intel available, prioritizing titles with the highest missing gaps
   const { data: prioritizedSeries, error } = await supabase
     .from('series')
     .select('id, title, slug')
