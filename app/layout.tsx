@@ -20,20 +20,10 @@ interface NotificationItem {
   id: string;
   title: string;
   message: string;
-  series_title?: string;
   cover_url?: string;
-  chapter_id?: string;
   read: boolean;
   created_at: string;
 }
-
-const GENRE_LIST = [
-  'Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy',
-  'Horror', 'Isekai', 'Martial Arts', 'Mecha', 'Mystery',
-  'Psychological', 'Romance', 'Sci-Fi', 'Slice of Life', 'Sports',
-  'Supernatural', 'Thriller', 'Tragedy', 'Historical', 'School Life',
-  'Shounen', 'Shoujo', 'Seinen', 'Josei'
-];
 
 export default function RootLayout({
   children,
@@ -46,28 +36,55 @@ export default function RootLayout({
   // Navigation & UI States
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [genresDropdownOpen, setGenresDropdownOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifTab, setNotifTab] = useState<'all' | 'unread' | 'read'>('all');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  // PWA Install Prompt State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
-  // 1. PWA Service Worker Registration for Install Pop-Up
+  // 1. PWA Service Worker Registration & Install Event Listener
   useEffect(() => {
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch((err) => {
         console.error('ServiceWorker registration error:', err);
       });
     }
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBanner(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
   }, []);
+
+  const triggerPwaInstall = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowInstallBanner(false);
+    }
+    setDeferredPrompt(null);
+  };
 
   // 2. Supabase Auth State Listener
   useEffect(() => {
@@ -86,17 +103,17 @@ export default function RootLayout({
     };
   }, []);
 
-  // 3. Dropdown Click Outside Listener
+  // 3. Dropdown & Search Outside Click Listener
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setGenresDropdownOpen(false);
-      }
       if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
         setUserMenuOpen(false);
       }
       if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
         setNotifOpen(false);
+      }
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
+        setSearchOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -116,16 +133,23 @@ export default function RootLayout({
       const cleanTerm = searchQuery.trim().replace(/['"]/g, '');
       const { data } = await supabase
         .from('series')
-        .select('id, title, english_title, slug, cover_url, reading_mode')
+        .select('id, title, english_title, slug, cover_image_url, cover_url, reading_mode')
         .or(`title.ilike.%${cleanTerm}%,english_title.ilike.%${cleanTerm}%`)
-        .limit(8);
+        .limit(6);
 
       setSearchResults(data || []);
       setIsSearching(false);
-    }, 250);
+    }, 200);
 
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  // Focus search input when toggled open
+  useEffect(() => {
+    if (searchOpen) {
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    }
+  }, [searchOpen]);
 
   // 5. Global Hotkeys
   useEffect(() => {
@@ -136,8 +160,8 @@ export default function RootLayout({
       }
       if (e.key === 'Escape') {
         setSearchOpen(false);
+        setDrawerOpen(false);
         setNotifOpen(false);
-        setGenresDropdownOpen(false);
         setUserMenuOpen(false);
         setAuthModalOpen(false);
       }
@@ -174,126 +198,109 @@ export default function RootLayout({
         <meta name="description" content="Read trending and popular manga, manhwa, and manhua with instant high-speed chapters." />
         <meta name="referrer" content="no-referrer" />
         <link rel="manifest" href="/manifest.json" />
-        <meta name="theme-color" content="#090a0d" />
+        <meta name="theme-color" content="#0e1015" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </head>
 
-      <body className="bg-[#090a0d] text-neutral-200 antialiased min-h-screen w-full max-w-full overflow-x-hidden flex flex-col selection:bg-amber-500/20 selection:text-amber-300">
+      <body className="bg-[#0e1015] text-neutral-200 antialiased min-h-screen w-full max-w-full overflow-x-hidden flex flex-col selection:bg-indigo-500/20 selection:text-indigo-300">
         
-        {/* TOP NAVIGATION BAR */}
-        <header className="sticky top-0 z-40 bg-[#090a0d]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 lg:px-8 py-3 transition-colors">
-          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-            
-            <div className="flex items-center gap-6">
-              <Link href="/" className="flex items-center gap-2 group">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-black font-black text-lg tracking-tighter shadow-lg shadow-amber-500/20 group-hover:scale-105 transition-transform">
-                  M
-                </div>
-                <span className="font-extrabold text-base tracking-tight text-white group-hover:text-amber-400 transition-colors">
-                  Manga<span className="text-amber-400">Flow</span>
-                </span>
-              </Link>
-
-              <nav className="hidden md:flex items-center gap-1.5 text-xs font-semibold text-neutral-400">
-                <Link
-                  href="/trending"
-                  className={`px-3 py-1.5 rounded-lg transition ${
-                    pathname === '/trending' ? 'text-amber-400 bg-neutral-900' : 'hover:text-white hover:bg-neutral-900/60'
-                  }`}
-                >
-                  Trending
-                </Link>
-                <Link
-                  href="/popular"
-                  className={`px-3 py-1.5 rounded-lg transition ${
-                    pathname === '/popular' ? 'text-amber-400 bg-neutral-900' : 'hover:text-white hover:bg-neutral-900/60'
-                  }`}
-                >
-                  Popular
-                </Link>
-                <Link
-                  href="/latest"
-                  className={`px-3 py-1.5 rounded-lg transition ${
-                    pathname === '/latest' ? 'text-amber-400 bg-neutral-900' : 'hover:text-white hover:bg-neutral-900/60'
-                  }`}
-                >
-                  Latest
-                </Link>
-
-                <div className="relative" ref={dropdownRef}>
-                  <button
-                    onClick={() => setGenresDropdownOpen(!genresDropdownOpen)}
-                    className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1 ${
-                      genresDropdownOpen || pathname.startsWith('/filter')
-                        ? 'text-amber-400 bg-neutral-900'
-                        : 'hover:text-white hover:bg-neutral-900/60'
-                    }`}
-                  >
-                    <span>Browse</span>
-                    <span className="text-[10px]">{genresDropdownOpen ? '▲' : '▼'}</span>
-                  </button>
-
-                  {genresDropdownOpen && (
-                    <div className="absolute top-full left-0 mt-2 w-72 p-3 bg-[#0d0e14] border border-neutral-800 rounded-xl shadow-2xl z-50 grid grid-cols-2 gap-1 animate-in fade-in zoom-in-95 duration-100">
-                      <Link
-                        href="/filter"
-                        onClick={() => setGenresDropdownOpen(false)}
-                        className="col-span-2 text-center py-1.5 mb-1 text-[11px] font-bold text-amber-400 bg-amber-400/10 rounded-lg hover:bg-amber-400/20 border border-amber-400/20"
-                      >
-                        All Filters & Genres (24+)
-                      </Link>
-                      {GENRE_LIST.map((genre) => (
-                        <Link
-                          key={genre}
-                          href={`/filter?genre=${encodeURIComponent(genre.toLowerCase())}`}
-                          onClick={() => setGenresDropdownOpen(false)}
-                          className="px-2.5 py-1.5 text-[11px] text-neutral-300 hover:text-white hover:bg-neutral-800/80 rounded-md transition truncate"
-                        >
-                          {genre}
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </nav>
+        {/* PWA INSTALL BANNER */}
+        {showInstallBanner && (
+          <div className="bg-indigo-600/95 text-white px-4 py-2 text-xs flex items-center justify-between z-50 sticky top-0 shadow-md">
+            <div className="flex items-center gap-2">
+              <span className="text-sm">📱</span>
+              <span className="font-semibold">Install MangaFlow App for fullscreen reading</span>
             </div>
-
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => setSearchOpen(true)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800/90 border border-neutral-800 text-neutral-400 text-xs transition"
+                onClick={triggerPwaInstall}
+                className="bg-white text-indigo-600 font-bold px-3 py-1 rounded-md text-[11px] shadow hover:bg-neutral-100 transition"
               >
-                <span>🔍</span>
-                <span className="hidden sm:inline">Search manga...</span>
-                <kbd className="hidden lg:inline-block ml-2 text-[10px] bg-neutral-800 text-neutral-400 px-1.5 py-0.5 rounded border border-neutral-700">
-                  ⌘K
-                </kbd>
+                Install
+              </button>
+              <button
+                onClick={() => setShowInstallBanner(false)}
+                className="text-white/80 hover:text-white text-sm px-1"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* MANGAFIRE HEADER BAR */}
+        <header className="sticky top-0 z-40 bg-[#0e1015]/95 backdrop-blur-md border-b border-neutral-800/80 px-3 sm:px-6 py-2.5 transition-colors">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            
+            {/* Left: Hamburger Drawer Trigger & Text-Only Logo */}
+            <div className="flex items-center gap-3 sm:gap-4">
+              <button
+                onClick={() => setDrawerOpen(true)}
+                className="p-1.5 text-neutral-400 hover:text-white transition rounded-lg hover:bg-neutral-800/60"
+                aria-label="Open Navigation Drawer"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
               </button>
 
+              <Link href="/" className="flex items-center">
+                <span className="text-xl sm:text-2xl font-black tracking-tight text-white">
+                  Manga<span className="text-indigo-500">Flow</span>
+                </span>
+              </Link>
+            </div>
+
+            {/* Right: Floating Search Icon, Notifications, Profile / Sign In */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              
+              {/* Floating Search Toggle Button */}
+              <button
+                onClick={() => setSearchOpen(!searchOpen)}
+                className={`p-2 rounded-xl transition ${
+                  searchOpen ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:text-white hover:bg-neutral-800/80'
+                }`}
+                aria-label="Toggle Search"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </button>
+
+              {/* Notification Center Popup */}
               <div className="relative" ref={notifRef}>
                 <button
                   onClick={() => setNotifOpen(!notifOpen)}
-                  className="p-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 hover:text-white transition relative"
+                  className="p-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 transition relative"
                   aria-label="Notifications"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
                   </svg>
                   {unreadCount > 0 && (
-                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-[#090a0d]" />
+                    <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-indigo-500 ring-2 ring-[#0e1015]" />
                   )}
                 </button>
 
                 {notifOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-[#0d0e14] border border-neutral-800 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col">
-                    <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
+                  <div className="absolute right-0 sm:right-auto sm:left-auto top-full mt-2 w-80 max-w-[90vw] bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col">
+                    <div className="p-3 border-b border-neutral-800/80 flex items-center justify-between">
                       <span className="text-xs font-bold text-white">Notifications</span>
-                      <button
-                        onClick={markAllNotificationsAsRead}
-                        className="text-[10px] text-neutral-400 hover:text-neutral-200 transition"
-                      >
-                        Mark all read
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={markAllNotificationsAsRead}
+                          className="text-[10px] text-neutral-400 hover:text-neutral-200 transition"
+                        >
+                          Mark all read
+                        </button>
+                        <Link
+                          href="/notifications"
+                          onClick={() => setNotifOpen(false)}
+                          className="text-[10px] text-indigo-400 hover:underline font-semibold"
+                        >
+                          Full page →
+                        </Link>
+                      </div>
                     </div>
 
                     <div className="flex border-b border-neutral-800 text-[11px] font-semibold bg-neutral-950/60">
@@ -303,7 +310,7 @@ export default function RootLayout({
                           onClick={() => setNotifTab(tab)}
                           className={`flex-1 py-1.5 capitalize transition ${
                             notifTab === tab
-                              ? 'text-amber-400 border-b-2 border-amber-400 bg-neutral-900/60'
+                              ? 'text-indigo-400 border-b-2 border-indigo-400 bg-neutral-900/60'
                               : 'text-neutral-400 hover:text-neutral-200'
                           }`}
                         >
@@ -312,17 +319,17 @@ export default function RootLayout({
                       ))}
                     </div>
 
-                    <div className="max-h-80 overflow-y-auto divide-y divide-neutral-800/60 scrollbar-thin">
+                    <div className="max-h-72 overflow-y-auto divide-y divide-neutral-800/60">
                       {filteredNotifications.length === 0 ? (
                         <div className="py-8 text-center text-xs text-neutral-500">
-                          No notifications.
+                          No {notifTab !== 'all' ? notifTab : ''} notifications.
                         </div>
                       ) : (
                         filteredNotifications.map((n) => (
                           <div
                             key={n.id}
                             className={`p-3 flex items-start gap-3 transition ${
-                              !n.read ? 'bg-amber-500/5' : 'hover:bg-neutral-900/40'
+                              !n.read ? 'bg-indigo-500/10' : 'hover:bg-neutral-900/40'
                             }`}
                           >
                             <div className="flex-1 min-w-0">
@@ -337,66 +344,77 @@ export default function RootLayout({
                 )}
               </div>
 
+              {/* User Avatar Menu or Sign In */}
               {user ? (
                 <div className="relative" ref={userMenuRef}>
                   <button
                     onClick={() => setUserMenuOpen(!userMenuOpen)}
-                    className="w-8 h-8 rounded-full bg-neutral-800 border border-neutral-700 hover:border-amber-400/80 transition flex items-center justify-center overflow-hidden focus:outline-none"
+                    className="w-8 h-8 rounded-full bg-indigo-600 border border-indigo-400 text-white font-black text-xs flex items-center justify-center hover:opacity-90 transition shadow-sm"
                     aria-label="User Menu"
                   >
-                    <svg className="w-4 h-4 text-neutral-300" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-                    </svg>
+                    {user.email ? user.email.charAt(0).toUpperCase() : 'U'}
                   </button>
 
                   {userMenuOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-52 p-1.5 bg-[#0d0e14] border border-neutral-800 rounded-xl shadow-2xl z-50 text-xs">
-                      <div className="px-3 py-2 border-b border-neutral-800/80 mb-1">
-                        <p className="text-[11px] text-neutral-400">Signed in as</p>
-                        <p className="font-semibold text-white truncate">{user.email}</p>
+                    <div className="absolute right-0 top-full mt-2 w-56 p-1.5 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 text-xs divide-y divide-neutral-800/80">
+                      <div className="px-3 py-2">
+                        <p className="text-[10px] text-neutral-400">Signed in as</p>
+                        <p className="font-bold text-white truncate">{user.email}</p>
                       </div>
-                      <Link
-                        href="/profile"
-                        onClick={() => setUserMenuOpen(false)}
-                        className="w-full text-left px-3 py-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 flex items-center gap-2"
-                      >
-                        Profile
-                      </Link>
-                      <Link
-                        href="/profile/following"
-                        onClick={() => setUserMenuOpen(false)}
-                        className="w-full text-left px-3 py-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 flex items-center gap-2"
-                      >
-                        Following List
-                      </Link>
-                      <Link
-                        href="/profile/import-export"
-                        onClick={() => setUserMenuOpen(false)}
-                        className="w-full text-left px-3 py-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 flex items-center gap-2"
-                      >
-                        Import / Export
-                      </Link>
-                      <Link
-                        href="/settings"
-                        onClick={() => setUserMenuOpen(false)}
-                        className="w-full text-left px-3 py-1.5 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800 flex items-center gap-2"
-                      >
-                        Settings
-                      </Link>
-                      <div className="border-t border-neutral-800/80 my-1" />
-                      <button
-                        onClick={handleSignOut}
-                        className="w-full text-left px-3 py-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition"
-                      >
-                        Sign Out
-                      </button>
+
+                      <div className="py-1">
+                        <Link
+                          href="/profile/edit"
+                          onClick={() => setUserMenuOpen(false)}
+                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
+                        >
+                          <span>👤</span> Profile Edit
+                        </Link>
+                        <Link
+                          href="/profile/following"
+                          onClick={() => setUserMenuOpen(false)}
+                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
+                        >
+                          <span>📚</span> Library Tracker
+                        </Link>
+                        <Link
+                          href="/notifications"
+                          onClick={() => setUserMenuOpen(false)}
+                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
+                        >
+                          <span>🔔</span> Notifications
+                        </Link>
+                        <Link
+                          href="/profile/import-export"
+                          onClick={() => setUserMenuOpen(false)}
+                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
+                        >
+                          <span>🔄</span> Import / Export
+                        </Link>
+                        <Link
+                          href="/settings"
+                          onClick={() => setUserMenuOpen(false)}
+                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
+                        >
+                          <span>⚙️</span> Settings
+                        </Link>
+                      </div>
+
+                      <div className="pt-1">
+                        <button
+                          onClick={handleSignOut}
+                          className="w-full text-left px-3 py-2 rounded-lg text-red-400 hover:bg-red-500/10 flex items-center gap-2 transition font-semibold"
+                        >
+                          <span>🚪</span> Sign Out
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
               ) : (
                 <button
                   onClick={() => setAuthModalOpen(true)}
-                  className="px-3.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-black font-extrabold text-xs transition shadow-sm"
+                  className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition shadow-md"
                 >
                   Sign In
                 </button>
@@ -404,54 +422,156 @@ export default function RootLayout({
 
             </div>
           </div>
-        </header>
 
-        {/* SEARCH OVERLAY MODAL */}
-        {searchOpen && (
-          <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4">
-            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSearchOpen(false)} />
-            <div className="relative w-full max-w-xl bg-[#0d0e14] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden z-10 flex flex-col">
-              <div className="p-3 border-b border-neutral-800 flex items-center gap-2.5">
-                <span className="text-neutral-400 text-sm">🔍</span>
+          {/* MANGAFIRE FLOATING SEARCH PILL */}
+          {searchOpen && (
+            <div
+              ref={searchContainerRef}
+              className="max-w-2xl mx-auto mt-2 pt-1 transition-all duration-200"
+            >
+              <div className="relative flex items-center bg-[#13151f] border border-neutral-700/80 rounded-2xl px-3 py-2 shadow-2xl">
+                <span className="text-neutral-400 text-sm mr-2">🔍</span>
                 <input
+                  ref={searchInputRef}
                   type="text"
-                  placeholder="Search series title, alternative name, or author..."
+                  placeholder="Search manga, manhwa, titles..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  autoFocus
-                  className="w-full bg-transparent text-sm text-white placeholder-neutral-500 focus:outline-none"
+                  className="w-full bg-transparent text-xs sm:text-sm text-white placeholder-neutral-500 focus:outline-none"
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="text-neutral-400 hover:text-white text-xs mr-2"
+                  >
+                    ✕
+                  </button>
+                )}
                 <button
                   onClick={() => setSearchOpen(false)}
-                  className="text-neutral-400 hover:text-white text-xs px-2 py-1 rounded bg-neutral-900 border border-neutral-800"
+                  className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 hover:text-white bg-neutral-800 px-2 py-1 rounded-md"
                 >
-                  ESC
+                  Esc
                 </button>
               </div>
 
-              <div className="max-h-96 overflow-y-auto divide-y divide-neutral-800/50 p-2">
-                {isSearching ? (
-                  <div className="py-8 text-center text-xs text-neutral-500">Searching catalog...</div>
-                ) : searchResults.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-neutral-500">
-                    {searchQuery.trim() ? 'No series found matching query.' : 'Type to search across indexed titles.'}
-                  </div>
-                ) : (
-                  searchResults.map((s) => (
+              {/* Floating Live Search Dropdown */}
+              {(isSearching || searchResults.length > 0 || searchQuery.trim()) && (
+                <div className="mt-1 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden divide-y divide-neutral-800/60 z-50">
+                  {isSearching ? (
+                    <div className="py-4 text-center text-xs text-neutral-400">Searching...</div>
+                  ) : searchResults.length === 0 ? (
+                    <div className="py-4 text-center text-xs text-neutral-400">No results found</div>
+                  ) : (
+                    searchResults.map((s) => {
+                      const cover = s.cover_image_url || s.cover_url || '';
+                      return (
+                        <Link
+                          key={s.id}
+                          href={`/series/${s.slug}`}
+                          onClick={() => setSearchOpen(false)}
+                          className="p-2.5 hover:bg-neutral-800/60 flex items-center gap-3 transition"
+                        >
+                          {cover ? (
+                            <img
+                              src={cover}
+                              alt=""
+                              className="w-9 h-12 object-cover rounded bg-neutral-900 shrink-0"
+                            />
+                          ) : (
+                            <div className="w-9 h-12 rounded bg-neutral-900 flex items-center justify-center text-xs text-neutral-600 shrink-0">
+                              📖
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-bold text-white truncate hover:text-indigo-400">
+                              {s.english_title || s.title}
+                            </p>
+                            <span className="text-[10px] uppercase font-bold text-neutral-500 mt-0.5 inline-block">
+                              {s.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
+                            </span>
+                          </div>
+                        </Link>
+                      );
+                    })
+                  )}
+
+                  {searchResults.length > 0 && (
                     <Link
-                      key={s.id}
-                      href={`/series/${s.slug}`}
+                      href={`/filter?q=${encodeURIComponent(searchQuery)}`}
                       onClick={() => setSearchOpen(false)}
-                      className="p-2.5 rounded-xl hover:bg-neutral-900 flex items-center gap-3 transition group"
+                      className="block text-center py-2 text-xs font-bold text-indigo-400 hover:bg-neutral-800/80 transition"
                     >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-white group-hover:text-amber-400 transition truncate">
-                          {s.english_title || s.title}
-                        </p>
-                      </div>
+                      View all results →
                     </Link>
-                  ))
-                )}
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </header>
+
+        {/* MANGAFIRE OFF-CANVAS HAMBURGER DRAWER */}
+        {drawerOpen && (
+          <div className="fixed inset-0 z-50 flex">
+            <div
+              className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
+              onClick={() => setDrawerOpen(false)}
+            />
+            <div className="relative w-72 max-w-[85vw] bg-[#0e1015] border-r border-neutral-800 h-full p-5 flex flex-col z-10 shadow-2xl">
+              <div className="flex items-center justify-between pb-4 border-b border-neutral-800">
+                <span className="text-lg font-black text-white">
+                  Manga<span className="text-indigo-500">Flow</span>
+                </span>
+                <button
+                  onClick={() => setDrawerOpen(false)}
+                  className="p-1 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <nav className="py-4 space-y-1.5 flex-1">
+                <Link
+                  href="/trending"
+                  onClick={() => setDrawerOpen(false)}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
+                    pathname === '/trending' ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-800'
+                  }`}
+                >
+                  <span>🔥</span> Trending Series
+                </Link>
+                <Link
+                  href="/popular"
+                  onClick={() => setDrawerOpen(false)}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
+                    pathname === '/popular' ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-800'
+                  }`}
+                >
+                  <span>⭐</span> Popular Series
+                </Link>
+                <Link
+                  href="/filter"
+                  onClick={() => setDrawerOpen(false)}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
+                    pathname.startsWith('/filter') ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-800'
+                  }`}
+                >
+                  <span>🏷️</span> Filter Series (24+ Genres)
+                </Link>
+                <Link
+                  href="/latest"
+                  onClick={() => setDrawerOpen(false)}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
+                    pathname === '/latest' ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-800'
+                  }`}
+                >
+                  <span>⚡</span> Latest Releases
+                </Link>
+              </nav>
+
+              <div className="pt-4 border-t border-neutral-800 text-xs text-neutral-500">
+                <span>MangaFlow Platform Engine</span>
               </div>
             </div>
           </div>
@@ -473,7 +593,7 @@ export default function RootLayout({
               <span>— Graphic Comic Platform Engine</span>
             </div>
             <div className="flex items-center gap-6">
-              <Link href="/filter" className="hover:text-neutral-300 transition">Catalog Directory</Link>
+              <Link href="/filter" className="hover:text-neutral-300 transition">Filter Directory</Link>
               <Link href="/trending" className="hover:text-neutral-300 transition">Trending</Link>
               <Link href="/popular" className="hover:text-neutral-300 transition">Popular</Link>
               <Link href="/latest" className="hover:text-neutral-300 transition">Latest</Link>
