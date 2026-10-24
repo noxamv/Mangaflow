@@ -54,7 +54,7 @@ function toKey(num) {
   return Number.isInteger(num) ? String(num) : String(num);
 }
 
-// ---------------- PAGE SCRAPERS ACROSS ALL PLATFORMS ----------------
+// --- PROVIDER PAGE PARSERS ---
 async function getHivePages(url) {
   const html = await fetchHtml(url);
   if (!html) return null;
@@ -97,54 +97,51 @@ async function getMangaPillPages(slug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// ---------------- PROCESS SERIES DIRECTLY VIA SCOUTED INTEL ----------------
+async function getMangaBatPages(url) {
+  const html = await fetchHtml(url);
+  if (!html) return null;
+  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
+  return matches.map((m) => m[1]).filter((u) => !u.includes('banner') && !u.includes('logo'));
+}
+
+// --- SYNC EXECUTOR ---
 async function syncSeries(s) {
-  await supabase
-    .from('series')
-    .update({ updated_at: new Date().toISOString() })
-    .eq('id', s.id);
-
-  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Reading verified multi-source intel...`);
-
   const { data: intelRows } = await supabase
     .from('series_intel')
     .select('*')
     .eq('series_id', s.id)
     .order('latest_known_chapter', { ascending: false });
 
+  if (!intelRows || intelRows.length === 0) return;
+
   const unifiedMap = new Map();
 
-  if (intelRows && intelRows.length > 0) {
-    for (const intel of intelRows) {
-      for (const item of intel.verified_chapters || []) {
-        const key = toKey(item.chNum);
-        if (!key) continue;
+  for (const intel of intelRows) {
+    for (const item of intel.verified_chapters || []) {
+      const key = toKey(item.chNum);
+      if (!key) continue;
 
-        if (!unifiedMap.has(key)) unifiedMap.set(key, []);
+      if (!unifiedMap.has(key)) unifiedMap.set(key, []);
 
-        if (intel.source_platform === 'hivetoons') {
-          unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', priority: 1, title: item.title });
-        } else if (intel.source_platform === 'asura') {
-          unifiedMap.get(key).push({ id: item.url, type: 'asura', priority: 2, title: item.title });
-        } else if (intel.source_platform === 'flame') {
-          unifiedMap.get(key).push({ id: item.url, type: 'flame', priority: 3, title: item.title });
-        } else if (intel.source_platform === 'mangadex') {
-          unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 4, title: item.title });
-        } else if (intel.source_platform === 'comick') {
-          unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 5, title: item.title });
-        } else if (intel.source_platform === 'mangapill') {
-          unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 6, title: null });
-        }
+      if (intel.source_platform === 'hivetoons') {
+        unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', priority: 1, title: item.title });
+      } else if (intel.source_platform === 'asura') {
+        unifiedMap.get(key).push({ id: item.url, type: 'asura', priority: 2, title: item.title });
+      } else if (intel.source_platform === 'flame') {
+        unifiedMap.get(key).push({ id: item.url, type: 'flame', priority: 3, title: item.title });
+      } else if (intel.source_platform === 'mangadex') {
+        unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 4, title: item.title });
+      } else if (intel.source_platform === 'comick') {
+        unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 5, title: item.title });
+      } else if (intel.source_platform === 'mangabat') {
+        unifiedMap.get(key).push({ id: item.url, type: 'mangabat', priority: 6, title: null });
+      } else if (intel.source_platform === 'mangapill') {
+        unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 7, title: null });
       }
     }
   }
 
-  if (unifiedMap.size === 0) {
-    console.log('   No scouted intel found for this title yet. Waiting for scout run.');
-    return;
-  }
-
-  for (const [key, candidates] of unifiedMap.entries()) {
+  for (const [, candidates] of unifiedMap.entries()) {
     candidates.sort((a, b) => a.priority - b.priority);
   }
 
@@ -163,7 +160,7 @@ async function syncSeries(s) {
   for (const [k, candidates] of unifiedMap.entries()) {
     const chNum = parseFloat(k);
 
-    // Filter out novel spillages
+    // Filter novel spills
     if (s.slug === 'doctor-elise' && chNum > 145) continue;
     if (s.slug === 'a25e46ec-30f7-4db6-89df-cacbc1d9a900' && chNum > 140) continue;
 
@@ -174,17 +171,15 @@ async function syncSeries(s) {
         existing.pages.length === 0 ||
         (existing.pages[0] && existing.pages[0].includes('example.com')));
 
+    // Enqueue missing gap chapters or corrupted entries
     if (!existing || isCorrupted) {
       tasks.push({ chNum, candidates, existing: existing || null });
     }
   }
 
-  if (tasks.length === 0) {
-    console.log(`   All ${existingChapters?.length || 0} chapters already intact.`);
-    return;
-  }
+  if (tasks.length === 0) return;
 
-  console.log(`   Ingesting / Repairing ${tasks.length} chapters across verified sources...`);
+  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Processing ${tasks.length} missing chapters...`);
 
   let addedCount = 0;
   let repairedCount = 0;
@@ -212,6 +207,7 @@ async function syncSeries(s) {
         else if (cand.type === 'flame') pages = await getFlamePages(cand.id);
         else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
         else if (cand.type === 'comick') pages = await getComicKPages(cand.id);
+        else if (cand.type === 'mangabat') pages = await getMangaBatPages(cand.id);
         else if (cand.type === 'mangapill') pages = await getMangaPillPages(cand.id);
 
         if (Array.isArray(pages) && pages.length > 0) {
@@ -260,24 +256,24 @@ async function syncSeries(s) {
     }
   }
 
-  console.log(`   + Added: ${addedCount} | Repaired: ${repairedCount}`);
+  console.log(`   + [${s.title}] Added: ${addedCount} | Repaired: ${repairedCount}`);
 }
 
 async function main() {
-  console.log(`=== MangaFlow Worker ${WORKER_ID} of ${TOTAL_WORKERS} Online ===`);
+  console.log(`=== MangaFlow Ingestion Worker ${WORKER_ID} of ${TOTAL_WORKERS} Initialized ===`);
 
-  const { data: allSeries, error } = await supabase
+  // Pull series with scouted intel available, prioritizing titles with the highest missing gaps
+  const { data: prioritizedSeries, error } = await supabase
     .from('series')
     .select('id, title, slug')
-    .order('created_at', { ascending: true });
+    .order('updated_at', { ascending: false });
 
-  if (error || !allSeries) {
+  if (error || !prioritizedSeries) {
     console.error('Failed to query series:', error);
     process.exit(1);
   }
 
-  const mySeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
-  console.log(`Worker ${WORKER_ID} assigned ${mySeries.length} of ${allSeries.length} series.`);
+  const mySeries = prioritizedSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
 
   for (const s of mySeries) {
     try {
@@ -287,7 +283,7 @@ async function main() {
     }
   }
 
-  console.log(`=== Worker ${WORKER_ID} Completed Successfully ===`);
+  console.log(`=== Worker ${WORKER_ID} Cycle Complete ===`);
 }
 
 main().catch(console.error);
