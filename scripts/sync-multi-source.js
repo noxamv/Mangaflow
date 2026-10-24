@@ -1,3 +1,4 @@
+// scripts/sync-multi-source.js
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -8,7 +9,10 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+});
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
@@ -16,13 +20,17 @@ const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '1', 10);
 
 const HEADERS = {
   'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Referer': 'https://comick.io/',
 };
 
 async function fetchJson(url) {
   try {
-    const res = await fetch(url, { headers: HEADERS });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
+    clearTimeout(timeout);
     return res.ok ? await res.json() : null;
   } catch {
     return null;
@@ -31,7 +39,10 @@ async function fetchJson(url) {
 
 async function fetchHtml(url) {
   try {
-    const res = await fetch(url, { headers: HEADERS });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
+    clearTimeout(timeout);
     return res.ok ? await res.text() : null;
   } catch {
     return null;
@@ -43,28 +54,7 @@ function toKey(num) {
   return Number.isInteger(num) ? String(num) : String(num);
 }
 
-// ---------------- PAGE SCRAPERS FOR THE 7 PLATFORMS ----------------
-async function getHivePages(url) {
-  const html = await fetchHtml(url);
-  if (!html) return null;
-  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
-  return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
-}
-
-async function getAsuraPages(url) {
-  const html = await fetchHtml(url);
-  if (!html) return null;
-  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
-  return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
-}
-
-async function getFlamePages(url) {
-  const html = await fetchHtml(url);
-  if (!html) return null;
-  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
-  return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
-}
-
+// ---------------- PROVIDER PAGE EXTRACTORS ----------------
 async function getComicKPages(hid) {
   const json = await fetchJson(`https://api.comick.io/chapter/${hid}`);
   if (!json?.chapter?.images?.length) return null;
@@ -86,13 +76,10 @@ async function getMangaPillPages(slug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// ---------------- PROCESS SERIES DIRECTLY VIA SCOUTED INTEL ----------------
+// ---------------- SERIES SYNC EXECUTOR ----------------
 async function syncSeries(s) {
-  await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
+  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Processing verified intel...`);
 
-  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Reading verified multi-source intel...`);
-
-  // Pull all sources discovered for this series, ordered by chapter depth
   const { data: intelRows } = await supabase
     .from('series_intel')
     .select('*')
@@ -109,25 +96,19 @@ async function syncSeries(s) {
 
         if (!unifiedMap.has(key)) unifiedMap.set(key, []);
 
-        if (intel.source_platform === 'hivetoons') {
-          unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', priority: 1 });
-        } else if (intel.source_platform === 'asura') {
-          unifiedMap.get(key).push({ id: item.url, type: 'asura', priority: 2 });
-        } else if (intel.source_platform === 'flame') {
-          unifiedMap.get(key).push({ id: item.url, type: 'flame', priority: 3 });
-        } else if (intel.source_platform === 'mangadex') {
-          unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 4 });
+        if (intel.source_platform === 'mangadex') {
+          unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 1, title: item.title });
         } else if (intel.source_platform === 'comick') {
-          unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 5 });
+          unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 2, title: item.title });
         } else if (intel.source_platform === 'mangapill') {
-          unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 6 });
+          unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 3, title: null });
         }
       }
     }
   }
 
   if (unifiedMap.size === 0) {
-    console.log('   No scouted intel found for this title yet. Waiting for scout run.');
+    console.log('   No scouted intel found for this title. Passing to next worker.');
     return;
   }
 
@@ -153,7 +134,7 @@ async function syncSeries(s) {
 
     // Filter out novel spills
     if (s.slug === 'doctor-elise' && chNum > 145) continue;
-    if (s.slug === 'a25e46ec-30f7-4db6-89df-cacbc1d9a900' && chNum > 140) continue; // Horimiya
+    if (s.slug === 'a25e46ec-30f7-4db6-89df-cacbc1d9a900' && chNum > 140) continue;
 
     const existing = existingMap.get(k);
     const isCorrupted =
@@ -172,41 +153,32 @@ async function syncSeries(s) {
     return;
   }
 
-  console.log(`   Ingesting / Repairing ${tasks.length} chapters across 7 sources...`);
+  console.log(`   Ingesting / Repairing ${tasks.length} missing chapters...`);
 
   let addedCount = 0;
   let repairedCount = 0;
   const upsertBatch = [];
 
-  const runWithConcurrency = async (items, concurrency, fn) => {
-    let index = 0;
-    const workers = new Array(concurrency).fill(null).map(async () => {
-      while (index < items.length) {
-        const cur = items[index++];
-        await fn(cur);
-      }
-    });
-    await Promise.all(workers);
-  };
-
-  await runWithConcurrency(tasks, 3, async (task) => {
+  for (const task of tasks) {
     let pages = null;
+    let chapterTitle = null;
+
     for (const cand of task.candidates) {
       try {
-        if (cand.type === 'hivetoons') pages = await getHivePages(cand.id);
-        else if (cand.type === 'asura') pages = await getAsuraPages(cand.id);
-        else if (cand.type === 'flame') pages = await getFlamePages(cand.id);
-        else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
+        if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
         else if (cand.type === 'comick') pages = await getComicKPages(cand.id);
         else if (cand.type === 'mangapill') pages = await getMangaPillPages(cand.id);
 
-        if (Array.isArray(pages) && pages.length > 0) break;
+        if (Array.isArray(pages) && pages.length > 0) {
+          chapterTitle = cand.title;
+          break;
+        }
       } catch {
         continue;
       }
     }
 
-    if (!Array.isArray(pages) || pages.length === 0) return;
+    if (!Array.isArray(pages) || pages.length === 0) continue;
 
     let baseUrl = '';
     let compressedPages = pages;
@@ -216,27 +188,31 @@ async function syncSeries(s) {
       compressedPages = pages.map((p) => (p.startsWith(baseUrl) ? p.replace(baseUrl, '') : p));
     } catch {}
 
+    const cleanTitle = chapterTitle || `Chapter ${task.chNum}`;
+
     if (task.existing) {
       await supabase
         .from('chapters')
-        .update({ base_url: baseUrl, pages: compressedPages })
+        .update({ base_url: baseUrl, pages: compressedPages, title: cleanTitle })
         .eq('id', task.existing.id);
       repairedCount++;
     } else {
       upsertBatch.push({
         series_id: s.id,
         chapter_number: task.chNum,
-        title: `Chapter ${task.chNum}`,
+        title: cleanTitle,
         base_url: baseUrl,
         pages: compressedPages,
       });
       addedCount++;
     }
-  });
+
+    await delay(35);
+  }
 
   if (upsertBatch.length > 0) {
-    for (let i = 0; i < upsertBatch.length; i += 100) {
-      const chunk = upsertBatch.slice(i, i + 100);
+    for (let i = 0; i < upsertBatch.length; i += 50) {
+      const chunk = upsertBatch.slice(i, i + 50);
       await supabase.from('chapters').upsert(chunk, { onConflict: 'series_id,chapter_number' });
     }
   }
@@ -249,22 +225,27 @@ async function main() {
 
   const { data: allSeries, error } = await supabase
     .from('series')
-    .select('id, slug, title, english_title, native_title')
-    .order('updated_at', { ascending: true })
-    .limit(100);
+    .select('id, title, slug')
+    .order('created_at', { ascending: true });
 
   if (error || !allSeries) {
-    console.error('Failed to load series:', error);
+    console.error('Failed to query series:', error);
     process.exit(1);
   }
 
-  const assignedSeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === (WORKER_ID - 1));
+  // Sharded assignment across 5 matrix runners
+  const mySeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
+  console.log(`Worker ${WORKER_ID} assigned ${mySeries.length} of ${allSeries.length} series.`);
 
-  for (const s of assignedSeries) {
-    await syncSeries(s);
+  for (const s of mySeries) {
+    try {
+      await syncSeries(s);
+    } catch (err) {
+      console.warn(`Worker ${WORKER_ID} error syncing ${s.title}:`, err.message);
+    }
   }
 
-  console.log(`=== Worker ${WORKER_ID} Finished ===`);
+  console.log(`=== Worker ${WORKER_ID} Finished Successfully ===`);
 }
 
 main().catch(console.error);
