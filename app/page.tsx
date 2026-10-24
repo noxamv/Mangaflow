@@ -342,7 +342,7 @@ export default function HomePage() {
   };
 
   return (
-    <main className="space-y-6 sm:space-y-8 w-full max-w-full overflow-x-hidden">
+    <main className="space-y-6 sm:space-y-8 w-full max-w-full overflow-x-hidden pt-3 sm:pt-4">
       <SpotlightSlider items={trendingList} />
 
       <ShareBar />
