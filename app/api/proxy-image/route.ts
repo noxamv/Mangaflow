@@ -3,8 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'edge';
 
-// Whitelist of legitimate upstream CDNs
-const ALLOWED_CDN_DOMAINS = [
+// Permanent wildcard pattern matching for any supported manga/manhwa CDN
+const ALLOWED_CDN_PATTERNS = [
   'comick.pictures',
   'meo.comick.pictures',
   'meo2.comick.pictures',
@@ -17,12 +17,17 @@ const ALLOWED_CDN_DOMAINS = [
   'mpcdn.xyz',
   'asuracomic.net',
   'flamecomics.xyz',
+  'mangabat.com',
+  'h.mangabat.com',
+  'weebcentral.com',
 ];
 
-function isSafeOrigin(urlString: string): boolean {
+function isAuthorizedCDN(urlString: string): boolean {
   try {
     const url = new URL(urlString);
-    return ALLOWED_CDN_DOMAINS.some((domain) => url.hostname.endsWith(domain));
+    return ALLOWED_CDN_PATTERNS.some(
+      (domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`)
+    );
   } catch {
     return false;
   }
@@ -32,32 +37,46 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const imageUrl = searchParams.get('url');
 
-  if (!imageUrl || !imageUrl.startsWith('http') || !isSafeOrigin(imageUrl)) {
-    return new NextResponse('Forbidden or invalid target CDN origin', { status: 403 });
+  if (!imageUrl || !imageUrl.startsWith('http') || !isAuthorizedCDN(imageUrl)) {
+    return new NextResponse('Forbidden or unauthorized image source', { status: 403 });
   }
 
+  // Dynamic referrer matching: spoof target origin automatically
   let upstreamReferer = 'https://comick.io/';
-  if (imageUrl.includes('mangapill.com') || imageUrl.includes('readdetectiveconan.com')) {
-    upstreamReferer = 'https://mangapill.com/';
-  } else if (imageUrl.includes('mangadex.org')) {
-    upstreamReferer = 'https://mangadex.org/';
-  }
+  try {
+    const parsed = new URL(imageUrl);
+    if (parsed.hostname.includes('mangapill') || parsed.hostname.includes('readdetectiveconan')) {
+      upstreamReferer = 'https://mangapill.com/';
+    } else if (parsed.hostname.includes('mangadex')) {
+      upstreamReferer = 'https://mangadex.org/';
+    } else if (parsed.hostname.includes('asura')) {
+      upstreamReferer = 'https://asuracomic.net/';
+    } else if (parsed.hostname.includes('flame')) {
+      upstreamReferer = 'https://flamecomics.xyz/';
+    } else if (parsed.hostname.includes('mangabat')) {
+      upstreamReferer = 'https://h.mangabat.com/';
+    }
+  } catch {}
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+
     const upstreamRes = await fetch(imageUrl, {
       method: 'GET',
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
         'Referer': upstreamReferer,
       },
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
     if (!upstreamRes.ok) {
-      return new NextResponse(`Upstream CDN responded with status: ${upstreamRes.status}`, {
-        status: upstreamRes.status,
-      });
+      return new NextResponse(`CDN error: ${upstreamRes.status}`, { status: upstreamRes.status });
     }
 
     const contentType = upstreamRes.headers.get('content-type') || 'image/jpeg';
@@ -67,13 +86,13 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        // Immutable Edge & Browser Caching (1 Year)
+        // Immutable cache: images never change once published
         'Cache-Control': 'public, max-age=31536000, immutable',
         'Access-Control-Allow-Origin': '*',
       },
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown proxy error';
+    const message = err instanceof Error ? err.message : 'Proxy connection failed';
     return new NextResponse(`Proxy error: ${message}`, { status: 500 });
   }
 }
