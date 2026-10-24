@@ -11,7 +11,8 @@ interface UserProfile {
   id: string;
   email?: string;
   user_metadata?: {
-    avatar_url?: string;
+    avatar_url?: string | null;
+    display_name?: string;
     full_name?: string;
   };
 }
@@ -20,7 +21,7 @@ interface NotificationItem {
   id: string;
   title: string;
   message: string;
-  cover_url?: string;
+  chapter_id?: string;
   read: boolean;
   created_at: string;
 }
@@ -36,7 +37,7 @@ export default function RootLayout({
   // Navigation & UI States
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [menuDropdownOpen, setMenuDropdownOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -53,6 +54,7 @@ export default function RootLayout({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const menuDropdownRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
   // 1. PWA Service Worker Registration & Install Event Listener
@@ -86,13 +88,50 @@ export default function RootLayout({
     setDeferredPrompt(null);
   };
 
-  // 2. Supabase Auth State Listener
+  // 2. Supabase Auth State & Live Notifications Listener
   useEffect(() => {
-    async function checkAuth() {
+    async function checkAuthAndNotifications() {
       const { data: { session } } = await supabase.auth.getSession();
-      setUser(session?.user ?? null);
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+
+      if (currentUser) {
+        // Fetch recent chapters from followed series for the bell dropdown
+        const { data: follows } = await supabase
+          .from('user_follows')
+          .select('series_id')
+          .eq('user_id', currentUser.id);
+
+        if (follows && follows.length > 0) {
+          const sIds = follows.map((f: any) => f.series_id);
+          const { data: chaps } = await supabase
+            .from('chapters')
+            .select('id, series_id, chapter_number, created_at, series:series_id(title, english_title)')
+            .in('series_id', sIds)
+            .order('created_at', { ascending: false })
+            .limit(6);
+
+          if (chaps && chaps.length > 0) {
+            const mapped = chaps.map((c: any) => {
+              const sTitle = Array.isArray(c.series)
+                ? (c.series[0]?.english_title || c.series[0]?.title)
+                : (c.series?.english_title || c.series?.title || 'Series');
+              return {
+                id: c.id,
+                title: sTitle,
+                message: `New Chapter ${c.chapter_number} is out!`,
+                chapter_id: c.id,
+                read: false,
+                created_at: c.created_at || new Date().toISOString(),
+              };
+            });
+            setNotifications(mapped);
+          }
+        }
+      }
     }
-    checkAuth();
+
+    checkAuthAndNotifications();
 
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
@@ -103,11 +142,14 @@ export default function RootLayout({
     };
   }, []);
 
-  // 3. Dropdown & Search Outside Click Listener
+  // 3. Dropdown Outside Click Listener
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
         setUserMenuOpen(false);
+      }
+      if (menuDropdownRef.current && !menuDropdownRef.current.contains(event.target as Node)) {
+        setMenuDropdownOpen(false);
       }
       if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
         setNotifOpen(false);
@@ -159,7 +201,7 @@ export default function RootLayout({
       }
       if (e.key === 'Escape') {
         setSearchOpen(false);
-        setDrawerOpen(false);
+        setMenuDropdownOpen(false);
         setNotifOpen(false);
         setUserMenuOpen(false);
         setAuthModalOpen(false);
@@ -187,6 +229,9 @@ export default function RootLayout({
     setUserMenuOpen(false);
     router.push('/');
   };
+
+  const avatarUrl = user?.user_metadata?.avatar_url;
+  const initialLetter = user?.email ? user.email.charAt(0).toUpperCase() : 'U';
 
   return (
     <html lang="en" className="dark scroll-smooth overflow-x-hidden">
@@ -231,17 +276,68 @@ export default function RootLayout({
         <header className="sticky top-0 z-40 bg-[#0e1015]/95 backdrop-blur-md border-b border-neutral-800/80 px-3 sm:px-6 py-2.5 transition-colors">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
             
-            {/* Left: Hamburger Drawer Trigger & Text-Only Logo */}
+            {/* Left: Compact Hamburger Dropdown (Identical to User Dropdown) & Clean Logo */}
             <div className="flex items-center gap-3 sm:gap-4">
-              <button
-                onClick={() => setDrawerOpen(true)}
-                className="p-1.5 text-neutral-400 hover:text-white transition rounded-lg hover:bg-neutral-800/60"
-                aria-label="Open Navigation Drawer"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-              </button>
+              <div className="relative" ref={menuDropdownRef}>
+                <button
+                  onClick={() => setMenuDropdownOpen(!menuDropdownOpen)}
+                  className={`p-1.5 text-neutral-400 hover:text-white transition rounded-lg hover:bg-neutral-800/60 ${
+                    menuDropdownOpen ? 'bg-neutral-800 text-white' : ''
+                  }`}
+                  aria-label="Open Navigation Menu"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                  </svg>
+                </button>
+
+                {/* Compact Floating Dropdown Card (Matches User Bar Dimension) */}
+                {menuDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-2 w-56 p-1.5 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 text-xs">
+                    <div className="px-3 py-2 border-b border-neutral-800/80 mb-1">
+                      <p className="text-[11px] font-bold text-white tracking-wide">Browse Catalog</p>
+                    </div>
+                    <div className="space-y-0.5">
+                      <Link
+                        href="/trending"
+                        onClick={() => setMenuDropdownOpen(false)}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2.5 transition font-semibold ${
+                          pathname === '/trending' ? 'bg-indigo-600/20 text-indigo-400 font-bold' : ''
+                        }`}
+                      >
+                        <span>🔥</span> Trending Series
+                      </Link>
+                      <Link
+                        href="/popular"
+                        onClick={() => setMenuDropdownOpen(false)}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2.5 transition font-semibold ${
+                          pathname === '/popular' ? 'bg-indigo-600/20 text-indigo-400 font-bold' : ''
+                        }`}
+                      >
+                        <span>⭐</span> Popular Series
+                      </Link>
+                      <Link
+                        href="/filter"
+                        onClick={() => setMenuDropdownOpen(false)}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2.5 transition font-semibold ${
+                          pathname.startsWith('/filter') ? 'bg-indigo-600/20 text-indigo-400 font-bold' : ''
+                        }`}
+                      >
+                        <span>🏷️</span> Filter Series (24+)
+                      </Link>
+                      <Link
+                        href="/latest"
+                        onClick={() => setMenuDropdownOpen(false)}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2.5 transition font-semibold ${
+                          pathname === '/latest' ? 'bg-indigo-600/20 text-indigo-400 font-bold' : ''
+                        }`}
+                      >
+                        <span>⚡</span> Latest Releases
+                      </Link>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <Link href="/" className="flex items-center">
                 <span className="text-xl sm:text-2xl font-black tracking-tight text-white">
@@ -282,7 +378,7 @@ export default function RootLayout({
                 </button>
 
                 {notifOpen && (
-                  <div className="absolute right-0 sm:right-auto sm:left-auto top-full mt-2 w-80 max-w-[90vw] bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col">
+                  <div className="absolute right-0 top-full mt-2 w-80 max-w-[90vw] bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col">
                     <div className="p-3 border-b border-neutral-800/80 flex items-center justify-between">
                       <span className="text-xs font-bold text-white">Notifications</span>
                       <div className="flex items-center gap-2">
@@ -321,13 +417,17 @@ export default function RootLayout({
                     <div className="max-h-72 overflow-y-auto divide-y divide-neutral-800/60">
                       {filteredNotifications.length === 0 ? (
                         <div className="py-8 text-center text-xs text-neutral-500">
-                          No {notifTab !== 'all' ? notifTab : ''} notifications.
+                          {notifications.length === 0
+                            ? 'No new chapters from followed titles yet.'
+                            : `No ${notifTab !== 'all' ? notifTab : ''} notifications.`}
                         </div>
                       ) : (
                         filteredNotifications.map((n) => (
-                          <div
+                          <Link
                             key={n.id}
-                            className={`p-3 flex items-start gap-3 transition ${
+                            href={n.chapter_id ? `/read/${n.chapter_id}` : '/notifications'}
+                            onClick={() => setNotifOpen(false)}
+                            className={`p-3 flex items-start gap-3 transition block ${
                               !n.read ? 'bg-indigo-500/10' : 'hover:bg-neutral-900/40'
                             }`}
                           >
@@ -335,7 +435,7 @@ export default function RootLayout({
                               <p className="text-xs font-semibold text-white truncate">{n.title}</p>
                               <p className="text-[11px] text-neutral-400 line-clamp-2 mt-0.5">{n.message}</p>
                             </div>
-                          </div>
+                          </Link>
                         ))
                       )}
                     </div>
@@ -343,22 +443,35 @@ export default function RootLayout({
                 )}
               </div>
 
-              {/* User Avatar Menu or Sign In */}
+              {/* User Avatar Menu with Working Profile Image */}
               {user ? (
                 <div className="relative" ref={userMenuRef}>
                   <button
                     onClick={() => setUserMenuOpen(!userMenuOpen)}
-                    className="w-8 h-8 rounded-full bg-indigo-600 border border-indigo-400 text-white font-black text-xs flex items-center justify-center hover:opacity-90 transition shadow-sm"
+                    className="w-8 h-8 rounded-full bg-indigo-600 border border-indigo-400 text-white font-black text-xs flex items-center justify-center hover:opacity-90 transition shadow-sm overflow-hidden"
                     aria-label="User Menu"
                   >
-                    {user.email ? user.email.charAt(0).toUpperCase() : 'U'}
+                    {avatarUrl ? (
+                      <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      initialLetter
+                    )}
                   </button>
 
                   {userMenuOpen && (
                     <div className="absolute right-0 top-full mt-2 w-56 p-1.5 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 text-xs divide-y divide-neutral-800/80">
-                      <div className="px-3 py-2">
-                        <p className="text-[10px] text-neutral-400">Signed in as</p>
-                        <p className="font-bold text-white truncate">{user.email}</p>
+                      <div className="px-3 py-2 flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-full bg-indigo-600 text-white font-bold text-xs flex items-center justify-center overflow-hidden shrink-0">
+                          {avatarUrl ? (
+                            <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            initialLetter
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[10px] text-neutral-400">Signed in as</p>
+                          <p className="font-bold text-white truncate">{user.email}</p>
+                        </div>
                       </div>
 
                       <div className="py-1">
@@ -509,72 +622,6 @@ export default function RootLayout({
             </div>
           )}
         </header>
-
-        {/* MANGAFIRE OFF-CANVAS HAMBURGER DRAWER */}
-        {drawerOpen && (
-          <div className="fixed inset-0 z-50 flex">
-            <div
-              className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
-              onClick={() => setDrawerOpen(false)}
-            />
-            <div className="relative w-72 max-w-[85vw] bg-[#0e1015] border-r border-neutral-800 h-full p-5 flex flex-col z-10 shadow-2xl">
-              <div className="flex items-center justify-between pb-4 border-b border-neutral-800">
-                <span className="text-lg font-black text-white">
-                  Manga<span className="text-indigo-500">Flow</span>
-                </span>
-                <button
-                  onClick={() => setDrawerOpen(false)}
-                  className="p-1 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <nav className="py-4 space-y-1.5 flex-1">
-                <Link
-                  href="/trending"
-                  onClick={() => setDrawerOpen(false)}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
-                    pathname === '/trending' ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-800'
-                  }`}
-                >
-                  <span>🔥</span> Trending Series
-                </Link>
-                <Link
-                  href="/popular"
-                  onClick={() => setDrawerOpen(false)}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
-                    pathname === '/popular' ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-800'
-                  }`}
-                >
-                  <span>⭐</span> Popular Series
-                </Link>
-                <Link
-                  href="/filter"
-                  onClick={() => setDrawerOpen(false)}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
-                    pathname.startsWith('/filter') ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-800'
-                  }`}
-                >
-                  <span>🏷️</span> Filter Series (24+ Genres)
-                </Link>
-                <Link
-                  href="/latest"
-                  onClick={() => setDrawerOpen(false)}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition ${
-                    pathname === '/latest' ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:bg-neutral-800'
-                  }`}
-                >
-                  <span>⚡</span> Latest Releases
-                </Link>
-              </nav>
-
-              <div className="pt-4 border-t border-neutral-800 text-xs text-neutral-500">
-                <span>MangaFlow Platform Engine</span>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* AUTHENTICATION MODAL */}
         <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
