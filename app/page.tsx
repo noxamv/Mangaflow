@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { supabase } from '../lib/supabase';
-import { ShareBar } from '../components/ShareBar';
+import ShareBar from '../components/ShareBar';
 
 interface ChapterItem {
   id: string;
@@ -211,7 +211,6 @@ export default function HomePage() {
     async function loadData() {
       setLoading(true);
       try {
-        // Fetch top series along with latest 2 chapters
         const { data, error } = await supabase
           .from('series')
           .select(`
@@ -241,7 +240,6 @@ export default function HomePage() {
         if (error) {
           console.error('Error fetching series for home:', error);
         } else if (data) {
-          // Sort chapters descending for each series
           const formatted = (data as any[]).map((s) => ({
             ...s,
             chapters: (s.chapters || []).sort(
@@ -290,7 +288,7 @@ export default function HomePage() {
 
         {/* Global ShareBar Banner */}
         <div className="mb-10">
-          <ShareBar title="MangaFlow - Free High-Speed Manga & Manhwa Reader" />
+          <ShareBar />
         </div>
 
         {/* Search & Header Section */}
