@@ -54,7 +54,28 @@ function toKey(num) {
   return Number.isInteger(num) ? String(num) : String(num);
 }
 
-// ---------------- PROVIDER PAGE EXTRACTORS ----------------
+// ---------------- PAGE SCRAPERS ACROSS ALL PLATFORMS ----------------
+async function getHivePages(url) {
+  const html = await fetchHtml(url);
+  if (!html) return null;
+  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
+  return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
+}
+
+async function getAsuraPages(url) {
+  const html = await fetchHtml(url);
+  if (!html) return null;
+  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
+  return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
+}
+
+async function getFlamePages(url) {
+  const html = await fetchHtml(url);
+  if (!html) return null;
+  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
+  return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
+}
+
 async function getComicKPages(hid) {
   const json = await fetchJson(`https://api.comick.io/chapter/${hid}`);
   if (!json?.chapter?.images?.length) return null;
@@ -76,9 +97,14 @@ async function getMangaPillPages(slug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// ---------------- SERIES SYNC EXECUTOR ----------------
+// ---------------- PROCESS SERIES DIRECTLY VIA SCOUTED INTEL ----------------
 async function syncSeries(s) {
-  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Processing verified intel...`);
+  await supabase
+    .from('series')
+    .update({ updated_at: new Date().toISOString() })
+    .eq('id', s.id);
+
+  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Reading verified multi-source intel...`);
 
   const { data: intelRows } = await supabase
     .from('series_intel')
@@ -96,23 +122,28 @@ async function syncSeries(s) {
 
         if (!unifiedMap.has(key)) unifiedMap.set(key, []);
 
-        if (intel.source_platform === 'mangadex') {
-          unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 1, title: item.title });
+        if (intel.source_platform === 'hivetoons') {
+          unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', priority: 1, title: item.title });
+        } else if (intel.source_platform === 'asura') {
+          unifiedMap.get(key).push({ id: item.url, type: 'asura', priority: 2, title: item.title });
+        } else if (intel.source_platform === 'flame') {
+          unifiedMap.get(key).push({ id: item.url, type: 'flame', priority: 3, title: item.title });
+        } else if (intel.source_platform === 'mangadex') {
+          unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 4, title: item.title });
         } else if (intel.source_platform === 'comick') {
-          unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 2, title: item.title });
+          unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 5, title: item.title });
         } else if (intel.source_platform === 'mangapill') {
-          unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 3, title: null });
+          unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 6, title: null });
         }
       }
     }
   }
 
   if (unifiedMap.size === 0) {
-    console.log('   No scouted intel found for this title. Passing to next worker.');
+    console.log('   No scouted intel found for this title yet. Waiting for scout run.');
     return;
   }
 
-  // Sort candidates by priority
   for (const [key, candidates] of unifiedMap.entries()) {
     candidates.sort((a, b) => a.priority - b.priority);
   }
@@ -132,7 +163,7 @@ async function syncSeries(s) {
   for (const [k, candidates] of unifiedMap.entries()) {
     const chNum = parseFloat(k);
 
-    // Filter out novel spills
+    // Filter out novel spillages
     if (s.slug === 'doctor-elise' && chNum > 145) continue;
     if (s.slug === 'a25e46ec-30f7-4db6-89df-cacbc1d9a900' && chNum > 140) continue;
 
@@ -153,19 +184,33 @@ async function syncSeries(s) {
     return;
   }
 
-  console.log(`   Ingesting / Repairing ${tasks.length} missing chapters...`);
+  console.log(`   Ingesting / Repairing ${tasks.length} chapters across verified sources...`);
 
   let addedCount = 0;
   let repairedCount = 0;
   const upsertBatch = [];
 
-  for (const task of tasks) {
+  const runWithConcurrency = async (items, concurrency, fn) => {
+    let index = 0;
+    const workers = new Array(concurrency).fill(null).map(async () => {
+      while (index < items.length) {
+        const cur = items[index++];
+        await fn(cur);
+      }
+    });
+    await Promise.all(workers);
+  };
+
+  await runWithConcurrency(tasks, 3, async (task) => {
     let pages = null;
     let chapterTitle = null;
 
     for (const cand of task.candidates) {
       try {
-        if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
+        if (cand.type === 'hivetoons') pages = await getHivePages(cand.id);
+        else if (cand.type === 'asura') pages = await getAsuraPages(cand.id);
+        else if (cand.type === 'flame') pages = await getFlamePages(cand.id);
+        else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
         else if (cand.type === 'comick') pages = await getComicKPages(cand.id);
         else if (cand.type === 'mangapill') pages = await getMangaPillPages(cand.id);
 
@@ -178,7 +223,7 @@ async function syncSeries(s) {
       }
     }
 
-    if (!Array.isArray(pages) || pages.length === 0) continue;
+    if (!Array.isArray(pages) || pages.length === 0) return;
 
     let baseUrl = '';
     let compressedPages = pages;
@@ -206,9 +251,7 @@ async function syncSeries(s) {
       });
       addedCount++;
     }
-
-    await delay(35);
-  }
+  });
 
   if (upsertBatch.length > 0) {
     for (let i = 0; i < upsertBatch.length; i += 50) {
@@ -233,7 +276,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Sharded assignment across 5 matrix runners
   const mySeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
   console.log(`Worker ${WORKER_ID} assigned ${mySeries.length} of ${allSeries.length} series.`);
 
@@ -245,7 +287,7 @@ async function main() {
     }
   }
 
-  console.log(`=== Worker ${WORKER_ID} Finished Successfully ===`);
+  console.log(`=== Worker ${WORKER_ID} Completed Successfully ===`);
 }
 
 main().catch(console.error);
