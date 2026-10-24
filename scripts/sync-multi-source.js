@@ -12,6 +12,9 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
+const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '1', 10);
+
 async function fetchJson(url, options = {}) {
   try {
     const res = await fetch(url, {
@@ -92,7 +95,7 @@ async function searchComicK(title) {
 async function getComicKChapters(hid) {
   const map = new Map();
   let page = 1;
-  while (page <= 25) {
+  while (page <= 50) {
     const json = await fetchJson(`https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`);
     if (!json?.chapters?.length) break;
     for (const item of json.chapters) {
@@ -104,7 +107,7 @@ async function getComicKChapters(hid) {
     }
     if (json.chapters.length < 100) break;
     page++;
-    await delay(60);
+    await delay(50);
   }
   return map;
 }
@@ -136,7 +139,7 @@ async function getMangaDexChapters(mangaId) {
   const map = new Map();
   let offset = 0;
   const limit = 100;
-  while (offset <= 1000) {
+  while (offset <= 2000) {
     const json = await fetchJson(
       `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&limit=${limit}&offset=${offset}&order[chapter]=desc`
     );
@@ -150,7 +153,7 @@ async function getMangaDexChapters(mangaId) {
     }
     if (json.data.length < limit) break;
     offset += limit;
-    await delay(60);
+    await delay(50);
   }
   return map;
 }
@@ -161,7 +164,7 @@ async function getMangaDexPages(chapterId) {
   return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
 }
 
-// ---------------- MANGAPILL (VALIDATED) ----------------
+// ---------------- MANGAPILL ----------------
 async function searchMangaPill(title) {
   if (!/^[\x00-\x7F]+$/.test(title)) return null;
 
@@ -246,8 +249,7 @@ async function buildAggregatedChapterMap(searchTitles) {
     if (mdId) merge(await getMangaDexChapters(mdId));
     if (mpSlug) merge(await getMangaPillChapters(mpSlug));
 
-    if (unifiedMap.size >= 40) break;
-    await delay(60);
+    await delay(50);
   }
 
   for (const [key, candidates] of unifiedMap.entries()) {
@@ -283,7 +285,7 @@ async function syncSeries(s) {
     }
   }
 
-  console.log(`\n=> [${s.title}] Resolving comic releases across aliases...`);
+  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Resolving comic releases...`);
   const unifiedMap = await buildAggregatedChapterMap(searchTitles);
 
   if (unifiedMap.size === 0) {
@@ -326,7 +328,7 @@ async function syncSeries(s) {
     return;
   }
 
-  console.log(`   Ingesting / Repairing ${tasks.length} missing or corrupted chapters...`);
+  console.log(`   Ingesting / Repairing ${tasks.length} missing chapters...`);
 
   let addedCount = 0;
   let repairedCount = 0;
@@ -359,19 +361,6 @@ async function syncSeries(s) {
 
     if (!Array.isArray(pages) || pages.length === 0) return;
 
-    const firstUrl = pages[0].toLowerCase();
-    const isImage =
-      firstUrl.includes('.jpg') ||
-      firstUrl.includes('.jpeg') ||
-      firstUrl.includes('.png') ||
-      firstUrl.includes('.webp') ||
-      firstUrl.includes('.avif') ||
-      firstUrl.includes('meo3.comick') ||
-      firstUrl.includes('mangadex.org') ||
-      firstUrl.includes('readdetectiveconan.com');
-
-    if (!isImage) return;
-
     let baseUrl = '';
     let compressedPages = pages;
     try {
@@ -399,12 +388,15 @@ async function syncSeries(s) {
   });
 
   if (upsertBatch.length > 0) {
-    const { error: batchErr } = await supabase
-      .from('chapters')
-      .upsert(upsertBatch, { onConflict: 'series_id,chapter_number' });
+    for (let i = 0; i < upsertBatch.length; i += 100) {
+      const chunk = upsertBatch.slice(i, i + 100);
+      const { error: batchErr } = await supabase
+        .from('chapters')
+        .upsert(chunk, { onConflict: 'series_id,chapter_number' });
 
-    if (batchErr) {
-      console.error('Batch upsert warning:', batchErr.message);
+      if (batchErr) {
+        console.error('Batch upsert warning:', batchErr.message);
+      }
     }
   }
 
@@ -412,25 +404,28 @@ async function syncSeries(s) {
 }
 
 async function main() {
-  console.log('=== MangaFlow Multi-Source Sync Runner Started ===');
+  console.log(`=== MangaFlow Runner Worker ${WORKER_ID} of ${TOTAL_WORKERS} Started ===`);
 
-  const { data: targetSeries, error } = await supabase
+  const { data: allSeries, error } = await supabase
     .from('series')
     .select('id, title, english_title, native_title, synonyms')
     .order('updated_at', { ascending: true })
-    .limit(20);
+    .limit(100);
 
-  if (error || !targetSeries) {
+  if (error || !allSeries) {
     console.error('Failed to query series:', error?.message);
     process.exit(1);
   }
 
-  console.log(`Processing batch of ${targetSeries.length} series...`);
-  for (const s of targetSeries) {
+  // Modulo partition so all 5 workers process distinct series concurrently
+  const assignedSeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === (WORKER_ID - 1));
+
+  console.log(`Worker ${WORKER_ID} assigned ${assignedSeries.length} series to sync...`);
+  for (const s of assignedSeries) {
     await syncSeries(s);
   }
 
-  console.log('=== Sync Cycle Complete ===');
+  console.log(`=== Worker ${WORKER_ID} Sync Cycle Complete ===`);
 }
 
 main().catch((err) => {
