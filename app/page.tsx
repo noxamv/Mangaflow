@@ -80,12 +80,12 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
     return () => clearInterval(timer);
   }, [items.length]);
 
-  if (!items.length) return null;
+  if (!items || items.length === 0) return null;
   const current = items[index];
   const coverUrl = resolveCoverUrl(current);
 
   return (
-    <div className="relative w-full rounded-2xl overflow-hidden bg-[#13151f] border border-neutral-800/80 shadow-xl p-4 sm:p-5 pb-6 sm:pb-7 flex flex-col justify-center">
+    <div className="relative w-full rounded-2xl overflow-hidden bg-[#13151f] border border-neutral-800/80 shadow-xl px-4 py-4.5 sm:px-6 sm:py-5 pb-6 sm:pb-7">
       {/* Background Image Backdrop */}
       <div className="absolute inset-0 z-0">
         <SafeImage
@@ -97,7 +97,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
       </div>
 
       {/* Content Container: Left Info + Right Poster */}
-      <div className="relative z-10 flex items-center justify-between gap-3 sm:gap-5">
+      <div className="relative z-10 flex items-center justify-between gap-3 sm:gap-6">
         {/* Left Column: Details */}
         <div className="flex-1 min-w-0 pr-1 space-y-1 sm:space-y-1.5">
           <div className="flex items-center gap-1.5 mb-1 flex-wrap">
@@ -114,15 +114,15 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
           </h2>
 
           {current.synopsis && (
-            <p className="text-[11px] sm:text-xs text-neutral-300/85 line-clamp-2 leading-relaxed max-w-xs sm:max-w-md">
+            <p className="text-[11px] sm:text-xs text-neutral-400 line-clamp-2 leading-snug max-w-xs sm:max-w-md">
               {current.synopsis}
             </p>
           )}
 
-          <div className="pt-1.5 sm:pt-2">
+          <div className="pt-1.5">
             <Link
               href={`/series/${current.slug}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition shadow-md shadow-indigo-600/30 active:scale-95"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition shadow-md shadow-indigo-600/30 active:scale-95"
             >
               Read Now →
             </Link>
@@ -130,7 +130,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
         </div>
 
         {/* Right Column: Series Cover Poster */}
-        <div className="shrink-0 w-24 sm:w-28 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/10 shadow-xl bg-neutral-900">
+        <div className="shrink-0 w-24 sm:w-28 h-32 sm:h-36 rounded-xl overflow-hidden border border-white/10 shadow-lg bg-neutral-900">
           <SafeImage
             src={coverUrl}
             alt={current.title}
@@ -139,8 +139,8 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
         </div>
       </div>
 
-      {/* Centered Pagination Dots */}
-      <div className="absolute bottom-2 sm:bottom-2.5 left-0 right-0 z-20 flex justify-center items-center gap-1.5">
+      {/* Centered Carousel Indicator Dots */}
+      <div className="absolute bottom-2 left-0 right-0 z-20 flex justify-center items-center gap-1.5">
         {items.map((_, i) => (
           <button
             key={i}
