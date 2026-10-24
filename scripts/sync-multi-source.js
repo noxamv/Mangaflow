@@ -9,71 +9,23 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
 const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '1', 10);
 
-// DIRECT KNOWN WORKING HIDs & SLUGS
-// If slug search fails, direct HIDs guarantee pulling 500+ chapters immediately
-const DIRECT_TARGETS = {
-  'lookism': {
-    searchTerms: ['Lookism', '00-lookism', '외모지상주의'],
-    comickHids: ['3vK1x', 'xRk5z'], // ComicK primary and webtoon mirror HIDs
-    mangapillSlug: '2437/lookism',
-    asuraSlug: 'lookism',
-  },
-  'eleceed': {
-    searchTerms: ['Eleceed', '일렉시드'],
-    comickHids: ['7eB2q', 'vVv1a'],
-    mangapillSlug: '3514/eleceed',
-    asuraSlug: 'eleceed',
-  },
-  'omniscient-readers-viewpoint': {
-    searchTerms: ['Omniscient Reader', '00-omniscient-reader-s-viewpoint', '전지적 독자 시점'],
-    comickHids: ['v4M81', 'b2bB9'],
-    mangapillSlug: '4883/omniscient-readers-viewpoint',
-    asuraSlug: 'omniscient-readers-viewpoint',
-  },
-  'latna-saga-survival-of-a-sword-king': {
-    searchTerms: ['Survival Story of a Sword King in a Fantasy World', 'Latna Saga'],
-    comickHids: ['2W2yq'],
-    mangapillSlug: '4166/survival-story-of-a-sword-king-in-a-fantasy-world',
-    asuraSlug: 'survival-story-of-a-sword-king-in-a-fantasy-world',
-  },
-  '9ecd208c-c592-4462-9f57-4d7d4a9f956f': { // Mercenary Enrollment
-    searchTerms: ['Teenage Mercenary', 'Mercenary Enrollment', '입학용병'],
-    comickHids: ['50N5e', 'x9x9a'],
-    mangapillSlug: '4979/mercenary-enrollment',
-    asuraSlug: 'mercenary-enrollment',
-  },
-  'd7f56ace-cd30-48b9-8b64-afeca0077fca': { // The Greatest Estate Developer
-    searchTerms: ['The World’s Best Engineer', 'The Greatest Estate Developer', '역대급 영지 설계사'],
-    comickHids: ['9V87q'],
-    mangapillSlug: '5482/the-greatest-estate-developer',
-    asuraSlug: 'the-greatest-estate-developer',
-  },
-  'dcdcc8c7-932e-4f60-a900-5f19934eb6cf': { // Dungeon Reset
-    searchTerms: ['Dungeon Reset', '던전 리셋'],
-    comickHids: ['8JzVq'],
-    mangapillSlug: '3643/dungeon-reset',
-  },
-  'priscilla-s-marriage-request': {
-    searchTerms: ['Priscilla’s Marriage Proposal', 'Priscilla’s Marriage Request', '프리실라의 결혼 의뢰'],
-    comickHids: ['q4q4q'],
-  }
+const HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
 };
 
 async function fetchJson(url, options = {}) {
   try {
     const res = await fetch(url, {
       ...options,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        ...(options.headers || {}),
-      },
+      headers: { ...HEADERS, ...(options.headers || {}) },
     });
     if (!res.ok) return null;
     return await res.json();
@@ -86,11 +38,7 @@ async function fetchHtml(url, options = {}) {
   try {
     const res = await fetch(url, {
       ...options,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        ...(options.headers || {}),
-      },
+      headers: { ...HEADERS, ...(options.headers || {}) },
     });
     if (!res.ok) return null;
     return await res.text();
@@ -110,31 +58,91 @@ function toKey(num) {
   return Number.isInteger(num) ? String(num) : String(num);
 }
 
-function isNovelKeyword(text) {
+function isNovel(text) {
   if (!text) return false;
-  const lower = text.toLowerCase();
+  const l = text.toLowerCase();
   return (
-    lower.includes('(novel)') ||
-    lower.includes('[novel]') ||
-    lower.includes('light novel') ||
-    lower.includes('web novel') ||
-    lower.endsWith(' novel')
+    l.includes('[novel]') ||
+    l.includes('(novel)') ||
+    l.includes('webnovel') ||
+    l.includes('light novel') ||
+    l.includes('[ln]') ||
+    l.includes('[wn]')
   );
 }
 
-// ---------------- COMICK ----------------
+// ---------------- 1. HIVE TOONS (LATEST LOOKISM & ELECEED) ----------------
+async function getHiveToonsChapters(slug) {
+  const map = new Map();
+  const html = await fetchHtml(`https://hivetoons.org/series/${slug}`);
+  if (!html) return map;
+
+  const regex = /href=["'](https?:\/\/hivetoons\.org\/series\/[^"']*?chapter-([0-9]+(?:\.[0-9]+)?)[^"']*?)["']/gi;
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    const url = match[1];
+    const key = toKey(cleanNum(match[2]));
+    if (key) {
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push({ id: url, type: 'hivetoons', order: 1 });
+    }
+  }
+  return map;
+}
+
+async function getHiveToonsPages(chapterUrl) {
+  const html = await fetchHtml(chapterUrl);
+  if (!html) return null;
+
+  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
+  const pages = matches
+    .map((m) => m[1])
+    .filter((url) => !url.includes('logo') && !url.includes('banner') && !url.includes('avatar'));
+  return pages.length ? pages : null;
+}
+
+// ---------------- 2. ASURA SCANS (MANHWA & ELECEED) ----------------
+async function getAsuraChapters(slug) {
+  const map = new Map();
+  const html = await fetchHtml(`https://asuracomic.net/series/${slug}`);
+  if (!html) return map;
+
+  const regex = /href=["'](https?:\/\/[^"']*?chapter\/([0-9]+(?:\.[0-9]+)?)[^"']*?)["']/gi;
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    const url = match[1];
+    const key = toKey(cleanNum(match[2]));
+    if (key) {
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push({ id: url, type: 'asura', order: 2 });
+    }
+  }
+  return map;
+}
+
+async function getAsuraPages(chapterUrl) {
+  const html = await fetchHtml(chapterUrl);
+  if (!html) return null;
+
+  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
+  const pages = matches
+    .map((m) => m[1])
+    .filter((url) => !url.includes('logo') && !url.includes('banner') && !url.includes('discord'));
+  return pages.length ? pages : null;
+}
+
+// ---------------- 3. COMICK ----------------
 async function searchComicK(title) {
+  const cleanTitle = title.replace(/['’]/g, '').trim();
   const json = await fetchJson(
-    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=10&type=comic`
+    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(cleanTitle)}&limit=10&type=comic`
   );
   if (!Array.isArray(json) || json.length === 0) return [];
 
   const foundHids = [];
   for (const c of json) {
-    const rawTitle = (c.title || '').toLowerCase();
-    const slug = (c.slug || '').toLowerCase();
     if (c.comic_type === 'novel' || c.type === 'novel') continue;
-    if (rawTitle.includes('(novel)') || rawTitle.includes('[novel]') || slug.includes('-novel')) continue;
+    if (isNovel(c.title) || isNovel(c.slug)) continue;
     if (c.hid) foundHids.push(c.hid);
   }
   return foundHids;
@@ -144,13 +152,18 @@ async function getComicKChapters(hid) {
   const map = new Map();
   let page = 1;
   while (page <= 50) {
-    const json = await fetchJson(`https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`);
+    const json = await fetchJson(
+      `https://api.comick.io/comic/${hid}/chapters?lang=en&page=${page}&limit=100`
+    );
     if (!json?.chapters?.length) break;
+
     for (const item of json.chapters) {
+      if (isNovel(item.title) || isNovel(item.chap)) continue;
+
       const key = toKey(cleanNum(item.chap));
       if (key && item.hid) {
         if (!map.has(key)) map.set(key, []);
-        map.get(key).push({ id: item.hid, type: 'comick', order: 1 });
+        map.get(key).push({ id: item.hid, type: 'comick', order: 3 });
       }
     }
     if (json.chapters.length < 100) break;
@@ -168,7 +181,7 @@ async function getComicKPages(chapterHid) {
     .filter(Boolean);
 }
 
-// ---------------- MANGADEX ----------------
+// ---------------- 4. MANGADEX ----------------
 async function searchMangaDex(title) {
   const json = await fetchJson(
     `https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=5&order[relevance]=desc`
@@ -196,7 +209,7 @@ async function getMangaDexChapters(mangaId) {
       const key = toKey(cleanNum(item.attributes?.chapter));
       if (key && item.id) {
         if (!map.has(key)) map.set(key, []);
-        map.get(key).push({ id: item.id, type: 'mangadex', order: 2 });
+        map.get(key).push({ id: item.id, type: 'mangadex', order: 4 });
       }
     }
     if (json.data.length < limit) break;
@@ -212,7 +225,7 @@ async function getMangaDexPages(chapterId) {
   return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
 }
 
-// ---------------- MANGAPILL ----------------
+// ---------------- 5. MANGAPILL ----------------
 async function searchMangaPill(title) {
   if (!/^[\x00-\x7F]+$/.test(title)) return null;
 
@@ -242,7 +255,7 @@ async function getMangaPillChapters(slug) {
     const key = toKey(cleanNum(match[2]));
     if (key) {
       if (!map.has(key)) map.set(key, []);
-      map.get(key).push({ id: match[1], type: 'mangapill', order: 3 });
+      map.get(key).push({ id: match[1], type: 'mangapill', order: 5 });
     }
   }
   return map;
@@ -268,38 +281,28 @@ async function buildAggregatedChapterMap(s) {
     }
   };
 
-  const directConfig = DIRECT_TARGETS[s.slug] || DIRECT_TARGETS[s.id] || null;
+  const slug = (s.slug || '').toLowerCase();
+  const title = (s.title || '').toLowerCase();
 
-  // 1. Direct ComicK HIDs injection
-  if (directConfig?.comickHids) {
-    for (const hid of directConfig.comickHids) {
-      if (!checkedHids.has(hid)) {
-        checkedHids.add(hid);
-        merge(await getComicKChapters(hid));
-      }
-    }
+  // Poll scanlation sites for key manhwa series
+  if (slug.includes('lookism') || title.includes('lookism')) {
+    merge(await getHiveToonsChapters('lookism'));
+  }
+  if (slug.includes('eleceed') || title.includes('eleceed')) {
+    merge(await getHiveToonsChapters('eleceed'));
+    merge(await getAsuraChapters('eleceed'));
+  }
+  if (slug.includes('omniscient') || title.includes('omniscient reader')) {
+    merge(await getAsuraChapters('omniscient-readers-viewpoint'));
   }
 
-  // 2. Direct MangaPill Slug
-  if (directConfig?.mangapillSlug) {
-    merge(await getMangaPillChapters(directConfig.mangapillSlug));
-  }
-
-  // 3. Search query assembly
-  const queries = [];
-  if (directConfig?.searchTerms) {
-    queries.push(...directConfig.searchTerms);
-  }
-  if (s.english_title) queries.push(s.english_title);
-  if (s.title) queries.push(s.title);
-  if (s.native_title) queries.push(s.native_title);
-
-  if (Array.isArray(s.synonyms)) {
-    queries.push(...s.synonyms);
-  } else if (typeof s.synonyms === 'string') {
+  // Assemble queries
+  const queries = [s.english_title, s.title, s.native_title];
+  if (Array.isArray(s.synonyms)) queries.push(...s.synonyms);
+  else if (typeof s.synonyms === 'string') {
     try {
-      const parsed = JSON.parse(s.synonyms);
-      if (Array.isArray(parsed)) queries.push(...parsed);
+      const p = JSON.parse(s.synonyms);
+      if (Array.isArray(p)) queries.push(...p);
       else queries.push(s.synonyms);
     } catch {
       queries.push(...s.synonyms.split(/[,;\n]/));
@@ -308,7 +311,7 @@ async function buildAggregatedChapterMap(s) {
 
   for (const q of queries) {
     const clean = (q || '').trim();
-    if (clean.length < 2 || isNovelKeyword(clean) || checkedQueries.has(clean.toLowerCase())) continue;
+    if (clean.length < 2 || isNovel(clean) || checkedQueries.has(clean.toLowerCase())) continue;
     checkedQueries.add(clean.toLowerCase());
 
     const [comickHids, mdId, mpSlug] = await Promise.all([
@@ -330,6 +333,7 @@ async function buildAggregatedChapterMap(s) {
     await delay(30);
   }
 
+  // Deduplicate candidates
   for (const [key, candidates] of unifiedMap.entries()) {
     const seen = new Set();
     const unique = [];
@@ -350,7 +354,7 @@ async function buildAggregatedChapterMap(s) {
 async function syncSeries(s) {
   await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
-  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Resolving comic releases...`);
+  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Aggregating all sources...`);
   const unifiedMap = await buildAggregatedChapterMap(s);
 
   if (unifiedMap.size === 0) {
@@ -371,6 +375,12 @@ async function syncSeries(s) {
 
   const tasks = [];
   for (const [k, candidates] of unifiedMap.entries()) {
+    const chNum = parseFloat(k);
+
+    // Filter out web novel spikes for specific titles
+    if (s.slug === 'doctor-elise' && chNum > 145) continue;
+    if (s.slug === 'a25e46ec-30f7-4db6-89df-cacbc1d9a900' && chNum > 140) continue; // Horimiya
+
     const existing = existingMap.get(k);
     const isCorrupted =
       existing &&
@@ -381,7 +391,7 @@ async function syncSeries(s) {
 
     if (!existing || isCorrupted) {
       tasks.push({
-        chNum: parseFloat(k),
+        chNum,
         candidates,
         existing: existing || null,
       });
@@ -414,7 +424,9 @@ async function syncSeries(s) {
     let pages = null;
     for (const cand of task.candidates) {
       try {
-        if (cand.type === 'comick') pages = await getComicKPages(cand.id);
+        if (cand.type === 'hivetoons') pages = await getHiveToonsPages(cand.id);
+        else if (cand.type === 'asura') pages = await getAsuraPages(cand.id);
+        else if (cand.type === 'comick') pages = await getComicKPages(cand.id);
         else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
         else if (cand.type === 'mangapill') pages = await getMangaPillPages(cand.id);
 
