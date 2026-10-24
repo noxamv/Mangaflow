@@ -143,6 +143,13 @@ export default function ReaderPage() {
     return { prevChapter: prev, nextChapter: next };
   }, [chapter, allChapters]);
 
+  // Background Prefetch for Instant Chapter Navigation
+  useEffect(() => {
+    if (nextChapter?.id) {
+      router.prefetch(`/read/${nextChapter.id}`);
+    }
+  }, [nextChapter?.id, router]);
+
   const resolveImageUrl = useCallback(
     (page: string): string => {
       if (!page) return '';
@@ -158,7 +165,11 @@ export default function ReaderPage() {
         }
       }
 
-      if (fullUrl.includes('readdetectiveconan.com') || fullUrl.includes('mangapill.com')) {
+      if (
+        fullUrl.includes('readdetectiveconan.com') ||
+        fullUrl.includes('mangapill.com') ||
+        fullUrl.includes('mangabat.com')
+      ) {
         return `/api/proxy-image?url=${encodeURIComponent(fullUrl)}`;
       }
 
@@ -223,7 +234,7 @@ export default function ReaderPage() {
     return (
       <div className="min-h-screen bg-[#0e1015] flex flex-col items-center justify-center space-y-3">
         <div className="w-8 h-8 border-2 border-neutral-700 border-t-indigo-500 rounded-full animate-spin" />
-        <span className="text-xs text-neutral-400 font-medium">Loading chapter panels...</span>
+        <span className="text-xs text-neutral-400 font-medium">Opening chapter panels...</span>
       </div>
     );
   }
@@ -302,7 +313,6 @@ export default function ReaderPage() {
       <main
         ref={containerRef}
         onClick={(e) => {
-          // If clicked on buttons or links, don't toggle
           if ((e.target as HTMLElement).closest('button, a, input, select')) return;
           setShowControls((prev) => !prev);
         }}
@@ -321,16 +331,16 @@ export default function ReaderPage() {
               return (
                 <div
                   key={idx}
-                  className="w-full flex justify-center bg-[#090a0f] min-h-[300px] border-b border-neutral-900/30 relative"
+                  className="w-full flex justify-center bg-[#090a0f] min-h-[350px] border-b border-neutral-900/30 relative"
                 >
                   <img
                     src={resolvedSrc}
                     alt={`Page ${idx + 1}`}
-                    loading="lazy"
+                    loading={idx < 3 ? 'eager' : 'lazy'}
                     decoding="async"
                     referrerPolicy="no-referrer"
                     crossOrigin="anonymous"
-                    className="w-full h-auto object-contain block max-w-full"
+                    className="w-full h-auto object-contain block max-w-full select-none"
                     onError={(e) => {
                       const target = e.currentTarget;
                       if (!target.src.includes('/api/proxy-image')) {
