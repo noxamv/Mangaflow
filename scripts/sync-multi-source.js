@@ -71,25 +71,7 @@ function isNovel(text) {
   );
 }
 
-// ---------------- 1. HIVE TOONS (LATEST LOOKISM & ELECEED) ----------------
-async function getHiveToonsChapters(slug) {
-  const map = new Map();
-  const html = await fetchHtml(`https://hivetoons.org/series/${slug}`);
-  if (!html) return map;
-
-  const regex = /href=["'](https?:\/\/hivetoons\.org\/series\/[^"']*?chapter-([0-9]+(?:\.[0-9]+)?)[^"']*?)["']/gi;
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    const url = match[1];
-    const key = toKey(cleanNum(match[2]));
-    if (key) {
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push({ id: url, type: 'hivetoons', order: 1 });
-    }
-  }
-  return map;
-}
-
+// ---------------- PAGE SCRAPERS FOR RESOLVED INTEL ----------------
 async function getHiveToonsPages(chapterUrl) {
   const html = await fetchHtml(chapterUrl);
   if (!html) return null;
@@ -99,25 +81,6 @@ async function getHiveToonsPages(chapterUrl) {
     .map((m) => m[1])
     .filter((url) => !url.includes('logo') && !url.includes('banner') && !url.includes('avatar'));
   return pages.length ? pages : null;
-}
-
-// ---------------- 2. ASURA SCANS (MANHWA & ELECEED) ----------------
-async function getAsuraChapters(slug) {
-  const map = new Map();
-  const html = await fetchHtml(`https://asuracomic.net/series/${slug}`);
-  if (!html) return map;
-
-  const regex = /href=["'](https?:\/\/[^"']*?chapter\/([0-9]+(?:\.[0-9]+)?)[^"']*?)["']/gi;
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    const url = match[1];
-    const key = toKey(cleanNum(match[2]));
-    if (key) {
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push({ id: url, type: 'asura', order: 2 });
-    }
-  }
-  return map;
 }
 
 async function getAsuraPages(chapterUrl) {
@@ -131,11 +94,32 @@ async function getAsuraPages(chapterUrl) {
   return pages.length ? pages : null;
 }
 
-// ---------------- 3. COMICK ----------------
+async function getComicKPages(chapterHid) {
+  const json = await fetchJson(`https://api.comick.io/chapter/${chapterHid}`);
+  if (!json?.chapter?.images?.length) return null;
+  return json.chapter.images
+    .map((img) => img.url || (img.b2key ? `https://meo3.comick.pictures/${img.b2key}` : null))
+    .filter(Boolean);
+}
+
+async function getMangaDexPages(chapterId) {
+  const meta = await fetchJson(`https://api.mangadex.org/at-home/server/${chapterId}`);
+  if (!meta?.baseUrl || !meta?.chapter?.data?.length) return null;
+  return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
+}
+
+async function getMangaPillPages(chapterSlug) {
+  const html = await fetchHtml(`https://mangapill.com/chapters/${chapterSlug}`);
+  if (!html) return null;
+  const matches = [...html.matchAll(/data-src="([^"]+)"/g)];
+  return matches.length ? matches.map((m) => m[1]) : null;
+}
+
+// ---------------- BACKUP LIVE AGGREGATORS (IF NO INTEL) ----------------
 async function searchComicK(title) {
   const cleanTitle = title.replace(/['’]/g, '').trim();
   const json = await fetchJson(
-    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(cleanTitle)}&limit=10&type=comic`
+    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(cleanTitle)}&limit=8&type=comic`
   );
   if (!Array.isArray(json) || json.length === 0) return [];
 
@@ -168,20 +152,11 @@ async function getComicKChapters(hid) {
     }
     if (json.chapters.length < 100) break;
     page++;
-    await delay(35);
+    await delay(30);
   }
   return map;
 }
 
-async function getComicKPages(chapterHid) {
-  const json = await fetchJson(`https://api.comick.io/chapter/${chapterHid}`);
-  if (!json?.chapter?.images?.length) return null;
-  return json.chapter.images
-    .map((img) => img.url || (img.b2key ? `https://meo3.comick.pictures/${img.b2key}` : null))
-    .filter(Boolean);
-}
-
-// ---------------- 4. MANGADEX ----------------
 async function searchMangaDex(title) {
   const json = await fetchJson(
     `https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=5&order[relevance]=desc`
@@ -214,18 +189,11 @@ async function getMangaDexChapters(mangaId) {
     }
     if (json.data.length < limit) break;
     offset += limit;
-    await delay(45);
+    await delay(35);
   }
   return map;
 }
 
-async function getMangaDexPages(chapterId) {
-  const meta = await fetchJson(`https://api.mangadex.org/at-home/server/${chapterId}`);
-  if (!meta?.baseUrl || !meta?.chapter?.data?.length) return null;
-  return meta.chapter.data.map((file) => `${meta.baseUrl}/data/${meta.chapter.hash}/${file}`);
-}
-
-// ---------------- 5. MANGAPILL ----------------
 async function searchMangaPill(title) {
   if (!/^[\x00-\x7F]+$/.test(title)) return null;
 
@@ -261,16 +229,45 @@ async function getMangaPillChapters(slug) {
   return map;
 }
 
-async function getMangaPillPages(chapterSlug) {
-  const html = await fetchHtml(`https://mangapill.com/chapters/${chapterSlug}`);
-  if (!html) return null;
-  const matches = [...html.matchAll(/data-src="([^"]+)"/g)];
-  return matches.length ? matches.map((m) => m[1]) : null;
-}
-
-// ---------------- AGGREGATION ENGINE ----------------
+// ---------------- UNIFIED INTEL-FIRST BUILDER ----------------
 async function buildAggregatedChapterMap(s) {
   const unifiedMap = new Map();
+
+  // 1. QUERY PRE-SCOUTED INTEL TABLE FIRST (HIGH SPEED / ZERO GUESSING)
+  const { data: intelRows } = await supabase
+    .from('series_intel')
+    .select('*')
+    .eq('series_id', s.id);
+
+  if (intelRows && intelRows.length > 0) {
+    console.log(`   [Intel Engine] Found ${intelRows.length} scouted platforms for ${s.title}`);
+    for (const intel of intelRows) {
+      const verifiedList = Array.isArray(intel.verified_chapters) ? intel.verified_chapters : [];
+      for (const item of verifiedList) {
+        const key = toKey(item.chNum);
+        if (!key) continue;
+
+        if (!unifiedMap.has(key)) unifiedMap.set(key, []);
+
+        if (intel.source_platform === 'hivetoons') {
+          unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', order: 1 });
+        } else if (intel.source_platform === 'asura') {
+          unifiedMap.get(key).push({ id: item.url, type: 'asura', order: 2 });
+        } else if (intel.source_platform === 'comick') {
+          unifiedMap.get(key).push({ id: item.hid, type: 'comick', order: 3 });
+        } else if (intel.source_platform === 'mangapill') {
+          unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', order: 4 });
+        }
+      }
+    }
+  }
+
+  // If Intel provided extensive chapters, return early
+  if (unifiedMap.size >= 50) {
+    return cleanUnifiedMap(unifiedMap);
+  }
+
+  // 2. LIVE DISCOVERY FALLBACK
   const checkedHids = new Set();
   const checkedQueries = new Set();
 
@@ -281,22 +278,6 @@ async function buildAggregatedChapterMap(s) {
     }
   };
 
-  const slug = (s.slug || '').toLowerCase();
-  const title = (s.title || '').toLowerCase();
-
-  // Poll scanlation sites for key manhwa series
-  if (slug.includes('lookism') || title.includes('lookism')) {
-    merge(await getHiveToonsChapters('lookism'));
-  }
-  if (slug.includes('eleceed') || title.includes('eleceed')) {
-    merge(await getHiveToonsChapters('eleceed'));
-    merge(await getAsuraChapters('eleceed'));
-  }
-  if (slug.includes('omniscient') || title.includes('omniscient reader')) {
-    merge(await getAsuraChapters('omniscient-readers-viewpoint'));
-  }
-
-  // Assemble queries
   const queries = [s.english_title, s.title, s.native_title];
   if (Array.isArray(s.synonyms)) queries.push(...s.synonyms);
   else if (typeof s.synonyms === 'string') {
@@ -333,8 +314,11 @@ async function buildAggregatedChapterMap(s) {
     await delay(30);
   }
 
-  // Deduplicate candidates
-  for (const [key, candidates] of unifiedMap.entries()) {
+  return cleanUnifiedMap(unifiedMap);
+}
+
+function cleanUnifiedMap(map) {
+  for (const [key, candidates] of map.entries()) {
     const seen = new Set();
     const unique = [];
     for (const c of candidates) {
@@ -345,16 +329,16 @@ async function buildAggregatedChapterMap(s) {
       }
     }
     unique.sort((a, b) => a.order - b.order);
-    unifiedMap.set(key, unique);
+    map.set(key, unique);
   }
-
-  return unifiedMap;
+  return map;
 }
 
+// ---------------- MAIN SYNC ROUTINE ----------------
 async function syncSeries(s) {
   await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
-  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Aggregating all sources...`);
+  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Processing chapters...`);
   const unifiedMap = await buildAggregatedChapterMap(s);
 
   if (unifiedMap.size === 0) {
@@ -377,7 +361,7 @@ async function syncSeries(s) {
   for (const [k, candidates] of unifiedMap.entries()) {
     const chNum = parseFloat(k);
 
-    // Filter out web novel spikes for specific titles
+    // Safeguard caps for completed manga with novel leaks
     if (s.slug === 'doctor-elise' && chNum > 145) continue;
     if (s.slug === 'a25e46ec-30f7-4db6-89df-cacbc1d9a900' && chNum > 140) continue; // Horimiya
 
@@ -403,7 +387,7 @@ async function syncSeries(s) {
     return;
   }
 
-  console.log(`   Found ${unifiedMap.size} available chapters online! Ingesting / Repairing ${tasks.length} missing chapters...`);
+  console.log(`   Found ${unifiedMap.size} available chapters! Ingesting / Repairing ${tasks.length} missing chapters...`);
 
   let addedCount = 0;
   let repairedCount = 0;
