@@ -15,6 +15,63 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
 const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '1', 10);
 
+// DIRECT OVERRIDES FOR MAJOR MANHWA WITH DMCA GAPS OR UNUSUAL TITLES
+const KNOWN_SOURCE_OVERRIDES = {
+  // Lookism (500+ Chapters)
+  'lookism': {
+    comickSlug: 'lookism',
+    mangapillSlug: '2437/lookism',
+    customTitles: ['Lookism', '외모지상주의', 'Park Tae-jun']
+  },
+  // Omniscient Reader's Viewpoint (250+ Chapters)
+  'omniscient-readers-viewpoint': {
+    comickSlug: '00-omniscient-reader-s-viewpoint',
+    mangapillSlug: '4883/omniscient-readers-viewpoint',
+    customTitles: ['Omniscient Reader', 'Omniscient Reader’s Viewpoint', '전지적 독자 시점']
+  },
+  // Eleceed (300+ Chapters)
+  'eleceed': {
+    comickSlug: 'eleceed',
+    mangapillSlug: '3514/eleceed',
+    customTitles: ['Eleceed', '일렉시드']
+  },
+  // Latna Saga: Survival of a Sword King (240+ Chapters)
+  'latna-saga-survival-of-a-sword-king': {
+    comickSlug: 'survival-story-of-a-sword-king-in-a-fantasy-world',
+    mangapillSlug: '4166/survival-story-of-a-sword-king-in-a-fantasy-world',
+    customTitles: ['Survival Story of a Sword King in a Fantasy World', 'Latna Saga']
+  },
+  // Mercenary Enrollment (250+ Chapters)
+  '9ecd208c-c592-4462-9f57-4d7d4a9f956f': {
+    comickSlug: 'teenage-mercenary',
+    mangapillSlug: '4979/mercenary-enrollment',
+    customTitles: ['Teenage Mercenary', 'Mercenary Enrollment', '입학용병']
+  },
+  // The Greatest Estate Developer (200+ Chapters)
+  'd7f56ace-cd30-48b9-8b64-afeca0077fca': {
+    comickSlug: 'the-world-s-best-engineer',
+    mangapillSlug: '5482/the-greatest-estate-developer',
+    customTitles: ['The Greatest Estate Developer', 'The World’s Best Engineer', '역대급 영지 설계사']
+  },
+  // Dungeon Reset (240+ Chapters)
+  'dcdcc8c7-932e-4f60-a900-5f19934eb6cf': {
+    comickSlug: 'dungeon-reset',
+    mangapillSlug: '3643/dungeon-reset',
+    customTitles: ['Dungeon Reset', '던전 리셋']
+  },
+  // SSS-Class Revival Hunter
+  '4a973243-952e-44d7-a50f-883b4b7c9cc2': {
+    comickSlug: 'sss-class-suicide-hunter',
+    mangapillSlug: '5029/sss-class-suicide-hunter',
+    customTitles: ['SSS-Class Suicide Hunter', 'SSS-Class Revival Hunter']
+  },
+  // Priscilla's Marriage Request (Zero chapter fix)
+  'priscilla-s-marriage-request': {
+    comickSlug: 'priscilla-s-marriage-proposal',
+    customTitles: ['Priscilla’s Marriage Proposal', 'Priscilla’s Marriage Request', '프리실라의 결혼 의뢰']
+  }
+};
+
 async function fetchJson(url, options = {}) {
   try {
     const res = await fetch(url, {
@@ -75,7 +132,7 @@ function isNovelKeyword(text) {
 // ---------------- COMICK ----------------
 async function searchComicK(title) {
   const json = await fetchJson(
-    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=6&type=comic`
+    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=8&type=comic`
   );
   if (!Array.isArray(json) || json.length === 0) return null;
 
@@ -90,6 +147,11 @@ async function searchComicK(title) {
   });
 
   return comic?.hid || json[0]?.hid || null;
+}
+
+async function getComicKHidBySlug(slug) {
+  const json = await fetchJson(`https://api.comick.io/comic/${slug}`);
+  return json?.comic?.hid || null;
 }
 
 async function getComicKChapters(hid) {
@@ -107,7 +169,7 @@ async function getComicKChapters(hid) {
     }
     if (json.chapters.length < 100) break;
     page++;
-    await delay(50);
+    await delay(40);
   }
   return map;
 }
@@ -208,7 +270,7 @@ async function getMangaPillPages(chapterSlug) {
 }
 
 // ---------------- MULTI-ALIAS AGGREGATION ----------------
-async function buildAggregatedChapterMap(searchTitles) {
+async function buildAggregatedChapterMap(searchTitles, overrideConfig = null) {
   const unifiedMap = new Map();
   const checkedQueries = new Set();
 
@@ -219,7 +281,23 @@ async function buildAggregatedChapterMap(searchTitles) {
     }
   };
 
+  // 1. Check direct overrides first
+  if (overrideConfig) {
+    if (overrideConfig.comickSlug) {
+      const hid = await getComicKHidBySlug(overrideConfig.comickSlug);
+      if (hid) merge(await getComicKChapters(hid));
+    }
+    if (overrideConfig.mangapillSlug) {
+      merge(await getMangaPillChapters(overrideConfig.mangapillSlug));
+    }
+  }
+
+  // 2. Query search sources
   const queryQueue = [];
+  if (overrideConfig?.customTitles) {
+    queryQueue.push(...overrideConfig.customTitles);
+  }
+
   for (const raw of searchTitles) {
     if (!raw) continue;
     queryQueue.push(raw.trim());
@@ -249,9 +327,10 @@ async function buildAggregatedChapterMap(searchTitles) {
     if (mdId) merge(await getMangaDexChapters(mdId));
     if (mpSlug) merge(await getMangaPillChapters(mpSlug));
 
-    await delay(50);
+    await delay(40);
   }
 
+  // Deduplicate and prioritize by provider rank
   for (const [key, candidates] of unifiedMap.entries()) {
     const seen = new Set();
     const unique = [];
@@ -272,6 +351,8 @@ async function buildAggregatedChapterMap(searchTitles) {
 async function syncSeries(s) {
   await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
+  const overrideConfig = KNOWN_SOURCE_OVERRIDES[s.slug] || KNOWN_SOURCE_OVERRIDES[s.id] || null;
+
   const searchTitles = [s.english_title, s.title, s.native_title];
   if (Array.isArray(s.synonyms)) {
     searchTitles.push(...s.synonyms);
@@ -286,7 +367,7 @@ async function syncSeries(s) {
   }
 
   console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Resolving comic releases...`);
-  const unifiedMap = await buildAggregatedChapterMap(searchTitles);
+  const unifiedMap = await buildAggregatedChapterMap(searchTitles, overrideConfig);
 
   if (unifiedMap.size === 0) {
     console.log('   No online graphic releases matched.');
@@ -328,7 +409,7 @@ async function syncSeries(s) {
     return;
   }
 
-  console.log(`   Ingesting / Repairing ${tasks.length} missing chapters...`);
+  console.log(`   Found ${unifiedMap.size} available chapters online! Ingesting / Repairing ${tasks.length} missing chapters...`);
 
   let addedCount = 0;
   let repairedCount = 0;
@@ -408,7 +489,7 @@ async function main() {
 
   const { data: allSeries, error } = await supabase
     .from('series')
-    .select('id, title, english_title, native_title, synonyms')
+    .select('id, slug, title, english_title, native_title, synonyms')
     .order('updated_at', { ascending: true })
     .limit(100);
 
