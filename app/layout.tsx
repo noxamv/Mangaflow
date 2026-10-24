@@ -144,7 +144,6 @@ export default function RootLayout({
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Focus search input when toggled open
   useEffect(() => {
     if (searchOpen) {
       setTimeout(() => searchInputRef.current?.focus(), 50);
