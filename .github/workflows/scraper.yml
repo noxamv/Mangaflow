@@ -1,24 +1,23 @@
-name: MangaFlow Intel Scout Bot
+name: MangaFlow Unified Scout & Ingestion Engine
 
 on:
   schedule:
-    # Runs at the top of every hour
-    - cron: '0 * * * *'
+    # Runs automatically every 30 minutes
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
-permissions:
-  contents: read
-  actions: write
-
 concurrency:
-  group: mangaflow-intel-scout
+  group: mangaflow-unified-pipeline
   cancel-in-progress: true
 
 jobs:
+  # ==========================================================
+  # STAGE 1: INTEL SCOUT (Gathers target URLs & max chapter IDs)
+  # ==========================================================
   scout-intel:
-    name: Scout & Index Source Intel
+    name: 🛰️ Intel Scout (Recon)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - name: Checkout Code Repository
@@ -39,9 +38,37 @@ jobs:
           NODE_NO_WARNINGS: 1
         run: node scripts/scout-intel.js
 
-      - name: Automatically Trigger Ingestion Relay
+  # ==========================================================
+  # STAGE 2: 5-WORKER INGESTION MATRIX (Downloads Chapter Images)
+  # Runs automatically right after STAGE 1 completes
+  # ==========================================================
+  token-relay:
+    name: 📥 Ingestion Worker (${{ matrix.worker_id }})
+    needs: [scout-intel]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker_id: [1, 2, 3, 4, 5]
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout Code Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run Multi-Source Ingestion Engine
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "Scout pass complete. Triggering ingestion workers..."
-          gh workflow run scraper.yml || echo "Workflow trigger passed or already running."
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          WORKER_ID: ${{ matrix.worker_id }}
+          TOTAL_WORKERS: 5
+          NODE_NO_WARNINGS: 1
+        run: node scripts/sync-multi-source.js
