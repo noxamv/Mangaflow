@@ -1,12 +1,19 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { supabase } from '../../lib/supabase';
 
 export default function SettingsPage() {
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Home section visibility
   const [showContinueHome, setShowContinueHome] = useState(true);
   const [showFollowedHome, setShowFollowedHome] = useState(true);
 
-  const [folders, setFolders] = useState({
+  // Following titles visible on home feed
+  const [homeFolders, setHomeFolders] = useState({
     reading: true,
     completed: false,
     on_hold: false,
@@ -14,13 +21,23 @@ export default function SettingsPage() {
     plan_to_read: false,
   });
 
-  const [languages, setLanguages] = useState({
-    en: true,
-    fr: true,
-    es: true,
-    pt: true,
-    ja: true,
+  // Notification triggers by shelf
+  const [notifFolders, setNotifFolders] = useState({
+    reading: true,
+    completed: true,
+    on_hold: true,
+    dropped: true,
+    plan_to_read: true,
   });
+
+  useEffect(() => {
+    async function loadUser() {
+      const { data } = await supabase.auth.getUser();
+      setUser(data?.user ?? null);
+      setLoading(false);
+    }
+    loadUser();
+  }, []);
 
   const Toggle = ({ active, onChange }: { active: boolean; onChange: () => void }) => (
     <button
@@ -38,39 +55,59 @@ export default function SettingsPage() {
     </button>
   );
 
+  const username = user?.user_metadata?.display_name || user?.email?.split('@')[0] || 'Reader';
+  const joinDate = user?.created_at
+    ? new Date(user.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : 'Recently';
+
   return (
-    <main className="max-w-2xl mx-auto px-4 py-8 space-y-8">
+    <main className="max-w-xl mx-auto px-4 py-8 space-y-6 w-full max-w-full overflow-x-hidden min-w-0">
+      {/* Top Header Card */}
+      {user && (
+        <div className="bg-[#13151f] border border-neutral-800/80 rounded-2xl p-4 flex items-center gap-3.5 shadow-xl">
+          <div className="w-12 h-12 rounded-full bg-indigo-600 border border-indigo-400 text-white font-black text-base flex items-center justify-center uppercase shadow-md shrink-0">
+            {username.charAt(0)}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-sm font-bold text-white truncate">{username}</h2>
+            <p className="text-[11px] text-neutral-400">Joined {joinDate}</p>
+          </div>
+          <Link
+            href="/profile/edit"
+            className="text-[11px] text-indigo-400 hover:text-indigo-300 font-bold bg-neutral-900 border border-neutral-800 px-3 py-1.5 rounded-xl transition"
+          >
+            Edit Profile
+          </Link>
+        </div>
+      )}
+
       <div>
-        <h1 className="text-2xl font-black text-white">Settings</h1>
-        <p className="text-xs text-neutral-400 mt-1">Control how your followed titles and feeds surface.</p>
+        <h1 className="text-xl font-bold text-white">Settings</h1>
+        <p className="text-xs text-neutral-400 mt-1">Control how your followed titles surface on the home page.</p>
       </div>
 
-      {/* Home Feed Display */}
-      <section className="bg-[#13151f] border border-neutral-800 rounded-2xl p-5 space-y-4">
-        <h2 className="text-xs font-black uppercase tracking-wider text-neutral-400">Home Feed</h2>
-        <div className="divide-y divide-neutral-800/60">
+      {/* 1. Home Section Visibility */}
+      <section className="bg-[#13151f] border border-neutral-800/80 rounded-2xl p-5 space-y-3 shadow-lg">
+        <h2 className="text-xs font-bold text-white">Home</h2>
+        <p className="text-[11px] text-neutral-500">Choose which personal sections appear on the home page.</p>
+        <div className="divide-y divide-neutral-800/60 pt-1">
           <div className="py-3 flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold text-white">Show Continue Reading on home</p>
-              <p className="text-[11px] text-neutral-500">Display your recent history row on the home page.</p>
-            </div>
+            <span className="text-xs text-neutral-200">Show Continue Reading on home</span>
             <Toggle active={showContinueHome} onChange={() => setShowContinueHome(!showContinueHome)} />
           </div>
 
           <div className="py-3 flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold text-white">Show new chapters from followed titles</p>
-              <p className="text-[11px] text-neutral-500">Surface quick updates for your bookmarked series.</p>
-            </div>
+            <span className="text-xs text-neutral-200">Show new chapters from following titles on home</span>
             <Toggle active={showFollowedHome} onChange={() => setShowFollowedHome(!showFollowedHome)} />
           </div>
         </div>
       </section>
 
-      {/* Following Titles on Home Folders */}
-      <section className="bg-[#13151f] border border-neutral-800 rounded-2xl p-5 space-y-4">
-        <h2 className="text-xs font-black uppercase tracking-wider text-neutral-400">Folders on Home Feed</h2>
-        <div className="divide-y divide-neutral-800/60">
+      {/* 2. Following Titles on Home (Folder Shelves) */}
+      <section className="bg-[#13151f] border border-neutral-800/80 rounded-2xl p-5 space-y-3 shadow-lg">
+        <h2 className="text-xs font-bold text-white">Following titles on home</h2>
+        <p className="text-[11px] text-neutral-500">Choose which folders show their followed titles on the home page.</p>
+        <div className="divide-y divide-neutral-800/60 pt-1">
           {[
             { id: 'reading', label: 'Reading' },
             { id: 'completed', label: 'Completed' },
@@ -79,35 +116,33 @@ export default function SettingsPage() {
             { id: 'plan_to_read', label: 'Plan to Read' },
           ].map((f) => (
             <div key={f.id} className="py-3 flex items-center justify-between">
-              <span className="text-xs font-semibold text-white">{f.label}</span>
+              <span className="text-xs text-neutral-200">{f.label}</span>
               <Toggle
-                active={(folders as any)[f.id]}
-                onChange={() => setFolders((prev) => ({ ...prev, [f.id]: !(prev as any)[f.id] }))}
+                active={(homeFolders as any)[f.id]}
+                onChange={() => setHomeFolders((prev) => ({ ...prev, [f.id]: !(prev as any)[f.id] }))}
               />
             </div>
           ))}
         </div>
       </section>
 
-      {/* Notification Languages */}
-      <section className="bg-[#13151f] border border-neutral-800 rounded-2xl p-5 space-y-4">
-        <h2 className="text-xs font-black uppercase tracking-wider text-neutral-400">Notification Languages</h2>
-        <div className="divide-y divide-neutral-800/60">
+      {/* 3. New Chapter Notifications */}
+      <section className="bg-[#13151f] border border-neutral-800/80 rounded-2xl p-5 space-y-3 shadow-lg">
+        <h2 className="text-xs font-bold text-white">New chapter notifications</h2>
+        <p className="text-[11px] text-neutral-500">Choose which folders notify you when a new chapter is released.</p>
+        <div className="divide-y divide-neutral-800/60 pt-1">
           {[
-            { id: 'en', label: 'English', flag: '🇬🇧' },
-            { id: 'fr', label: 'French', flag: '🇫🇷' },
-            { id: 'es', label: 'Spanish', flag: '🇪🇸' },
-            { id: 'pt', label: 'Portuguese', flag: '🇵🇹' },
-            { id: 'ja', label: 'Japanese', flag: '🇯🇵' },
-          ].map((l) => (
-            <div key={l.id} className="py-3 flex items-center justify-between">
-              <span className="text-xs font-semibold text-white flex items-center gap-2">
-                <span>{l.flag}</span>
-                <span>{l.label}</span>
-              </span>
+            { id: 'reading', label: 'Reading' },
+            { id: 'completed', label: 'Completed' },
+            { id: 'on_hold', label: 'On-Hold' },
+            { id: 'dropped', label: 'Dropped' },
+            { id: 'plan_to_read', label: 'Plan to Read' },
+          ].map((f) => (
+            <div key={f.id} className="py-3 flex items-center justify-between">
+              <span className="text-xs text-neutral-200">{f.label}</span>
               <Toggle
-                active={(languages as any)[l.id]}
-                onChange={() => setLanguages((prev) => ({ ...prev, [l.id]: !(prev as any)[l.id] }))}
+                active={(notifFolders as any)[f.id]}
+                onChange={() => setNotifFolders((prev) => ({ ...prev, [f.id]: !(prev as any)[f.id] }))}
               />
             </div>
           ))}
