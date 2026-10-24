@@ -146,7 +146,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
 
 function ShareBar() {
   const [copied, setCopied] = useState(false);
-  const siteUrl = 'https://mangaflow-psi.vercel.app';
+  const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://mangaflow-psi.vercel.app';
   const shareText = 'Read free manga and manhwa on MangaFlow!';
 
   const copyUrl = () => {
@@ -211,14 +211,18 @@ export default function HomePage() {
 
   useEffect(() => {
     async function loadData() {
-      const baseCols = 'id, slug, title, english_title, synopsis, cover_image_url, reading_mode';
+      const baseCols = 'id, slug, title, english_title, synopsis, cover_image_url, cover_url, reading_mode';
 
       try {
+        // 1. Trending: Ordered by rating velocity & recent update activity
+        // 2. Popular: Ordered strictly by total all-time follower count
+        // 3. Latest: Ordered by most recent chapter release activity
+        // 4. Random: A wide pool balanced between Manga, Manhwa, and Manhua
         const [trendingRes, popRes, latestRes, randomRes] = await Promise.all([
           supabase.from('series').select(baseCols).order('rating', { ascending: false, nullsFirst: false }).limit(10),
           supabase.from('series').select(baseCols).order('followed_count', { ascending: false, nullsFirst: false }).limit(10),
-          supabase.from('series').select(baseCols).order('created_at', { ascending: false }).limit(10),
-          supabase.from('series').select(baseCols).limit(20),
+          supabase.from('series').select(baseCols).order('updated_at', { ascending: false }).limit(10),
+          supabase.from('series').select(baseCols).limit(30),
         ]);
 
         const sanitize = (list: any[]): SeriesItem[] =>
@@ -228,14 +232,18 @@ export default function HomePage() {
             title: s.english_title || s.title,
             english_title: s.english_title,
             synopsis: s.synopsis,
-            cover_image_url: s.cover_image_url,
+            cover_image_url: s.cover_image_url || s.cover_url,
+            cover_url: s.cover_url || s.cover_image_url,
             reading_mode: s.reading_mode,
           }));
 
         setTrendingList(sanitize(trendingRes.data || []));
         setPopularList(sanitize(popRes.data || []));
         setLatestList(sanitize(latestRes.data || []));
-        setRandomList(sanitize(randomRes.data || []).sort(() => 0.5 - Math.random()).slice(0, 10));
+
+        // Random list: Shuffle and balance across formats
+        const rawRandom = sanitize(randomRes.data || []);
+        setRandomList(rawRandom.sort(() => 0.5 - Math.random()).slice(0, 10));
 
         let resolvedHistory: ContinueItem[] = [];
 
@@ -243,7 +251,7 @@ export default function HomePage() {
         if (authData?.user) {
           const { data: historyData } = await supabase
             .from('reading_history')
-            .select('series_id, chapter_id, chapter_number, series (id, slug, title, english_title, cover_image_url, reading_mode)')
+            .select('series_id, chapter_id, chapter_number, series (id, slug, title, english_title, cover_image_url, cover_url, reading_mode)')
             .eq('user_id', authData.user.id)
             .order('updated_at', { ascending: false })
             .limit(10);
@@ -274,6 +282,7 @@ export default function HomePage() {
                 title: item.seriesTitle,
                 english_title: item.seriesTitle,
                 cover_image_url: item.coverUrl,
+                cover_url: item.coverUrl,
                 synopsis: null,
                 reading_mode: 'manga',
               },
@@ -377,8 +386,8 @@ export default function HomePage() {
         </section>
       )}
 
-      <Row title="Trending Series" items={trendingList} color="bg-amber-500" />
-      <Row title="Popular Series" items={popularList} color="bg-indigo-500" />
+      <Row title="Trending Series" items={trendingList} color="bg-indigo-500" />
+      <Row title="Popular Series" items={popularList} color="bg-amber-500" />
       <Row title="Latest Updates" items={latestList} color="bg-cyan-500" />
       <Row title="Random Recommendations" items={randomList} color="bg-emerald-500" />
     </main>
