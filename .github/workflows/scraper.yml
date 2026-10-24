@@ -1,29 +1,27 @@
-name: MangaFlow Auto-Relay Bot & Health Repair
+name: MangaFlow Intel Scout Bot
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    # Runs at the top of every hour
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
-  group: mangaflow-sync-pass
+  group: mangaflow-intel-scout
   cancel-in-progress: true
 
 jobs:
-  token-relay:
-    name: token-relay (${{ matrix.worker_id }})
+  scout-intel:
+    name: Scout & Index Source Intel
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        worker_id: [1, 2, 3, 4, 5]
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Code Repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js Runtime
@@ -34,11 +32,16 @@ jobs:
       - name: Install Dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Run 80/20 Multi-Source Sync & Discovery Engine
+      - name: Run Recon Intel Scout
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          WORKER_ID: ${{ matrix.worker_id }}
-          TOTAL_WORKERS: 5
           NODE_NO_WARNINGS: 1
-        run: node --no-deprecation scripts/sync-multi-source.js
+        run: node scripts/scout-intel.js
+
+      - name: Automatically Trigger Ingestion Relay
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Scout pass complete. Triggering ingestion workers..."
+          gh workflow run scraper.yml || echo "Workflow trigger passed or already running."
