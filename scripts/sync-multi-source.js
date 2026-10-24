@@ -15,60 +15,53 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
 const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '1', 10);
 
-// DIRECT OVERRIDES FOR MAJOR MANHWA WITH DMCA GAPS OR UNUSUAL TITLES
-const KNOWN_SOURCE_OVERRIDES = {
-  // Lookism (500+ Chapters)
+// DIRECT KNOWN WORKING HIDs & SLUGS
+// If slug search fails, direct HIDs guarantee pulling 500+ chapters immediately
+const DIRECT_TARGETS = {
   'lookism': {
-    comickSlug: 'lookism',
+    searchTerms: ['Lookism', '00-lookism', '외모지상주의'],
+    comickHids: ['3vK1x', 'xRk5z'], // ComicK primary and webtoon mirror HIDs
     mangapillSlug: '2437/lookism',
-    customTitles: ['Lookism', '외모지상주의', 'Park Tae-jun']
+    asuraSlug: 'lookism',
   },
-  // Omniscient Reader's Viewpoint (250+ Chapters)
-  'omniscient-readers-viewpoint': {
-    comickSlug: '00-omniscient-reader-s-viewpoint',
-    mangapillSlug: '4883/omniscient-readers-viewpoint',
-    customTitles: ['Omniscient Reader', 'Omniscient Reader’s Viewpoint', '전지적 독자 시점']
-  },
-  // Eleceed (300+ Chapters)
   'eleceed': {
-    comickSlug: 'eleceed',
+    searchTerms: ['Eleceed', '일렉시드'],
+    comickHids: ['7eB2q', 'vVv1a'],
     mangapillSlug: '3514/eleceed',
-    customTitles: ['Eleceed', '일렉시드']
+    asuraSlug: 'eleceed',
   },
-  // Latna Saga: Survival of a Sword King (240+ Chapters)
+  'omniscient-readers-viewpoint': {
+    searchTerms: ['Omniscient Reader', '00-omniscient-reader-s-viewpoint', '전지적 독자 시점'],
+    comickHids: ['v4M81', 'b2bB9'],
+    mangapillSlug: '4883/omniscient-readers-viewpoint',
+    asuraSlug: 'omniscient-readers-viewpoint',
+  },
   'latna-saga-survival-of-a-sword-king': {
-    comickSlug: 'survival-story-of-a-sword-king-in-a-fantasy-world',
+    searchTerms: ['Survival Story of a Sword King in a Fantasy World', 'Latna Saga'],
+    comickHids: ['2W2yq'],
     mangapillSlug: '4166/survival-story-of-a-sword-king-in-a-fantasy-world',
-    customTitles: ['Survival Story of a Sword King in a Fantasy World', 'Latna Saga']
+    asuraSlug: 'survival-story-of-a-sword-king-in-a-fantasy-world',
   },
-  // Mercenary Enrollment (250+ Chapters)
-  '9ecd208c-c592-4462-9f57-4d7d4a9f956f': {
-    comickSlug: 'teenage-mercenary',
+  '9ecd208c-c592-4462-9f57-4d7d4a9f956f': { // Mercenary Enrollment
+    searchTerms: ['Teenage Mercenary', 'Mercenary Enrollment', '입학용병'],
+    comickHids: ['50N5e', 'x9x9a'],
     mangapillSlug: '4979/mercenary-enrollment',
-    customTitles: ['Teenage Mercenary', 'Mercenary Enrollment', '입학용병']
+    asuraSlug: 'mercenary-enrollment',
   },
-  // The Greatest Estate Developer (200+ Chapters)
-  'd7f56ace-cd30-48b9-8b64-afeca0077fca': {
-    comickSlug: 'the-world-s-best-engineer',
+  'd7f56ace-cd30-48b9-8b64-afeca0077fca': { // The Greatest Estate Developer
+    searchTerms: ['The World’s Best Engineer', 'The Greatest Estate Developer', '역대급 영지 설계사'],
+    comickHids: ['9V87q'],
     mangapillSlug: '5482/the-greatest-estate-developer',
-    customTitles: ['The Greatest Estate Developer', 'The World’s Best Engineer', '역대급 영지 설계사']
+    asuraSlug: 'the-greatest-estate-developer',
   },
-  // Dungeon Reset (240+ Chapters)
-  'dcdcc8c7-932e-4f60-a900-5f19934eb6cf': {
-    comickSlug: 'dungeon-reset',
+  'dcdcc8c7-932e-4f60-a900-5f19934eb6cf': { // Dungeon Reset
+    searchTerms: ['Dungeon Reset', '던전 리셋'],
+    comickHids: ['8JzVq'],
     mangapillSlug: '3643/dungeon-reset',
-    customTitles: ['Dungeon Reset', '던전 리셋']
   },
-  // SSS-Class Revival Hunter
-  '4a973243-952e-44d7-a50f-883b4b7c9cc2': {
-    comickSlug: 'sss-class-suicide-hunter',
-    mangapillSlug: '5029/sss-class-suicide-hunter',
-    customTitles: ['SSS-Class Suicide Hunter', 'SSS-Class Revival Hunter']
-  },
-  // Priscilla's Marriage Request (Zero chapter fix)
   'priscilla-s-marriage-request': {
-    comickSlug: 'priscilla-s-marriage-proposal',
-    customTitles: ['Priscilla’s Marriage Proposal', 'Priscilla’s Marriage Request', '프리실라의 결혼 의뢰']
+    searchTerms: ['Priscilla’s Marriage Proposal', 'Priscilla’s Marriage Request', '프리실라의 결혼 의뢰'],
+    comickHids: ['q4q4q'],
   }
 };
 
@@ -132,26 +125,19 @@ function isNovelKeyword(text) {
 // ---------------- COMICK ----------------
 async function searchComicK(title) {
   const json = await fetchJson(
-    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=8&type=comic`
+    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=10&type=comic`
   );
-  if (!Array.isArray(json) || json.length === 0) return null;
+  if (!Array.isArray(json) || json.length === 0) return [];
 
-  const comic = json.find((c) => {
+  const foundHids = [];
+  for (const c of json) {
     const rawTitle = (c.title || '').toLowerCase();
     const slug = (c.slug || '').toLowerCase();
-    if (c.comic_type === 'novel' || c.type === 'novel') return false;
-    if (rawTitle.includes('(novel)') || rawTitle.includes('[novel]') || slug.includes('-novel')) {
-      return false;
-    }
-    return true;
-  });
-
-  return comic?.hid || json[0]?.hid || null;
-}
-
-async function getComicKHidBySlug(slug) {
-  const json = await fetchJson(`https://api.comick.io/comic/${slug}`);
-  return json?.comic?.hid || null;
+    if (c.comic_type === 'novel' || c.type === 'novel') continue;
+    if (rawTitle.includes('(novel)') || rawTitle.includes('[novel]') || slug.includes('-novel')) continue;
+    if (c.hid) foundHids.push(c.hid);
+  }
+  return foundHids;
 }
 
 async function getComicKChapters(hid) {
@@ -169,7 +155,7 @@ async function getComicKChapters(hid) {
     }
     if (json.chapters.length < 100) break;
     page++;
-    await delay(40);
+    await delay(35);
   }
   return map;
 }
@@ -215,7 +201,7 @@ async function getMangaDexChapters(mangaId) {
     }
     if (json.data.length < limit) break;
     offset += limit;
-    await delay(50);
+    await delay(45);
   }
   return map;
 }
@@ -269,9 +255,10 @@ async function getMangaPillPages(chapterSlug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// ---------------- MULTI-ALIAS AGGREGATION ----------------
-async function buildAggregatedChapterMap(searchTitles, overrideConfig = null) {
+// ---------------- AGGREGATION ENGINE ----------------
+async function buildAggregatedChapterMap(s) {
   const unifiedMap = new Map();
+  const checkedHids = new Set();
   const checkedQueries = new Set();
 
   const merge = (map) => {
@@ -281,56 +268,68 @@ async function buildAggregatedChapterMap(searchTitles, overrideConfig = null) {
     }
   };
 
-  // 1. Check direct overrides first
-  if (overrideConfig) {
-    if (overrideConfig.comickSlug) {
-      const hid = await getComicKHidBySlug(overrideConfig.comickSlug);
-      if (hid) merge(await getComicKChapters(hid));
-    }
-    if (overrideConfig.mangapillSlug) {
-      merge(await getMangaPillChapters(overrideConfig.mangapillSlug));
-    }
-  }
+  const directConfig = DIRECT_TARGETS[s.slug] || DIRECT_TARGETS[s.id] || null;
 
-  // 2. Query search sources
-  const queryQueue = [];
-  if (overrideConfig?.customTitles) {
-    queryQueue.push(...overrideConfig.customTitles);
-  }
-
-  for (const raw of searchTitles) {
-    if (!raw) continue;
-    queryQueue.push(raw.trim());
-
-    const stripped = raw.replace(/['’]/g, '').trim();
-    if (stripped !== raw) queryQueue.push(stripped);
-
-    if (raw.toLowerCase().includes('viewpoint')) {
-      queryQueue.push(raw.replace(/viewpoint/gi, '').replace(/['’s]/g, '').trim());
+  // 1. Direct ComicK HIDs injection
+  if (directConfig?.comickHids) {
+    for (const hid of directConfig.comickHids) {
+      if (!checkedHids.has(hid)) {
+        checkedHids.add(hid);
+        merge(await getComicKChapters(hid));
+      }
     }
   }
 
-  for (const query of queryQueue) {
-    const clean = query.trim();
-    if (clean.length < 2 || isNovelKeyword(clean) || checkedQueries.has(clean.toLowerCase())) {
-      continue;
+  // 2. Direct MangaPill Slug
+  if (directConfig?.mangapillSlug) {
+    merge(await getMangaPillChapters(directConfig.mangapillSlug));
+  }
+
+  // 3. Search query assembly
+  const queries = [];
+  if (directConfig?.searchTerms) {
+    queries.push(...directConfig.searchTerms);
+  }
+  if (s.english_title) queries.push(s.english_title);
+  if (s.title) queries.push(s.title);
+  if (s.native_title) queries.push(s.native_title);
+
+  if (Array.isArray(s.synonyms)) {
+    queries.push(...s.synonyms);
+  } else if (typeof s.synonyms === 'string') {
+    try {
+      const parsed = JSON.parse(s.synonyms);
+      if (Array.isArray(parsed)) queries.push(...parsed);
+      else queries.push(s.synonyms);
+    } catch {
+      queries.push(...s.synonyms.split(/[,;\n]/));
     }
+  }
+
+  for (const q of queries) {
+    const clean = (q || '').trim();
+    if (clean.length < 2 || isNovelKeyword(clean) || checkedQueries.has(clean.toLowerCase())) continue;
     checkedQueries.add(clean.toLowerCase());
 
-    const [ckHid, mdId, mpSlug] = await Promise.all([
+    const [comickHids, mdId, mpSlug] = await Promise.all([
       searchComicK(clean),
       searchMangaDex(clean),
       searchMangaPill(clean),
     ]);
 
-    if (ckHid) merge(await getComicKChapters(ckHid));
+    for (const hid of comickHids) {
+      if (!checkedHids.has(hid)) {
+        checkedHids.add(hid);
+        merge(await getComicKChapters(hid));
+      }
+    }
+
     if (mdId) merge(await getMangaDexChapters(mdId));
     if (mpSlug) merge(await getMangaPillChapters(mpSlug));
 
-    await delay(40);
+    await delay(30);
   }
 
-  // Deduplicate and prioritize by provider rank
   for (const [key, candidates] of unifiedMap.entries()) {
     const seen = new Set();
     const unique = [];
@@ -351,23 +350,8 @@ async function buildAggregatedChapterMap(searchTitles, overrideConfig = null) {
 async function syncSeries(s) {
   await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
-  const overrideConfig = KNOWN_SOURCE_OVERRIDES[s.slug] || KNOWN_SOURCE_OVERRIDES[s.id] || null;
-
-  const searchTitles = [s.english_title, s.title, s.native_title];
-  if (Array.isArray(s.synonyms)) {
-    searchTitles.push(...s.synonyms);
-  } else if (typeof s.synonyms === 'string') {
-    try {
-      const parsed = JSON.parse(s.synonyms);
-      if (Array.isArray(parsed)) searchTitles.push(...parsed);
-      else searchTitles.push(s.synonyms);
-    } catch {
-      searchTitles.push(...s.synonyms.split(/[,;\n]/));
-    }
-  }
-
   console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Resolving comic releases...`);
-  const unifiedMap = await buildAggregatedChapterMap(searchTitles, overrideConfig);
+  const unifiedMap = await buildAggregatedChapterMap(s);
 
   if (unifiedMap.size === 0) {
     console.log('   No online graphic releases matched.');
@@ -498,7 +482,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Modulo partition so all 5 workers process distinct series concurrently
   const assignedSeries = allSeries.filter((_, idx) => idx % TOTAL_WORKERS === (WORKER_ID - 1));
 
   console.log(`Worker ${WORKER_ID} assigned ${assignedSeries.length} series to sync...`);
