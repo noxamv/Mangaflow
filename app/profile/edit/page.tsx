@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 
 const DEFAULT_AVATARS = [
@@ -21,6 +22,7 @@ const ALL_GENRES = [
 ];
 
 export default function EditProfilePage() {
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [displayName, setDisplayName] = useState('');
@@ -75,6 +77,7 @@ export default function EditProfilePage() {
       setMessage(`Error: ${error.message}`);
     } else {
       setMessage('Profile and preferences updated successfully!');
+      router.refresh();
     }
   };
 
@@ -92,10 +95,10 @@ export default function EditProfilePage() {
         <div>
           <h1 className="text-xl font-bold text-white">Edit Profile</h1>
           <p className="text-xs text-neutral-400 mt-1">
-            Manage your username, content preference, and favorite genres
+            Manage your username, avatar, content preference, and favorite genres
           </p>
         </div>
-        <Link href="/" className="text-xs text-indigo-400 hover:text-indigo-300 transition">
+        <Link href="/" className="text-xs text-indigo-400 hover:text-indigo-300 transition font-bold">
           ← Back
         </Link>
       </div>
@@ -113,7 +116,7 @@ export default function EditProfilePage() {
       )}
 
       <form onSubmit={handleSave} className="space-y-6 bg-[#13151f] border border-neutral-800 rounded-2xl p-5 shadow-xl">
-        {/* Profile Avatar */}
+        {/* Profile Avatar Selection */}
         <div>
           <label className="text-xs font-semibold text-neutral-300 block mb-2">Profile Avatar</label>
           <div className="flex items-center gap-3 flex-wrap">
@@ -125,6 +128,7 @@ export default function EditProfilePage() {
                   ? 'border-indigo-500 bg-neutral-800 ring-2 ring-indigo-500/30'
                   : 'border-neutral-700 bg-neutral-900 text-neutral-400'
               }`}
+              title="Default Silhouette"
             >
               <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
@@ -145,7 +149,7 @@ export default function EditProfilePage() {
           </div>
         </div>
 
-        {/* Display Name */}
+        {/* Display Username */}
         <div>
           <label className="text-xs font-semibold text-neutral-300 block mb-1.5">Display Username</label>
           <input
@@ -157,7 +161,7 @@ export default function EditProfilePage() {
           />
         </div>
 
-        {/* Email */}
+        {/* Email Address */}
         <div>
           <label className="text-xs font-semibold text-neutral-300 block mb-1.5">Email Address</label>
           <input
@@ -169,7 +173,7 @@ export default function EditProfilePage() {
           <span className="text-[10px] text-neutral-500 mt-1 block">Authentication email managed by Supabase OTP.</span>
         </div>
 
-        {/* Content Mode Preference */}
+        {/* Reading Content Mode */}
         <div>
           <label className="text-xs font-semibold text-neutral-300 block mb-1.5">Reading Content Mode</label>
           <div className="grid grid-cols-3 gap-2">
