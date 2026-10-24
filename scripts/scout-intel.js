@@ -20,7 +20,7 @@ const BROWSER_HEADERS = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
   'Accept': 'application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
-  'Referer': 'https://comick.io/',
+  'Referer': 'https://www.google.com/',
 };
 
 async function safeFetchJson(url) {
@@ -66,7 +66,89 @@ function isNovel(text) {
   );
 }
 
-// --- COMICK HARVESTER ---
+// --- 1. HIVETOONS HARVESTER (Lookism, Eleceed, Action Manhwa) ---
+async function harvestHiveToons(searchTerms, slug) {
+  const candidateSlugs = [slug, slug?.replace(/-/g, ''), ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
+  const uniqueSlugs = [...new Set(candidateSlugs.filter(Boolean))];
+
+  for (const s of uniqueSlugs) {
+    const url = `https://hivetoons.org/series/${s}`;
+    const html = await safeFetchHtml(url);
+    if (!html || html.includes('404 Not Found') || !html.includes('chapter-')) continue;
+
+    const chapters = [];
+    const regex = /href=["'](https?:\/\/hivetoons\.org\/series\/[^"']*\/chapter-([0-9]+(?:\.[0-9]+)?)[^"']*)["']/gi;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      const num = cleanNum(match[2]);
+      if (num !== null) chapters.push({ chNum: num, url: match[1], title: `Chapter ${num}` });
+    }
+
+    if (chapters.length > 0) {
+      return { url, chapters };
+    }
+  }
+  return null;
+}
+
+// --- 2. ASURA SCANS HARVESTER (Solo, Glitch, Dungeon titles) ---
+async function harvestAsura(searchTerms, slug) {
+  const candidateSlugs = [slug, ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
+  const uniqueSlugs = [...new Set(candidateSlugs.filter(Boolean))];
+
+  for (const s of uniqueSlugs) {
+    const url = `https://asurascans.com/series/${s}`;
+    const html = await safeFetchHtml(url);
+    if (!html || !html.includes('chapter/')) continue;
+
+    const chapters = [];
+    const regex = /href=["'](https?:\/\/asurascans\.com\/series\/[^"']*\/chapter\/([0-9]+(?:\.[0-9]+)?)[^"']*)["']/gi;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      const num = cleanNum(match[2]);
+      if (num !== null) chapters.push({ chNum: num, url: match[1], title: `Chapter ${num}` });
+    }
+
+    if (chapters.length > 0) {
+      return { url, chapters };
+    }
+  }
+  return null;
+}
+
+// --- 3. MANGANATO / MANGABAT MIRROR HARVESTER (Backlog Gaps & Cultivation) ---
+async function harvestMangaNato(searchTerms) {
+  for (const term of searchTerms) {
+    if (!term || isNovel(term)) continue;
+    const clean = term.replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, '_');
+    const searchUrl = `https://manganato.com/search/story/${encodeURIComponent(clean.toLowerCase())}`;
+    const html = await safeFetchHtml(searchUrl);
+    if (!html) continue;
+
+    const match = html.match(/href="(https:\/\/[^"]*(?:manganato|mangabat)\.com\/[^"]*manga-[^"]+)"/i) ||
+                  html.match(/href="(https:\/\/(?:read|chap)[^"]*\/(?:manga|read)-[^"]+)"/i);
+    if (!match) continue;
+
+    const mangaUrl = match[1];
+    const pageHtml = await safeFetchHtml(mangaUrl);
+    if (!pageHtml) continue;
+
+    const chapters = [];
+    const regex = /href="(https:\/\/[^"]*\/chapter-([0-9]+(?:\.[0-9]+)?)[^"]*)"/gi;
+    let m;
+    while ((m = regex.exec(pageHtml)) !== null) {
+      const num = cleanNum(m[2]);
+      if (num !== null) chapters.push({ chNum: num, url: m[1], title: `Chapter ${num}` });
+    }
+
+    if (chapters.length > 0) {
+      return { url: mangaUrl, chapters };
+    }
+  }
+  return null;
+}
+
+// --- 4. COMICK HARVESTER ---
 async function harvestComicK(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term)) continue;
@@ -109,7 +191,7 @@ async function harvestComicK(searchTerms) {
   return null;
 }
 
-// --- MANGADEX HARVESTER ---
+// --- 5. MANGADEX HARVESTER ---
 async function harvestMangaDex(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term)) continue;
@@ -154,7 +236,7 @@ async function harvestMangaDex(searchTerms) {
   return null;
 }
 
-// --- MANGAPILL HARVESTER ---
+// --- 6. MANGAPILL HARVESTER ---
 async function harvestMangaPill(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term) || !/^[\x00-\x7F]+$/.test(term)) continue;
@@ -185,48 +267,16 @@ async function harvestMangaPill(searchTerms) {
   return null;
 }
 
-// --- MANGABAT MIRROR HARVESTER ---
-async function harvestMangaBat(searchTerms) {
-  for (const term of searchTerms) {
-    if (!term || isNovel(term)) continue;
-    const clean = term.replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, '_');
-    const html = await safeFetchHtml(`https://h.mangabat.com/search/manga/${encodeURIComponent(clean)}`);
-    if (!html) continue;
-
-    const match = html.match(/href="(https:\/\/[^"]*mangabat\.com\/manga\/[^"]+)"/i);
-    if (!match) continue;
-
-    const mangaUrl = match[1];
-    const pageHtml = await safeFetchHtml(mangaUrl);
-    if (!pageHtml) continue;
-
-    const chapters = [];
-    const regex = /href="(https:\/\/[^"]*\/chapter-[^"]+)"[^>]*>.*?chapter\s*([0-9]+(?:\.[0-9]+)?)/gi;
-    let m;
-    while ((m = regex.exec(pageHtml)) !== null) {
-      const num = cleanNum(m[2]);
-      if (num !== null) chapters.push({ chNum: num, url: m[1] });
-    }
-
-    if (chapters.length > 0) {
-      return { url: mangaUrl, chapters };
-    }
-  }
-  return null;
-}
-
-// --- MAIN DISPATCHER ---
+// --- MAIN RUNNER ---
 async function runScout() {
-  console.log('=== MangaFlow Intelligent Dual Scout (New Drops + Gap Repair) ===');
+  console.log('=== MangaFlow Multi-Ecosystem Scout (Official + Scanlators + Mirrors) ===');
 
-  // 1. Pull top 15 series with the largest chapter gaps from our view
   const { data: gappedSeries } = await supabase
     .from('v_series_with_gaps')
     .select('series_id, title, slug, english_title, synonyms, missing_count')
     .order('missing_count', { ascending: false })
     .limit(15);
 
-  // 2. Pull series due for periodic refresh (oldest updated)
   const { data: scheduledSeries } = await supabase
     .from('series')
     .select('id, title, slug, english_title, synonyms')
@@ -259,37 +309,92 @@ async function runScout() {
   }
 
   const targets = Array.from(targetMap.values());
-  console.log(`🎯 Scout targeting ${targets.length} priority series (${gappedSeries?.length || 0} gap repairs + scheduled backlog).`);
+  console.log(`🎯 Scouting ${targets.length} priority series across 6 source tiers.`);
 
   for (const s of targets) {
-    console.log(`\n🔍 Scouting: ${s.title} ${s.isGap ? `[🚨 GAP: -${s.missingCount} chapters]` : '[QUEUE CYCLE]'}`);
+    console.log(`\n🔍 Target: ${s.title} ${s.isGap ? `[GAP: -${s.missingCount}]` : '[CYCLE]'}`);
 
-    // Update timestamp immediately so the queue constantly advances
-    await supabase
-      .from('series')
-      .update({ updated_at: new Date().toISOString() })
-      .eq('id', s.id);
+    await supabase.from('series').update({ updated_at: new Date().toISOString() }).eq('id', s.id);
 
-    // Build intelligent alias list
-    const aliases = [s.title, s.english_title, s.slug.replace(/-/g, ' ')];
-    if (s.slug === 'star-martial-god-technique') aliases.unshift('Star Martial God Technique');
-    if (s.slug.includes('mercenary') || s.title.toLowerCase().includes('mercenary enrollment')) {
+    const aliases = [s.title, s.english_title, s.slug?.replace(/-/g, ' ')];
+    if (s.slug === 'star-martial-god-technique' || s.title?.includes('Astral Sutra')) {
+      aliases.unshift('Star Martial God Technique');
+    }
+    if (s.slug?.includes('mercenary') || s.title?.toLowerCase().includes('mercenary enrollment')) {
       aliases.push('Teenage Mercenary');
     }
     if (Array.isArray(s.synonyms)) {
       aliases.push(...s.synonyms);
-    } else if (typeof s.synonyms === 'string') {
-      try {
-        const parsed = JSON.parse(s.synonyms);
-        if (Array.isArray(parsed)) aliases.push(...parsed);
-      } catch {
-        aliases.push(...s.synonyms.split(/[,;\n]/));
-      }
     }
 
     const uniqueAliases = [...new Set(aliases.filter(Boolean))];
 
-    // Harvest ComicK
+    // Priority 1: Scanlators (HiveToons & Asura)
+    try {
+      const hive = await harvestHiveToons(uniqueAliases, s.slug);
+      if (hive && hive.chapters.length) {
+        const maxCh = Math.max(...hive.chapters.map((c) => c.chNum));
+        await supabase.from('series_intel').upsert(
+          {
+            series_id: s.id,
+            slug: s.slug,
+            source_platform: 'hivetoons',
+            target_url: hive.url,
+            target_identifier: hive.url,
+            latest_known_chapter: maxCh,
+            verified_chapters: hive.chapters,
+            last_scouted_at: new Date().toISOString(),
+          },
+          { onConflict: 'series_id,source_platform' }
+        );
+        console.log(`  -> [HiveToons] Harvested ${hive.chapters.length} chapters.`);
+      }
+    } catch {}
+
+    try {
+      const asura = await harvestAsura(uniqueAliases, s.slug);
+      if (asura && asura.chapters.length) {
+        const maxCh = Math.max(...asura.chapters.map((c) => c.chNum));
+        await supabase.from('series_intel').upsert(
+          {
+            series_id: s.id,
+            slug: s.slug,
+            source_platform: 'asura',
+            target_url: asura.url,
+            target_identifier: asura.url,
+            latest_known_chapter: maxCh,
+            verified_chapters: asura.chapters,
+            last_scouted_at: new Date().toISOString(),
+          },
+          { onConflict: 'series_id,source_platform' }
+        );
+        console.log(`  -> [Asura] Harvested ${asura.chapters.length} chapters.`);
+      }
+    } catch {}
+
+    // Priority 2: MangaNato / Mirrors (Full deep backlogs)
+    try {
+      const nato = await harvestMangaNato(uniqueAliases);
+      if (nato && nato.chapters.length) {
+        const maxCh = Math.max(...nato.chapters.map((c) => c.chNum));
+        await supabase.from('series_intel').upsert(
+          {
+            series_id: s.id,
+            slug: s.slug,
+            source_platform: 'mangabat',
+            target_url: nato.url,
+            target_identifier: nato.url,
+            latest_known_chapter: maxCh,
+            verified_chapters: nato.chapters,
+            last_scouted_at: new Date().toISOString(),
+          },
+          { onConflict: 'series_id,source_platform' }
+        );
+        console.log(`  -> [MangaNato/Mirror] Harvested ${nato.chapters.length} chapters.`);
+      }
+    } catch {}
+
+    // Priority 3: ComicK
     try {
       const ck = await harvestComicK(uniqueAliases);
       if (ck && ck.chapters.length) {
@@ -309,11 +414,9 @@ async function runScout() {
         );
         console.log(`  -> [ComicK] Harvested ${ck.chapters.length} chapters.`);
       }
-    } catch (e) {
-      console.warn('ComicK error:', e.message);
-    }
+    } catch {}
 
-    // Harvest MangaDex
+    // Priority 4: MangaDex
     try {
       const md = await harvestMangaDex(uniqueAliases);
       if (md && md.chapters.length) {
@@ -333,11 +436,9 @@ async function runScout() {
         );
         console.log(`  -> [MangaDex] Harvested ${md.chapters.length} chapters.`);
       }
-    } catch (e) {
-      console.warn('MangaDex error:', e.message);
-    }
+    } catch {}
 
-    // Harvest MangaPill
+    // Priority 5: MangaPill
     try {
       const mp = await harvestMangaPill(uniqueAliases);
       if (mp && mp.chapters.length) {
@@ -357,38 +458,12 @@ async function runScout() {
         );
         console.log(`  -> [MangaPill] Harvested ${mp.chapters.length} chapters.`);
       }
-    } catch (e) {
-      console.warn('MangaPill error:', e.message);
-    }
-
-    // Harvest MangaBat (Fallback mirror)
-    try {
-      const mb = await harvestMangaBat(uniqueAliases);
-      if (mb && mb.chapters.length) {
-        const maxCh = Math.max(...mb.chapters.map((c) => c.chNum));
-        await supabase.from('series_intel').upsert(
-          {
-            series_id: s.id,
-            slug: s.slug,
-            source_platform: 'mangabat',
-            target_url: mb.url,
-            target_identifier: mb.url,
-            latest_known_chapter: maxCh,
-            verified_chapters: mb.chapters,
-            last_scouted_at: new Date().toISOString(),
-          },
-          { onConflict: 'series_id,source_platform' }
-        );
-        console.log(`  -> [MangaBat] Harvested ${mb.chapters.length} chapters.`);
-      }
-    } catch (e) {
-      console.warn('MangaBat error:', e.message);
-    }
+    } catch {}
 
     await delay(120);
   }
 
-  console.log('\n✅ Scout cycle completed.');
+  console.log('\n✅ Scout cycle completed with all sources active.');
 }
 
 runScout().catch(console.error);
