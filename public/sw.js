@@ -1,3 +1,4 @@
+// public/sw.js
 const CACHE_NAME = 'mangaflow-v5';
 
 const STATIC_SHELL_ASSETS = [
@@ -51,7 +52,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (url.pathname.startsWith('/api/proxy') || event.request.destination === 'image') {
+  if (url.pathname.startsWith('/api/proxy-image') || event.request.destination === 'image') {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {
         const cached = await cache.match(event.request);
