@@ -85,50 +85,72 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const coverUrl = resolveCoverUrl(current);
 
   return (
-    <div className="relative w-full h-80 sm:h-96 md:h-[420px] rounded-2xl overflow-hidden bg-[#13151f] border border-neutral-800/80 shadow-2xl">
+    <div className="relative w-full rounded-2xl overflow-hidden bg-[#13151f] border border-neutral-800/80 shadow-2xl p-4 sm:p-6 pb-7 sm:pb-8">
+      {/* Background Image Backdrop */}
       <div className="absolute inset-0 z-0">
         <SafeImage
           src={coverUrl}
           alt={current.title}
-          className="w-full h-full object-cover blur-md scale-105 opacity-25"
+          className="w-full h-full object-cover blur-xl scale-110 opacity-20"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0b0c14] via-[#0b0c14]/70 to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0b0c14] via-transparent to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#0b0c14] via-[#0b0c14]/85 to-[#0b0c14]/60" />
       </div>
 
-      <div className="relative z-10 h-full flex flex-col justify-end p-5 sm:p-7 md:p-8 max-w-2xl">
-        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 text-[11px] font-semibold w-fit mb-3">
-          <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-          Spotlight #{index + 1}
-        </div>
-        <h2 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white tracking-tight line-clamp-2">
-          {current.title}
-        </h2>
-        {current.synopsis && (
-          <p className="mt-2 text-xs sm:text-sm text-neutral-300 line-clamp-2 leading-relaxed">
-            {current.synopsis}
-          </p>
-        )}
-        <div className="mt-4 flex items-center gap-3">
-          <Link
-            href={`/series/${current.slug}`}
-            className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-semibold transition shadow-lg shadow-indigo-600/30 active:scale-95"
-          >
-            Read Now
-          </Link>
-          <div className="flex gap-1.5 ml-2">
-            {items.map((_, i) => (
-              <button
-                key={i}
-                onClick={() => setIndex(i)}
-                aria-label={`Go to slide ${i + 1}`}
-                className={`h-1.5 rounded-full transition-all duration-300 ${
-                  index === i ? 'w-6 bg-indigo-500' : 'w-1.5 bg-neutral-600'
-                }`}
-              />
-            ))}
+      {/* Content Container: Left Info + Right Poster */}
+      <div className="relative z-10 flex items-center justify-between gap-3 sm:gap-6">
+        {/* Left Column: Details */}
+        <div className="flex-1 min-w-0 pr-1">
+          <div className="flex items-center gap-1.5 sm:gap-2 mb-2 sm:mb-2.5 flex-wrap">
+            <span className="text-[9px] sm:text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-indigo-500/30 text-indigo-300 border border-indigo-500/40">
+              Spotlight #{index + 1}
+            </span>
+            <span className="text-[9px] sm:text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-black/60 text-neutral-300 border border-white/10">
+              {current.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
+            </span>
+          </div>
+
+          <h2 className="text-base sm:text-xl md:text-2xl font-black text-white tracking-tight line-clamp-1 sm:line-clamp-2 drop-shadow">
+            {current.title}
+          </h2>
+
+          {current.synopsis && (
+            <p className="mt-1 sm:mt-1.5 text-[11px] sm:text-xs text-neutral-300/90 line-clamp-2 leading-relaxed max-w-sm sm:max-w-md">
+              {current.synopsis}
+            </p>
+          )}
+
+          <div className="mt-3 sm:mt-4">
+            <Link
+              href={`/series/${current.slug}`}
+              className="inline-flex items-center gap-1.5 px-4 py-1.5 sm:px-5 sm:py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-bold transition shadow-lg shadow-indigo-600/30 active:scale-95"
+            >
+              Read Now →
+            </Link>
           </div>
         </div>
+
+        {/* Right Column: Series Cover Poster (Visible on Mobile) */}
+        <div className="shrink-0 w-24 sm:w-28 md:w-32 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-neutral-900">
+          <SafeImage
+            src={coverUrl}
+            alt={current.title}
+            className="w-full h-full object-cover"
+          />
+        </div>
+      </div>
+
+      {/* Centered Pagination Dots */}
+      <div className="absolute bottom-2 sm:bottom-2.5 left-0 right-0 z-20 flex justify-center items-center gap-1 sm:gap-1.5">
+        {items.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setIndex(i)}
+            aria-label={`Go to slide ${i + 1}`}
+            className={`h-1.5 rounded-full transition-all duration-300 ${
+              index === i ? 'w-5 sm:w-6 bg-indigo-500' : 'w-1.5 bg-neutral-600/80 hover:bg-neutral-500'
+            }`}
+          />
+        ))}
       </div>
     </div>
   );
@@ -212,10 +234,6 @@ export default function HomePage() {
       const baseCols = 'id, slug, title, english_title, synopsis, cover_image_url, cover_url, reading_mode';
 
       try {
-        // 1. Trending: Ordered by rating velocity & recent update activity
-        // 2. Popular: Ordered strictly by total all-time follower count
-        // 3. Latest: Ordered by most recent chapter release activity
-        // 4. Random: A wide pool balanced between Manga, Manhwa, and Manhua
         const [trendingRes, popRes, latestRes, randomRes] = await Promise.all([
           supabase.from('series').select(baseCols).order('rating', { ascending: false, nullsFirst: false }).limit(10),
           supabase.from('series').select(baseCols).order('followed_count', { ascending: false, nullsFirst: false }).limit(10),
@@ -244,7 +262,6 @@ export default function HomePage() {
           setRandomList(sanitize(shuffled));
         }
 
-        // 5. Reading History: Fetch active session items from local storage/auth
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user?.id) {
           const { data: historyData } = await supabase
