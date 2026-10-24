@@ -1,37 +1,44 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { supabase } from '../lib/supabase';
-import ShareBar from '../components/ShareBar';
+import { createClient } from '@supabase/supabase-js';
 
-interface ChapterItem {
-  id: string;
-  chapter_number: number;
-  created_at?: string;
-  published_at?: string;
-}
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+);
+
+const FALLBACK_POSTER =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='400' viewBox='0 0 300 400'%3E%3Crect width='300' height='400' fill='%2313151f'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='15px' fill='%236366f1' font-weight='bold'%3EMangaFlow%3C/text%3E%3C/svg%3E";
 
 interface SeriesItem {
   id: string;
-  title: string;
   slug: string;
-  cover_url: string | null;
-  cover_image_url: string | null;
-  description: string | null;
+  title: string;
+  english_title?: string | null;
   synopsis: string | null;
-  type: string | null;
-  reading_mode?: string | null;
-  status: string | null;
-  views_count?: number;
-  rating?: number;
-  genres: string[] | string | null;
-  updated_at: string;
-  chapters?: ChapterItem[];
+  cover_image_url: string | null;
+  cover_url?: string | null;
+  reading_mode: string | null;
 }
 
-const FALLBACK_POSTER =
-  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="420" viewBox="0 0 300 420"><rect width="300" height="420" fill="%2312151c"/><text x="50%25" y="50%25" dominant-baseline="middle" text-anchor="middle" fill="%2364748b" font-family="sans-serif" font-size="14">No Cover Available</text></svg>';
+interface ContinueItem {
+  series_id: string;
+  chapter_id: string;
+  chapter_number: number;
+  series: SeriesItem;
+}
+
+function resolveCoverUrl(item: any): string {
+  if (!item) return FALLBACK_POSTER;
+  const target = Array.isArray(item) ? item[0] : item;
+  const url = target?.cover_image_url || target?.cover_url || '';
+  if (!url || typeof url !== 'string' || url.trim() === '') {
+    return FALLBACK_POSTER;
+  }
+  return url;
+}
 
 function PosterImage({
   src,
@@ -71,72 +78,60 @@ function PosterImage({
 }
 
 function SpotlightSlider({ items }: { items: SeriesItem[] }) {
-  const [current, setCurrent] = useState(0);
+  const [index, setIndex] = useState(0);
 
   useEffect(() => {
     if (!items.length) return;
-    const interval = setInterval(() => {
-      setCurrent((prev) => (prev + 1) % items.length);
-    }, 6000);
-    return () => clearInterval(interval);
+    const timer = setInterval(() => {
+      setIndex((prev) => (prev + 1) % items.length);
+    }, 5500);
+    return () => clearInterval(timer);
   }, [items.length]);
 
   if (!items.length) return null;
-  const active = items[current];
+  const current = items[index];
 
   return (
-    <div className="relative w-full h-[320px] md:h-[460px] rounded-3xl overflow-hidden mb-12 shadow-2xl border border-white/5 bg-slate-900 group">
-      {/* Background Poster Blur */}
+    <div className="relative w-full h-72 sm:h-80 md:h-96 rounded-2xl overflow-hidden bg-[#13151f] border border-neutral-800/80 shadow-2xl">
       <div className="absolute inset-0 z-0">
         <PosterImage
-          src={active.cover_url || active.cover_image_url}
-          alt={active.title}
-          className="w-full h-full object-cover blur-2xl opacity-30 transform scale-110 transition-transform duration-1000 group-hover:scale-105"
+          src={resolveCoverUrl(current)}
+          alt={current.title}
+          className="w-full h-full object-cover blur-md scale-105 opacity-25"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0b0d14] via-[#0b0d14]/70 to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0b0d14] via-[#0b0d14]/80 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#0b0c14] via-[#0b0c14]/70 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-r from-[#0b0c14] via-transparent to-transparent" />
       </div>
 
-      {/* Content Layer */}
-      <div className="relative z-10 w-full h-full p-6 md:p-12 flex flex-col justify-end max-w-3xl">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-indigo-500 text-white shadow-lg shadow-indigo-500/30">
-            Spotlight #{current + 1}
-          </span>
-          <span className="px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-white/10 text-white backdrop-blur-md">
-            {active.type || 'Manga'}
-          </span>
-          {active.status && (
-            <span className="px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-              {active.status}
-            </span>
-          )}
+      <div className="relative z-10 h-full flex flex-col justify-end p-5 sm:p-7 md:p-8 max-w-2xl">
+        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 text-[11px] font-semibold w-fit mb-3">
+          <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+          Spotlight #{index + 1}
         </div>
-
-        <h1 className="text-2xl md:text-5xl font-black text-white leading-tight mb-3 line-clamp-2 drop-shadow-md">
-          {active.title}
-        </h1>
-
-        <p className="text-sm md:text-base text-slate-300 line-clamp-3 mb-6 drop-shadow">
-          {active.description || active.synopsis || 'Explore this trending title on MangaFlow.'}
-        </p>
-
-        <div className="flex items-center gap-4">
+        <h2 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-white tracking-tight line-clamp-2">
+          {current.title}
+        </h2>
+        {current.synopsis && (
+          <p className="mt-2 text-xs sm:text-sm text-neutral-300 line-clamp-2 leading-relaxed">
+            {current.synopsis}
+          </p>
+        )}
+        <div className="mt-4 flex items-center gap-3">
           <Link
-            href={`/series/${active.slug}`}
-            className="px-6 py-3 rounded-2xl bg-indigo-500 hover:bg-indigo-600 text-white font-bold text-sm md:text-base shadow-xl shadow-indigo-500/25 transition-all transform active:scale-95"
+            href={`/series/${current.slug}`}
+            className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-semibold transition shadow-lg shadow-indigo-600/30 active:scale-95"
           >
             Read Now
           </Link>
-          <div className="flex gap-2">
-            {items.map((_, idx) => (
+          <div className="flex gap-1.5 ml-2">
+            {items.map((_, i) => (
               <button
-                key={idx}
-                onClick={() => setCurrent(idx)}
-                className={`h-2 rounded-full transition-all duration-300 ${
-                  current === idx ? 'w-8 bg-indigo-500' : 'w-2 bg-white/30 hover:bg-white/50'
+                key={i}
+                onClick={() => setIndex(i)}
+                aria-label={`Go to slide ${i + 1}`}
+                className={`h-1.5 rounded-full transition-all duration-300 ${
+                  index === i ? 'w-6 bg-indigo-500' : 'w-1.5 bg-neutral-600'
                 }`}
-                aria-label={`Slide ${idx + 1}`}
               />
             ))}
           </div>
@@ -146,108 +141,150 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   );
 }
 
-function SeriesCard({ series }: { series: SeriesItem }) {
-  const latestChapters = series.chapters || [];
+function ShareBar() {
+  const [copied, setCopied] = useState(false);
+  const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://mangaflow-psi.vercel.app';
+  const shareText = 'Read free manga and manhwa on MangaFlow!';
+
+  const copyUrl = () => {
+    if (typeof window !== 'undefined') {
+      navigator.clipboard.writeText(siteUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   return (
-    <div className="flex flex-col group bg-slate-900/40 rounded-2xl border border-white/5 overflow-hidden hover:border-indigo-500/30 transition-all hover:shadow-xl hover:shadow-indigo-500/10">
-      <Link href={`/series/${series.slug}`} className="relative aspect-[3/4] w-full overflow-hidden bg-slate-800">
-        <PosterImage
-          src={series.cover_url || series.cover_image_url}
-          alt={series.title}
-          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-        />
-        <div className="absolute top-2 left-2 flex gap-1.5 flex-wrap">
-          <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase bg-slate-950/80 text-white backdrop-blur-md">
-            {series.type || 'Manga'}
-          </span>
-          {series.status === 'Completed' && (
-            <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase bg-emerald-500/80 text-white backdrop-blur-md">
-              End
-            </span>
-          )}
-        </div>
-        <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
-          <span className="text-xs font-semibold text-white bg-indigo-600 px-3 py-1.5 rounded-xl shadow-lg w-full text-center">
-            View Details
-          </span>
-        </div>
-      </Link>
-
-      <div className="p-3.5 flex flex-col flex-1">
-        <Link href={`/series/${series.slug}`}>
-          <h3 className="font-bold text-sm text-slate-100 line-clamp-1 group-hover:text-indigo-400 transition-colors">
-            {series.title}
-          </h3>
-        </Link>
-
-        <div className="mt-2.5 flex flex-col gap-1.5 flex-1 justify-end">
-          {latestChapters.length > 0 ? (
-            latestChapters.slice(0, 2).map((ch) => (
-              <Link
-                key={ch.id}
-                href={`/read/${ch.id}`}
-                className="flex items-center justify-between text-[11px] font-medium px-2 py-1.5 rounded-lg bg-white/5 hover:bg-indigo-600/20 hover:text-indigo-300 text-slate-300 transition-colors"
-              >
-                <span>Ch. {ch.chapter_number}</span>
-                <span className="text-[10px] text-slate-500">Read</span>
-              </Link>
-            ))
-          ) : (
-            <div className="text-[11px] text-slate-500 italic py-1">No chapters indexed</div>
-          )}
-        </div>
+    <div className="flex flex-wrap items-center justify-between gap-2 bg-[#13151f] border border-neutral-800/80 px-4 py-2.5 rounded-2xl text-xs">
+      <span className="text-[11px] font-semibold text-neutral-400">Share MangaFlow:</span>
+      <div className="flex items-center gap-2">
+        <a
+          href={`https://twitter.com/intent/tweet?url=${encodeURIComponent(siteUrl)}&text=${encodeURIComponent(shareText)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg transition"
+        >
+          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+        </a>
+        <a
+          href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(siteUrl)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg transition"
+        >
+          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+        </a>
+        <button
+          onClick={copyUrl}
+          className="flex items-center gap-1 px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium transition"
+        >
+          {copied ? 'Copied!' : 'Copy Link'}
+        </button>
       </div>
     </div>
   );
 }
 
-export default function HomePage() {
-  const [seriesList, setSeriesList] = useState<SeriesItem[]>([]);
+function SeriesCard({ series }: { series: SeriesItem }) {
+  return (
+    <Link
+      href={`/series/${series.slug}`}
+      className="group relative flex flex-col bg-[#13151f] border border-neutral-800/80 rounded-2xl overflow-hidden hover:border-neutral-700 transition duration-300"
+    >
+      <div className="relative aspect-[3/4] w-full overflow-hidden bg-neutral-900">
+        <PosterImage
+          src={resolveCoverUrl(series)}
+          alt={series.title}
+          className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-[#13151f] via-transparent to-transparent opacity-80" />
+      </div>
+
+      <div className="p-3 flex flex-col flex-1 justify-between">
+        <h3 className="text-xs sm:text-sm font-bold text-white group-hover:text-indigo-400 transition line-clamp-1">
+          {series.title}
+        </h3>
+        <p className="text-[11px] text-neutral-400 line-clamp-1 mt-1">
+          {series.synopsis || 'Read online free'}
+        </p>
+      </div>
+    </Link>
+  );
+}
+
+export default function Home() {
+  const [spotlight, setSpotlight] = useState<SeriesItem[]>([]);
+  const [continueReading, setContinueReading] = useState<ContinueItem[]>([]);
+  const [popular, setPopular] = useState<SeriesItem[]>([]);
+  const [latest, setLatest] = useState<SeriesItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     async function loadData() {
-      setLoading(true);
       try {
-        const { data, error } = await supabase
-          .from('series')
-          .select(`
-            id,
-            title,
-            slug,
-            cover_url,
-            cover_image_url,
-            description,
-            synopsis,
-            type,
-            status,
-            genres,
-            updated_at,
-            views_count,
-            rating,
-            chapters:chapters (
-              id,
-              chapter_number,
-              published_at,
-              created_at
-            )
-          `)
-          .order('updated_at', { ascending: false })
-          .limit(80);
+        setLoading(true);
 
-        if (error) {
-          console.error('Error fetching series for home:', error);
-        } else if (data) {
-          const formatted = (data as any[]).map((s) => ({
-            ...s,
-            chapters: (s.chapters || []).sort(
-              (a: ChapterItem, b: ChapterItem) => b.chapter_number - a.chapter_number
-            ),
-          }));
-          setSeriesList(formatted);
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (user) {
+          const { data: history } = await supabase
+            .from('reading_history')
+            .select(`
+              series_id,
+              chapter_id,
+              chapter_number,
+              series:series_id (
+                id,
+                slug,
+                title,
+                synopsis,
+                cover_image_url,
+                cover_url,
+                reading_mode
+              )
+            `)
+            .eq('user_id', user.id)
+            .order('updated_at', { ascending: false })
+            .limit(4);
+
+          if (history) {
+            const mapped = history
+              .map((h: any) => ({
+                series_id: h.series_id,
+                chapter_id: h.chapter_id,
+                chapter_number: h.chapter_number,
+                series: Array.isArray(h.series) ? h.series[0] : h.series,
+              }))
+              .filter((h: any) => h.series);
+            setContinueReading(mapped);
+          }
         }
+
+        const { data: spotData } = await supabase
+          .from('series')
+          .select('id, slug, title, synopsis, cover_image_url, cover_url, reading_mode')
+          .order('followed_count', { ascending: false })
+          .limit(5);
+
+        if (spotData) setSpotlight(spotData);
+
+        const { data: popData } = await supabase
+          .from('series')
+          .select('id, slug, title, synopsis, cover_image_url, cover_url, reading_mode')
+          .order('views_count', { ascending: false })
+          .limit(12);
+
+        if (popData) setPopular(popData);
+
+        const { data: latData } = await supabase
+          .from('series')
+          .select('id, slug, title, synopsis, cover_image_url, cover_url, reading_mode')
+          .order('updated_at', { ascending: false })
+          .limit(12);
+
+        if (latData) setLatest(latData);
       } catch (err) {
         console.error('Home load error:', err);
       } finally {
@@ -258,135 +295,112 @@ export default function HomePage() {
     loadData();
   }, []);
 
-  const spotlightItems = useMemo(() => {
-    return seriesList.slice(0, 5);
-  }, [seriesList]);
-
-  const filteredSeries = useMemo(() => {
-    if (!searchQuery.trim()) return seriesList;
-    const q = searchQuery.toLowerCase();
-    return seriesList.filter((s) => s.title.toLowerCase().includes(q));
-  }, [seriesList, searchQuery]);
-
-  const latestReleases = useMemo(() => {
-    return filteredSeries.slice(0, 24);
-  }, [filteredSeries]);
-
-  const popularManhwa = useMemo(() => {
-    return filteredSeries.filter((s) => (s.type || '').toLowerCase() === 'manhwa').slice(0, 12);
-  }, [filteredSeries]);
-
-  const popularManga = useMemo(() => {
-    return filteredSeries.filter((s) => (s.type || '').toLowerCase() === 'manga').slice(0, 12);
-  }, [filteredSeries]);
-
   return (
-    <div className="min-h-screen bg-[#0b0d14] text-slate-100 pb-20">
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-6">
-        {/* Spotlight Showcase */}
-        {!loading && spotlightItems.length > 0 && <SpotlightSlider items={spotlightItems} />}
+    <div className="space-y-8 sm:space-y-10">
+      {/* 1. Spotlight Slider */}
+      <SpotlightSlider items={spotlight} />
 
-        {/* Global ShareBar Banner */}
-        <div className="mb-10">
-          <ShareBar />
-        </div>
-
-        {/* Search & Header Section */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-          <div>
-            <h2 className="text-2xl font-black text-white flex items-center gap-2">
-              <span className="w-2.5 h-6 bg-indigo-500 rounded-full inline-block" />
-              Latest Chapter Drops
+      {/* 2. Continue Reading */}
+      {continueReading.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <span className="w-1.5 h-4 bg-indigo-500 rounded-full" />
+              Continue Reading
             </h2>
-            <p className="text-xs text-slate-400 mt-1">
-              Continuously aggregated across official and scanlator mirrors
-            </p>
           </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {continueReading.map((item) => (
+              <Link
+                key={item.series_id}
+                href={`/read/${item.chapter_id}`}
+                className="group flex gap-2.5 bg-[#13151f] border border-neutral-800/80 p-2 rounded-2xl hover:border-neutral-700 transition"
+              >
+                <div className="relative w-12 h-16 rounded-xl overflow-hidden bg-neutral-900 shrink-0">
+                  <PosterImage
+                    src={resolveCoverUrl(item.series)}
+                    alt={item.series.title}
+                    className="w-full h-full object-cover group-hover:scale-105 transition"
+                  />
+                </div>
+                <div className="flex flex-col justify-center min-w-0 pr-1">
+                  <span className="text-[11px] font-bold text-white truncate group-hover:text-indigo-400 transition">
+                    {item.series.title}
+                  </span>
+                  <span className="text-[10px] text-neutral-400 mt-0.5">
+                    Chapter {item.chapter_number}
+                  </span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
-          <div className="relative w-full md:w-72">
-            <input
-              type="text"
-              placeholder="Search active series..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-900 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
-            />
-          </div>
+      {/* 3. Popular Titles */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+            <span className="w-1.5 h-4 bg-indigo-500 rounded-full" />
+            Most Popular
+          </h2>
+          <Link
+            href="/popular"
+            className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition"
+          >
+            View All &rarr;
+          </Link>
         </div>
 
-        {/* Loading Skeleton */}
-        {loading && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {Array.from({ length: 12 }).map((_, idx) => (
-              <div
-                key={idx}
-                className="bg-slate-900/60 rounded-2xl aspect-[3/4] animate-pulse border border-white/5"
-              />
+        {loading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div key={i} className="aspect-[3/4] bg-[#13151f] rounded-2xl animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {popular.map((item) => (
+              <SeriesCard key={item.id} series={item} />
             ))}
           </div>
         )}
+      </section>
 
-        {/* Latest Releases Grid */}
-        {!loading && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-16">
-            {latestReleases.map((series) => (
-              <SeriesCard key={series.id} series={series} />
+      {/* 4. Latest Updates */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+            <span className="w-1.5 h-4 bg-indigo-500 rounded-full" />
+            Latest Updates
+          </h2>
+          <Link
+            href="/latest"
+            className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition"
+          >
+            View All &rarr;
+          </Link>
+        </div>
+
+        {loading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div key={i} className="aspect-[3/4] bg-[#13151f] rounded-2xl animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {latest.map((item) => (
+              <SeriesCard key={item.id} series={item} />
             ))}
           </div>
         )}
+      </section>
 
-        {/* Trending Manhwa Row */}
-        {!loading && popularManhwa.length > 0 && (
-          <div className="mb-16">
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h2 className="text-xl font-black text-white flex items-center gap-2">
-                  <span className="w-2.5 h-5 bg-purple-500 rounded-full inline-block" />
-                  Trending Webtoons & Manhwa
-                </h2>
-                <p className="text-xs text-slate-400 mt-0.5">Top serialized full-color Korean comics</p>
-              </div>
-              <Link
-                href="/filter?type=manhwa"
-                className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition-colors"
-              >
-                View All &rarr;
-              </Link>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {popularManhwa.map((series) => (
-                <SeriesCard key={series.id} series={series} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Japanese Manga Row */}
-        {!loading && popularManga.length > 0 && (
-          <div className="mb-16">
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h2 className="text-xl font-black text-white flex items-center gap-2">
-                  <span className="w-2.5 h-5 bg-rose-500 rounded-full inline-block" />
-                  Popular Japanese Manga
-                </h2>
-                <p className="text-xs text-slate-400 mt-0.5">Original black & white chapter releases</p>
-              </div>
-              <Link
-                href="/filter?type=manga"
-                className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition-colors"
-              >
-                View All &rarr;
-              </Link>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {popularManga.map((series) => (
-                <SeriesCard key={series.id} series={series} />
-              ))}
-            </div>
-          </div>
-        )}
-      </main>
+      {/* 5. Share Bar */}
+      <div className="pt-2">
+        <ShareBar />
+      </div>
     </div>
   );
 }
