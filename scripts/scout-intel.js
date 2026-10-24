@@ -52,30 +52,39 @@ function cleanNum(str) {
   return match ? parseFloat(match[0]) : null;
 }
 
-// --- COMICK CHECKER ---
-async function checkComicK(slugOrTitle) {
+// --- COMICK HARVESTER (Pulls all available chapters up to 40 pages) ---
+async function harvestComicK(title) {
+  const clean = title.replace(/['’]/g, '').trim();
   const search = await safeFetchJson(
-    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(slugOrTitle)}&limit=5&type=comic`
+    `https://api.comick.io/v1.0/search?q=${encodeURIComponent(clean)}&limit=5&type=comic`
   );
   if (!Array.isArray(search) || !search.length) return null;
   const comic = search[0];
   if (!comic?.hid) return null;
 
-  const json = await safeFetchJson(
-    `https://api.comick.io/comic/${comic.hid}/chapters?lang=en&page=1&limit=30`
-  );
-  if (!json?.chapters?.length) return null;
-
   const chapters = [];
-  for (const c of json.chapters) {
-    const num = cleanNum(c.chap);
-    if (num !== null && c.hid) chapters.push({ chNum: num, hid: c.hid, title: c.title || null });
+  let page = 1;
+  while (page <= 35) {
+    const json = await safeFetchJson(
+      `https://api.comick.io/comic/${comic.hid}/chapters?lang=en&page=${page}&limit=100`
+    );
+    if (!json?.chapters?.length) break;
+
+    for (const c of json.chapters) {
+      const num = cleanNum(c.chap);
+      if (num !== null && c.hid) {
+        chapters.push({ chNum: num, hid: c.hid, title: c.title || null });
+      }
+    }
+    if (json.chapters.length < 100) break;
+    page++;
+    await delay(30);
   }
-  return { hid: comic.hid, slug: comic.slug, chapters };
+  return chapters.length ? { hid: comic.hid, slug: comic.slug, chapters } : null;
 }
 
-// --- MANGADEX CHECKER ---
-async function checkMangaDex(title) {
+// --- MANGADEX HARVESTER (Deep offset pagination to bridge historical gaps) ---
+async function harvestMangaDex(title) {
   const search = await safeFetchJson(
     `https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=3&order[relevance]=desc`
   );
@@ -83,24 +92,31 @@ async function checkMangaDex(title) {
   const mangaId = search.data[0]?.id;
   if (!mangaId) return null;
 
-  const feed = await safeFetchJson(
-    `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&limit=30&order[chapter]=desc`
-  );
-  if (!feed?.data?.length) return null;
-
   const chapters = [];
-  for (const item of feed.data) {
-    const num = cleanNum(item.attributes?.chapter);
-    if (num !== null && item.id) {
-      chapters.push({ chNum: num, id: item.id, title: item.attributes?.title || null });
+  let offset = 0;
+  while (offset <= 1500) {
+    const feed = await safeFetchJson(
+      `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&limit=100&offset=${offset}&order[chapter]=desc`
+    );
+    if (!feed?.data?.length) break;
+
+    for (const item of feed.data) {
+      const num = cleanNum(item.attributes?.chapter);
+      if (num !== null && item.id) {
+        chapters.push({ chNum: num, id: item.id, title: item.attributes?.title || null });
+      }
     }
+    if (feed.data.length < 100) break;
+    offset += 100;
+    await delay(35);
   }
-  return { mangaId, chapters };
+  return chapters.length ? { mangaId, chapters } : null;
 }
 
-// --- MANGAPILL CHECKER ---
-async function checkMangaPill(cleanTitle) {
-  const html = await safeFetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(cleanTitle)}`);
+// --- MANGAPILL HARVESTER ---
+async function harvestMangaPill(title) {
+  const clean = title.replace(/['’]/g, '').trim();
+  const html = await safeFetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(clean)}`);
   if (!html) return null;
   const match = html.match(/href="\/manga\/([0-9]+\/([^"]+))"/i);
   if (!match) return null;
@@ -116,149 +132,134 @@ async function checkMangaPill(cleanTitle) {
     const num = cleanNum(m[2]);
     if (num !== null) chapters.push({ chNum: num, chapterSlug: m[1] });
   }
-  return { slug, chapters };
+  return chapters.length ? { slug, chapters } : null;
 }
 
-// --- MAIN RADAR DISPATCHER ---
-async function runReleaseRadar() {
+// --- SCOUT DISPATCHER ---
+async function runScout() {
+  console.log('=== MangaFlow Intelligent Dual Scout (New Drops + Gap Repair) ===');
+
+  // 1. PULL TOP 10 TITLES WITH LARGEST GAPS FIRST
+  const { data: gappedSeries } = await supabase
+    .from('v_series_with_gaps')
+    .select('series_id, title, slug, english_title, missing_count')
+    .order('missing_count', { ascending: false })
+    .limit(10);
+
+  // 2. PULL TODAYS SCHEDULED DROPS
   const now = new Date();
-  const currentDayOfWeek = now.getUTCDay(); // 0 = Sunday ... 6 = Saturday
-  const currentHourUTC = now.getUTCHours();
+  const currentDay = now.getUTCDay();
+  const currentHour = now.getUTCHours();
 
-  console.log(`📡 [Radar Activated] UTC Day: ${currentDayOfWeek} | UTC Hour: ${currentHourUTC}:00`);
-
-  // Target ONLY series due for release today OR delayed series whose retry timestamp has arrived
-  const { data: radarTargets, error } = await supabase
+  const { data: scheduledSeries } = await supabase
     .from('series')
-    .select('id, title, slug, english_title, delay_retry_count, next_attempt_at, sync_status')
+    .select('id, title, slug, english_title')
     .eq('is_on_hiatus', false)
-    .or(
-      `and(release_day_of_week.eq.${currentDayOfWeek},release_hour_utc.lte.${currentHourUTC},sync_status.eq.IDLE),sync_status.eq.DELAYED`
-    )
-    .lte('next_attempt_at', now.toISOString())
-    .limit(20);
+    .eq('release_day_of_week', currentDay)
+    .lte('release_hour_utc', currentHour)
+    .limit(10);
 
-  if (error) {
-    console.error('Error fetching radar targets:', error);
-    process.exit(1);
+  // Combine targets uniquely
+  const targetMap = new Map();
+  for (const s of gappedSeries || []) {
+    targetMap.set(s.series_id, { id: s.series_id, title: s.title, slug: s.slug, english_title: s.english_title, isGap: true });
+  }
+  for (const s of scheduledSeries || []) {
+    if (!targetMap.has(s.id)) {
+      targetMap.set(s.id, { id: s.id, title: s.title, slug: s.slug, english_title: s.english_title, isGap: false });
+    }
   }
 
-  if (!radarTargets || radarTargets.length === 0) {
-    console.log('✅ No series scheduled or delayed for this time window. Radar standing by.');
-    return;
-  }
+  const targets = Array.from(targetMap.values());
+  console.log(`🎯 Scout targeting ${targets.length} priority series (${gappedSeries?.length || 0} gap-heavy + ${scheduledSeries?.length || 0} scheduled drops).`);
 
-  console.log(`🎯 Identified ${radarTargets.length} series in active drop window.`);
+  for (const s of targets) {
+    console.log(`\n🔍 Scouting: ${s.title} ${s.isGap ? '[🚨 GAP REPAIR TARGET]' : '[DAILY DROP]'}`);
 
-  for (const s of radarTargets) {
-    console.log(`\n🔎 [Radar Checking] => ${s.title}`);
+    const searchTitle = s.english_title || s.title;
 
-    // Fetch the current max chapter in our database
-    const { data: currentMax } = await supabase
-      .from('chapters')
-      .select('chapter_number')
-      .eq('series_id', s.id)
-      .order('chapter_number', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const currentCeiling = currentMax?.chapter_number || 0;
-    const lookupTitle = s.english_title || s.title;
-
-    let discoveredChapters = [];
-    let providerName = null;
-    let targetIdentifier = null;
-
-    // Check ComicK
-    const ck = await checkComicK(lookupTitle);
-    if (ck && ck.chapters.length) {
-      discoveredChapters = ck.chapters;
-      providerName = 'comick';
-      targetIdentifier = ck.hid;
+    // Harvest ComicK
+    try {
+      const ck = await harvestComicK(searchTitle);
+      if (ck && ck.chapters.length) {
+        const maxCh = Math.max(...ck.chapters.map((c) => c.chNum));
+        await supabase.from('series_intel').upsert(
+          {
+            series_id: s.id,
+            slug: s.slug,
+            source_platform: 'comick',
+            target_url: `https://comick.io/comic/${ck.slug}`,
+            target_identifier: ck.hid,
+            latest_known_chapter: maxCh,
+            verified_chapters: ck.chapters,
+            last_scouted_at: new Date().toISOString(),
+          },
+          { onConflict: 'series_id,source_platform' }
+        );
+        console.log(`  -> [ComicK] Harvested ${ck.chapters.length} chapters.`);
+      }
+    } catch (e) {
+      console.warn('ComicK error:', e.message);
     }
 
-    // Check MangaDex if ComicK didn't find newer
-    if (!discoveredChapters.length) {
-      const md = await checkMangaDex(lookupTitle);
+    // Harvest MangaDex
+    try {
+      const md = await harvestMangaDex(searchTitle);
       if (md && md.chapters.length) {
-        discoveredChapters = md.chapters;
-        providerName = 'mangadex';
-        targetIdentifier = md.mangaId;
+        const maxCh = Math.max(...md.chapters.map((c) => c.chNum));
+        await supabase.from('series_intel').upsert(
+          {
+            series_id: s.id,
+            slug: s.slug,
+            source_platform: 'mangadex',
+            target_url: `https://mangadex.org/title/${md.mangaId}`,
+            target_identifier: md.mangaId,
+            latest_known_chapter: maxCh,
+            verified_chapters: md.chapters,
+            last_scouted_at: new Date().toISOString(),
+          },
+          { onConflict: 'series_id,source_platform' }
+        );
+        console.log(`  -> [MangaDex] Harvested ${md.chapters.length} chapters.`);
       }
+    } catch (e) {
+      console.warn('MangaDex error:', e.message);
     }
 
-    // Check MangaPill fallback
-    if (!discoveredChapters.length) {
-      const mp = await checkMangaPill(lookupTitle);
+    // Harvest MangaPill
+    try {
+      const mp = await harvestMangaPill(searchTitle);
       if (mp && mp.chapters.length) {
-        discoveredChapters = mp.chapters;
-        providerName = 'mangapill';
-        targetIdentifier = mp.slug;
+        const maxCh = Math.max(...mp.chapters.map((c) => c.chNum));
+        await supabase.from('series_intel').upsert(
+          {
+            series_id: s.id,
+            slug: s.slug,
+            source_platform: 'mangapill',
+            target_url: `https://mangapill.com/manga/${mp.slug}`,
+            target_identifier: mp.slug,
+            latest_known_chapter: maxCh,
+            verified_chapters: mp.chapters,
+            last_scouted_at: new Date().toISOString(),
+          },
+          { onConflict: 'series_id,source_platform' }
+        );
+        console.log(`  -> [MangaPill] Harvested ${mp.chapters.length} chapters.`);
       }
+    } catch (e) {
+      console.warn('MangaPill error:', e.message);
     }
 
-    const latestDiscovered = discoveredChapters.length
-      ? Math.max(...discoveredChapters.map((c) => c.chNum))
-      : 0;
+    // Flag as ready for worker ingestion
+    await supabase
+      .from('series')
+      .update({ sync_status: 'RADAR_ACTIVE', updated_at: new Date().toISOString() })
+      .eq('id', s.id);
 
-    if (latestDiscovered > currentCeiling) {
-      // NEW CHAPTER HAS DROPPED!
-      console.log(`🔥 [NEW CHAPTER FOUND] Ch. ${latestDiscovered} detected via ${providerName}!`);
-
-      await supabase.from('series_intel').upsert(
-        {
-          series_id: s.id,
-          slug: s.slug,
-          source_platform: providerName,
-          target_identifier: targetIdentifier,
-          latest_known_chapter: latestDiscovered,
-          verified_chapters: discoveredChapters,
-          last_scouted_at: new Date().toISOString(),
-        },
-        { onConflict: 'series_id,source_platform' }
-      );
-
-      // Flag for immediate worker download
-      await supabase
-        .from('series')
-        .update({
-          sync_status: 'RADAR_ACTIVE',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', s.id);
-    } else {
-      // Chapter has not dropped yet (Time delay or postponed)
-      const currentRetries = (s.delay_retry_count || 0) + 1;
-
-      if (currentRetries >= 8) {
-        // Retried for ~3-4 hours without release: The chapter is postponed to next week
-        console.log(`⏸️ [Postponed] ${s.title} exceeded 8 retry windows. Advancing to next week.`);
-        await supabase.rpc('advance_series_to_next_cycle', {
-          target_series_id: s.id,
-          days_to_advance: 7,
-        });
-      } else {
-        // Delayed: Retry in 25 minutes
-        const retryInMinutes = 25;
-        const nextAttempt = new Date(Date.now() + retryInMinutes * 60000).toISOString();
-        console.log(`⏳ [Delayed] ${s.title} Ch. ${currentCeiling + 1} not dropped yet. Attempt #${currentRetries}. Next check: +${retryInMinutes}m`);
-
-        await supabase
-          .from('series')
-          .update({
-            sync_status: 'DELAYED',
-            delay_retry_count: currentRetries,
-            next_attempt_at: nextAttempt,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', s.id);
-      }
-    }
-
-    await delay(100);
+    await delay(120);
   }
 
-  console.log('\n📡 Radar cycle complete.');
+  console.log('\n✅ Scout finished successfully.');
 }
 
-runReleaseRadar().catch(console.error);
+runScout().catch(console.error);
