@@ -5,7 +5,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABAS
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('Missing SUPABASE credentials');
+  console.error('Missing Supabase credentials');
   process.exit(1);
 }
 
@@ -18,12 +18,12 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const BROWSER_HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-  'Accept': 'application/json,text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+  'Accept': 'application/json,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
   'Referer': 'https://comick.io/',
 };
 
-async function fetchJson(url) {
+async function safeFetchJson(url) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
@@ -35,7 +35,7 @@ async function fetchJson(url) {
   }
 }
 
-async function fetchHtml(url) {
+async function safeFetchHtml(url) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 12000);
@@ -66,13 +66,13 @@ function isNovel(text) {
   );
 }
 
-// ---------------- 1. COMICK SCOUT ENGINE ----------------
-async function scoutComicK(searchTerms) {
+// --- COMICK HARVESTER ---
+async function harvestComicK(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term)) continue;
     const clean = term.replace(/['’]/g, '').trim();
 
-    const search = await fetchJson(
+    const search = await safeFetchJson(
       `https://api.comick.io/v1.0/search?q=${encodeURIComponent(clean)}&limit=8&type=comic`
     );
     if (!Array.isArray(search) || !search.length) continue;
@@ -85,7 +85,7 @@ async function scoutComicK(searchTerms) {
     const chapters = [];
     let page = 1;
     while (page <= 40) {
-      const json = await fetchJson(
+      const json = await safeFetchJson(
         `https://api.comick.io/comic/${comic.hid}/chapters?lang=en&page=${page}&limit=100`
       );
       if (!json?.chapters?.length) break;
@@ -99,7 +99,7 @@ async function scoutComicK(searchTerms) {
       }
       if (json.chapters.length < 100) break;
       page++;
-      await delay(35);
+      await delay(30);
     }
 
     if (chapters.length > 0) {
@@ -109,12 +109,12 @@ async function scoutComicK(searchTerms) {
   return null;
 }
 
-// ---------------- 2. MANGADEX SCOUT ENGINE ----------------
-async function scoutMangaDex(searchTerms) {
+// --- MANGADEX HARVESTER ---
+async function harvestMangaDex(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term)) continue;
 
-    const json = await fetchJson(
+    const json = await safeFetchJson(
       `https://api.mangadex.org/manga?title=${encodeURIComponent(term)}&limit=5&order[relevance]=desc`
     );
     if (!json?.data?.length) continue;
@@ -131,7 +131,7 @@ async function scoutMangaDex(searchTerms) {
     const chapters = [];
     let offset = 0;
     while (offset <= 1500) {
-      const feed = await fetchJson(
+      const feed = await safeFetchJson(
         `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&limit=100&offset=${offset}&order[chapter]=desc`
       );
       if (!feed?.data?.length) break;
@@ -154,20 +154,20 @@ async function scoutMangaDex(searchTerms) {
   return null;
 }
 
-// ---------------- 3. MANGAPILL SCOUT ENGINE ----------------
-async function scoutMangaPill(searchTerms) {
+// --- MANGAPILL HARVESTER ---
+async function harvestMangaPill(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term) || !/^[\x00-\x7F]+$/.test(term)) continue;
 
     const clean = term.replace(/['’]/g, '').trim();
-    const html = await fetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(clean)}`);
+    const html = await safeFetchHtml(`https://mangapill.com/search?q=${encodeURIComponent(clean)}`);
     if (!html) continue;
 
     const match = html.match(/href="\/manga\/([0-9]+\/([^"]+))"/i);
     if (!match) continue;
 
     const slug = match[1];
-    const pageHtml = await fetchHtml(`https://mangapill.com/manga/${slug}`);
+    const pageHtml = await safeFetchHtml(`https://mangapill.com/manga/${slug}`);
     if (!pageHtml) continue;
 
     const chapters = [];
@@ -185,11 +185,11 @@ async function scoutMangaPill(searchTerms) {
   return null;
 }
 
-// ---------------- MAIN RECON RUNNER ----------------
-async function main() {
-  console.log('=== MangaFlow Smart Reconnaissance Scout Online ===');
+// --- CONTINUOUS QUEUE RECON ENGINE ---
+async function runReconEngine() {
+  console.log('=== MangaFlow Autonomous Recon Engine Initialized ===');
 
-  // Pull series ordered by oldest updated timestamp
+  // Pull batch of 40 oldest series
   const { data: targetSeries, error } = await supabase
     .from('series')
     .select('id, title, slug, english_title, native_title, synonyms')
@@ -197,24 +197,22 @@ async function main() {
     .limit(40);
 
   if (error || !targetSeries) {
-    console.error('Failed to query series targets:', error);
+    console.error('Failed to query series backlog:', error);
     process.exit(1);
   }
 
   for (const s of targetSeries) {
     console.log(`\n🔍 [Scouting] => ${s.title}`);
 
-    // ROTATE QUEUE: Update timestamp immediately to advance backlog
+    // PERMANENT FIX: Bump timestamp immediately so queue always rotates
     await supabase
       .from('series')
       .update({ updated_at: new Date().toISOString() })
       .eq('id', s.id);
 
-    // Build unique search alias list
+    // Build intelligent alias array
     const aliases = [s.title, s.english_title, s.slug.replace(/-/g, ' ')];
-    if (s.slug === 'star-martial-god-technique') {
-      aliases.unshift('Star Martial God Technique');
-    }
+    if (s.slug === 'star-martial-god-technique') aliases.unshift('Star Martial God Technique');
     if (Array.isArray(s.synonyms)) {
       aliases.push(...s.synonyms);
     } else if (typeof s.synonyms === 'string') {
@@ -228,12 +226,12 @@ async function main() {
 
     const uniqueAliases = [...new Set(aliases.filter(Boolean))];
 
-    // Scout ComicK
+    // Harvest ComicK
     try {
-      const ck = await scoutComicK(uniqueAliases);
+      const ck = await harvestComicK(uniqueAliases);
       if (ck && ck.chapters.length) {
         const maxCh = Math.max(...ck.chapters.map((c) => c.chNum));
-        console.log(`  -> [COMICK] Discovered ${ck.chapters.length} chapters (Ceiling: Ch. ${maxCh})`);
+        console.log(`  -> [ComicK] ${ck.chapters.length} chapters (Max: Ch. ${maxCh})`);
         await supabase.from('series_intel').upsert(
           {
             series_id: s.id,
@@ -249,15 +247,15 @@ async function main() {
         );
       }
     } catch (err) {
-      console.warn(`  ! ComicK scout error on ${s.title}:`, err.message);
+      console.warn(`  ! ComicK failed on ${s.title}: ${err.message}`);
     }
 
-    // Scout MangaDex
+    // Harvest MangaDex
     try {
-      const md = await scoutMangaDex(uniqueAliases);
+      const md = await harvestMangaDex(uniqueAliases);
       if (md && md.chapters.length) {
         const maxCh = Math.max(...md.chapters.map((c) => c.chNum));
-        console.log(`  -> [MANGADEX] Discovered ${md.chapters.length} chapters (Ceiling: Ch. ${maxCh})`);
+        console.log(`  -> [MangaDex] ${md.chapters.length} chapters (Max: Ch. ${maxCh})`);
         await supabase.from('series_intel').upsert(
           {
             series_id: s.id,
@@ -273,15 +271,15 @@ async function main() {
         );
       }
     } catch (err) {
-      console.warn(`  ! MangaDex scout error on ${s.title}:`, err.message);
+      console.warn(`  ! MangaDex failed on ${s.title}: ${err.message}`);
     }
 
-    // Scout MangaPill
+    // Harvest MangaPill
     try {
-      const mp = await scoutMangaPill(uniqueAliases);
+      const mp = await harvestMangaPill(uniqueAliases);
       if (mp && mp.chapters.length) {
         const maxCh = Math.max(...mp.chapters.map((c) => c.chNum));
-        console.log(`  -> [MANGAPILL] Discovered ${mp.chapters.length} chapters (Ceiling: Ch. ${maxCh})`);
+        console.log(`  -> [MangaPill] ${mp.chapters.length} chapters (Max: Ch. ${maxCh})`);
         await supabase.from('series_intel').upsert(
           {
             series_id: s.id,
@@ -297,13 +295,13 @@ async function main() {
         );
       }
     } catch (err) {
-      console.warn(`  ! MangaPill scout error on ${s.title}:`, err.message);
+      console.warn(`  ! MangaPill failed on ${s.title}: ${err.message}`);
     }
 
-    await delay(120);
+    await delay(100);
   }
 
-  console.log('\n=== Scout Cycle Successfully Completed ===');
+  console.log('\n=== Recon Cycle Completed ===');
 }
 
-main().catch(console.error);
+runReconEngine().catch(console.error);
