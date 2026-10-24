@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '../lib/supabase';
+import AuthModal from '../components/AuthModal';
 import './globals.css';
 
 interface UserProfile {
@@ -42,7 +43,9 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
+  // Navigation & UI States
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -136,6 +139,7 @@ export default function RootLayout({
         setNotifOpen(false);
         setGenresDropdownOpen(false);
         setUserMenuOpen(false);
+        setAuthModalOpen(false);
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -390,12 +394,12 @@ export default function RootLayout({
                   )}
                 </div>
               ) : (
-                <Link
-                  href="/login"
-                  className="px-3.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs transition"
+                <button
+                  onClick={() => setAuthModalOpen(true)}
+                  className="px-3.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-black font-extrabold text-xs transition shadow-sm"
                 >
                   Sign In
-                </Link>
+                </button>
               )}
 
             </div>
@@ -452,6 +456,9 @@ export default function RootLayout({
             </div>
           </div>
         )}
+
+        {/* AUTHENTICATION MODAL */}
+        <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
 
         {/* MAIN APPLICATION VIEWPORT */}
         <div className="flex-1 flex flex-col w-full max-w-full overflow-x-hidden min-w-0">
