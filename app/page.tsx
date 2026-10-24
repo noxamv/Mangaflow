@@ -73,82 +73,70 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const [index, setIndex] = useState(0);
 
   useEffect(() => {
-    if (!items.length) return;
-    const timer = setInterval(() => {
+    if (items.length <= 1) return;
+    const interval = setInterval(() => {
       setIndex((prev) => (prev + 1) % items.length);
-    }, 5500);
-    return () => clearInterval(timer);
+    }, 4500);
+    return () => clearInterval(interval);
   }, [items.length]);
 
   if (!items || items.length === 0) return null;
   const current = items[index];
   const coverUrl = resolveCoverUrl(current);
+  const displayTitle = current.english_title || current.title;
 
   return (
-    <div className="relative w-full rounded-2xl overflow-hidden bg-[#13151f] border border-neutral-800/80 shadow-xl px-4 py-4.5 sm:px-6 sm:py-5 pb-6 sm:pb-7">
-      {/* Background Image Backdrop */}
-      <div className="absolute inset-0 z-0">
-        <SafeImage
-          src={coverUrl}
-          alt={current.title}
-          className="w-full h-full object-cover blur-xl scale-110 opacity-20"
-        />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0b0c14] via-[#0b0c14]/85 to-[#0b0c14]/60" />
-      </div>
+    <div className="relative w-full aspect-[16/9] max-h-[290px] sm:max-h-[350px] rounded-3xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-2xl group flex flex-col justify-between">
+      <div
+        className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700"
+        style={{ backgroundImage: `url(${coverUrl})` }}
+      />
+      <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-black via-black/85 to-black/30 z-10" />
 
-      {/* Content Container: Left Info + Right Poster */}
-      <div className="relative z-10 flex items-center justify-between gap-3 sm:gap-6">
-        {/* Left Column: Details */}
-        <div className="flex-1 min-w-0 pr-1 space-y-1 sm:space-y-1.5">
-          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-            <span className="text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-indigo-500/25 text-indigo-300 border border-indigo-500/30">
+      <div className="relative z-20 w-full h-full p-5 sm:p-7 flex items-center justify-between gap-4">
+        <div className="max-w-[65%] sm:max-w-md space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded-lg bg-indigo-500/30 text-indigo-300 border border-indigo-500/40">
               Spotlight #{index + 1}
             </span>
-            <span className="text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-black/60 text-neutral-300 border border-white/10">
+            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded-lg bg-black/60 text-neutral-300 border border-white/10">
               {current.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
             </span>
           </div>
 
-          <h2 className="text-sm sm:text-lg font-bold text-white tracking-tight line-clamp-1 drop-shadow">
-            {current.title}
+          <h2 className="text-base sm:text-xl font-black text-white line-clamp-1 tracking-tight">
+            {displayTitle}
           </h2>
 
-          {current.synopsis && (
-            <p className="text-[11px] sm:text-xs text-neutral-400 line-clamp-2 leading-snug max-w-xs sm:max-w-md">
-              {current.synopsis}
-            </p>
-          )}
+          <p className="text-[10px] sm:text-xs text-neutral-400 line-clamp-2 leading-relaxed">
+            {current.synopsis || 'Read online for free in high definition on MangaFlow.'}
+          </p>
 
           <div className="pt-1.5">
             <Link
               href={`/series/${current.slug}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition shadow-md shadow-indigo-600/30 active:scale-95"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
             >
               Read Now →
             </Link>
           </div>
         </div>
 
-        {/* Right Column: Series Cover Poster */}
-        <div className="shrink-0 w-24 sm:w-28 h-32 sm:h-36 rounded-xl overflow-hidden border border-white/10 shadow-lg bg-neutral-900">
-          <SafeImage
-            src={coverUrl}
-            alt={current.title}
-            className="w-full h-full object-cover"
-          />
+        <div className="shrink-0 w-24 sm:w-32 aspect-[3/4.2] rounded-2xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900">
+          <SafeImage src={coverUrl} alt={displayTitle} className="w-full h-full object-cover" />
         </div>
       </div>
 
-      {/* Centered Carousel Indicator Dots */}
-      <div className="absolute bottom-2 left-0 right-0 z-20 flex justify-center items-center gap-1.5">
+      <div className="relative z-30 pb-3 flex items-center justify-center gap-1.5">
         {items.map((_, i) => (
           <button
             key={i}
+            type="button"
             onClick={() => setIndex(i)}
-            aria-label={`Go to slide ${i + 1}`}
-            className={`h-1 rounded-full transition-all duration-300 ${
-              index === i ? 'w-5 bg-indigo-500' : 'w-1 bg-neutral-600/80 hover:bg-neutral-500'
+            className={`h-1.5 rounded-full transition-all duration-300 ${
+              index === i ? 'w-6 bg-indigo-500' : 'w-1.5 bg-neutral-700/80 hover:bg-neutral-500'
             }`}
+            aria-label={`Slide ${i + 1}`}
           />
         ))}
       </div>
