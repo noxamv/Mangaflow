@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   # ==========================================================
-  # STAGE 1: CONCURRENT INTEL SCOUT (Gathers manifests)
+  # STAGE 1: CONCURRENT INTEL SCOUT (With Gemini Ground-Truth)
   # ==========================================================
   scout-intel:
     name: 🛰️ Intel Scout (Recon)
@@ -48,12 +48,15 @@ jobs:
             ${{ runner.os }}-node-
 
       - name: Install Dependencies
-        run: npm install --no-audit --no-fund
+        run: |
+          npm install --no-audit --no-fund
+          npm install @google/genai --no-audit --no-fund
 
       - name: Run Recon Intel Scout
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NODE_NO_WARNINGS: 1
         run: node scripts/scout-intel.js
 
