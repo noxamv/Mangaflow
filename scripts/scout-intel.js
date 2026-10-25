@@ -163,7 +163,9 @@ function isHighPrecisionMatch(queryTitle, candidateTitle) {
   return tokenRecall >= 0.85 || stringSim >= 0.85;
 }
 
-// 3. SOURCE HARVESTERS WITH ACTIVE DOMAIN MIRROR RINGS
+// 3. SOURCE HARVESTERS
+
+// 1. HIVETOONS
 async function harvestHiveToons(searchTerms, slug) {
   const mirrors = ['https://hivetoons.org', 'https://hivetoons.com'];
   const candidateSlugs = [slug, slug?.replace(/-/g, ''), ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
@@ -188,6 +190,61 @@ async function harvestHiveToons(searchTerms, slug) {
   return null;
 }
 
+// 2. ARENASCANS
+async function harvestArenaScans(searchTerms, slug) {
+  const mirrors = ['https://arenascan.com', 'https://arenascans.net'];
+  const candidateSlugs = [slug, slug?.replace(/-/g, ''), ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
+  const uniqueSlugs = [...new Set(candidateSlugs.filter(Boolean))];
+
+  for (const host of mirrors) {
+    for (const s of uniqueSlugs) {
+      const paths = [`/series/${s}`, `/manga/${s}`];
+      for (const p of paths) {
+        const url = `${host}${p}`;
+        const html = await safeFetchHtml(url, `${host}/`);
+        if (!html || html.includes('404 Not Found') || !html.includes('chapter')) continue;
+
+        const chapters = [];
+        const regex = /href=["'](https?:\/\/[^"']*\/chapter[/-]([0-9]+(?:\.[0-9]+)?)[^"']*)["']/gi;
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+          const num = cleanNum(match[2]);
+          if (num !== null) chapters.push({ chNum: num, url: match[1], title: `Chapter ${num}` });
+        }
+        if (chapters.length > 0) return { url, chapters };
+      }
+    }
+  }
+  return null;
+}
+
+// 3. MANGABUDDY
+async function harvestMangaBuddy(searchTerms, slug) {
+  const host = 'https://mangabuddy.com';
+  const candidateSlugs = [slug, ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
+  const uniqueSlugs = [...new Set(candidateSlugs.filter(Boolean))];
+
+  for (const s of uniqueSlugs) {
+    const url = `${host}/${s}`;
+    const html = await safeFetchHtml(url, `${host}/`);
+    if (!html || html.includes('404 Not Found') || !html.includes('chapter-')) continue;
+
+    const chapters = [];
+    const regex = /href=["'](\/[^"']*\/chapter-([0-9]+(?:\.[0-9]+)?)[^"']*)["']/gi;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      const num = cleanNum(match[2]);
+      if (num !== null) {
+        const fullUrl = match[1].startsWith('http') ? match[1] : `${host}${match[1]}`;
+        chapters.push({ chNum: num, url: fullUrl, title: `Chapter ${num}` });
+      }
+    }
+    if (chapters.length > 0) return { url, chapters };
+  }
+  return null;
+}
+
+// 4. ASURA SCANS
 async function harvestAsura(searchTerms, slug) {
   const mirrors = ['https://asurascans.com', 'https://asuracomic.net'];
   const candidateSlugs = [slug, ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
@@ -212,6 +269,7 @@ async function harvestAsura(searchTerms, slug) {
   return null;
 }
 
+// 5. FLAME COMICS
 async function harvestFlameComics(searchTerms, slug) {
   const mirrors = ['https://flamecomics.me', 'https://flamecomics.xyz'];
   const candidateSlugs = [slug, ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
@@ -236,6 +294,7 @@ async function harvestFlameComics(searchTerms, slug) {
   return null;
 }
 
+// 6. MANGANATO / MANGABAT
 async function harvestMangaNato(searchTerms) {
   const mirrors = ['https://natomanga.com', 'https://chapmanganato.to', 'https://manganato.com', 'https://readmangabat.com'];
   for (const term of searchTerms) {
@@ -275,6 +334,7 @@ async function harvestMangaNato(searchTerms) {
   return null;
 }
 
+// 7. COMICK
 async function harvestComicK(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term)) continue;
@@ -316,6 +376,7 @@ async function harvestComicK(searchTerms) {
   return null;
 }
 
+// 8. MANGADEX
 async function harvestMangaDex(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term)) continue;
@@ -358,6 +419,7 @@ async function harvestMangaDex(searchTerms) {
   return null;
 }
 
+// 9. MANGAPILL
 async function harvestMangaPill(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term) || !/^[\x00-\x7F]+$/.test(term)) continue;
@@ -388,32 +450,28 @@ async function harvestMangaPill(searchTerms) {
   return null;
 }
 
-function applyConsensusFilter(results, maxOfficialChapters) {
+// 4. SUPREMUM CONSENSUS (PREVENTS MEDIAN SUPPRESSION OF LONG MANHWA)
+function applySupremumConsensus(results, maxOfficialChapters) {
   if (!results.length) return [];
-  const maxes = results.map((r) => Math.max(...r.chapters.map((c) => c.chNum)));
 
+  // Filter out corrupted lists with zero chapters
+  const valid = results.filter((r) => Array.isArray(r.chapters) && r.chapters.length > 0);
+  if (!valid.length) return [];
+
+  // If AniList provides an authoritative finished cap, respect it
   if (maxOfficialChapters && maxOfficialChapters > 0) {
     const hardLimit = maxOfficialChapters * 1.15;
-    return results.filter((r) => {
+    return valid.filter((r) => {
       const sMax = Math.max(...r.chapters.map((c) => c.chNum));
       return sMax <= hardLimit;
     });
   }
 
-  const sorted = [...maxes].sort((a, b) => a - b);
-  const median = sorted[Math.floor(sorted.length / 2)];
-
-  return results.filter((r) => {
-    const sMax = Math.max(...r.chapters.map((c) => c.chNum));
-    if (median > 80 && sMax > median * 1.8) {
-      console.warn(`  ⚠️ Dropping anomaly: Platform reported ${sMax} (Median: ${median})`);
-      return false;
-    }
-    return true;
-  });
+  // True Supremum: Retain the highest watermark across all verified providers
+  return valid;
 }
 
-// 4. CONCURRENT ENGINE WORKER POOL
+// 5. CONCURRENT ENGINE WORKER POOL
 async function scoutSingleSeries(s) {
   console.log(`\n🔍 Verifying: "${s.title}" ${s.isGap ? `[GAP: -${s.missing_count}]` : '[CYCLE]'}`);
 
@@ -438,8 +496,10 @@ async function scoutSingleSeries(s) {
   const seriesId = s.id || s.series_id;
   const harvested = [];
 
-  const [hive, asura, flame, nato, ck, md, mp] = await Promise.all([
+  const [hive, arena, buddy, asura, flame, nato, ck, md, mp] = await Promise.all([
     harvestHiveToons(uniqueAliases, s.slug),
+    harvestArenaScans(uniqueAliases, s.slug),
+    harvestMangaBuddy(uniqueAliases, s.slug),
     harvestAsura(uniqueAliases, s.slug),
     harvestFlameComics(uniqueAliases, s.slug),
     harvestMangaNato(uniqueAliases),
@@ -449,6 +509,8 @@ async function scoutSingleSeries(s) {
   ]);
 
   if (hive?.chapters?.length) harvested.push({ platform: 'hivetoons', url: hive.url, id: hive.url, chapters: hive.chapters });
+  if (arena?.chapters?.length) harvested.push({ platform: 'arenascans', url: arena.url, id: arena.url, chapters: arena.chapters });
+  if (buddy?.chapters?.length) harvested.push({ platform: 'mangabuddy', url: buddy.url, id: buddy.url, chapters: buddy.chapters });
   if (asura?.chapters?.length) harvested.push({ platform: 'asura', url: asura.url, id: asura.url, chapters: asura.chapters });
   if (flame?.chapters?.length) harvested.push({ platform: 'flame', url: flame.url, id: flame.url, chapters: flame.chapters });
   if (nato?.chapters?.length) harvested.push({ platform: 'mangabat', url: nato.url, id: nato.url, chapters: nato.chapters });
@@ -456,7 +518,7 @@ async function scoutSingleSeries(s) {
   if (md?.chapters?.length) harvested.push({ platform: 'mangadex', url: `https://mangadex.org/title/${md.mangaId}`, id: md.mangaId, chapters: md.chapters });
   if (mp?.chapters?.length) harvested.push({ platform: 'mangapill', url: `https://mangapill.com/manga/${mp.slug}`, id: mp.slug, chapters: mp.chapters });
 
-  const verified = applyConsensusFilter(harvested, anilist?.maxOfficialChapters);
+  const verified = applySupremumConsensus(harvested, anilist?.maxOfficialChapters);
 
   for (const res of verified) {
     const maxCh = Math.max(...res.chapters.map((c) => c.chNum));
@@ -478,9 +540,8 @@ async function scoutSingleSeries(s) {
 }
 
 async function runScout() {
-  console.log('=== MangaFlow Concurrent High-Precision Recon Engine ===');
+  console.log('=== MangaFlow 9-Source Supremum Recon Engine ===');
 
-  // Pull all gapped series first, followed by rotation
   const { data: gappedSeries } = await supabase
     .from('v_series_with_gaps')
     .select('series_id, title, slug, english_title, synonyms, missing_count')
@@ -504,7 +565,7 @@ async function runScout() {
   }
 
   const targets = Array.from(targetMap.values());
-  console.log(`🎯 Scouting ${targets.length} priority series with 4-worker pool concurrency.`);
+  console.log(`🎯 Scouting ${targets.length} priority series across 9 source rings.`);
 
   let index = 0;
   const pool = new Array(4).fill(null).map(async () => {
@@ -519,7 +580,7 @@ async function runScout() {
   });
 
   await Promise.all(pool);
-  console.log('\n✅ High-Precision Concurrent Scout pass completed across catalog.');
+  console.log('\n✅ 9-Source Recon pass completed.');
 }
 
 runScout().catch(console.error);
