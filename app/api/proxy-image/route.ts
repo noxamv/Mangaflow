@@ -25,6 +25,10 @@ export async function GET(req: NextRequest) {
     imageUrl.includes('natomanga')
   ) {
     upstreamReferer = 'https://manganato.com/';
+  } else if (imageUrl.includes('mangabuddy')) {
+    upstreamReferer = 'https://mangabuddy.com/';
+  } else if (imageUrl.includes('arenascan') || imageUrl.includes('arenascans')) {
+    upstreamReferer = 'https://arenascan.com/';
   } else if (imageUrl.includes('hivetoons')) {
     upstreamReferer = 'https://hivetoons.org/';
   } else if (imageUrl.includes('asurascans') || imageUrl.includes('asuracomic')) {
