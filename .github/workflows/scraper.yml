@@ -18,11 +18,11 @@ on:
 
 concurrency:
   group: mangaflow-unified-pipeline
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # ==========================================================
-  # STAGE 1: INTEL SCOUT (Gathers target URLs & max chapter IDs)
+  # STAGE 1: CONCURRENT INTEL SCOUT (Gathers manifests)
   # ==========================================================
   scout-intel:
     name: 🛰️ Intel Scout (Recon)
@@ -58,8 +58,7 @@ jobs:
         run: node scripts/scout-intel.js
 
   # ==========================================================
-  # STAGE 2: 5-WORKER INGESTION MATRIX (Downloads Chapter Images)
-  # Runs automatically right after STAGE 1 completes
+  # STAGE 2: 5-WORKER INGESTION MATRIX (Parallel Chapter Ingestion)
   # ==========================================================
   token-relay:
     name: 📥 Ingestion Worker ${{ matrix.worker_id }}
