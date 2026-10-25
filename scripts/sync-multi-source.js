@@ -68,7 +68,6 @@ function compressPageUrls(fullUrls) {
     const parsed = new URL(firstUrl);
     const baseUrl = `${parsed.protocol}//${parsed.host}/`;
 
-    // Only compress if the majority of images share the exact same root
     const canCompress = fullUrls.every((u) => u.startsWith(baseUrl));
     if (canCompress) {
       const relativePages = fullUrls.map((u) => u.slice(baseUrl.length));
@@ -76,7 +75,6 @@ function compressPageUrls(fullUrls) {
     }
   } catch {}
 
-  // Fallback if URLs come from mixed CDNs
   return { baseUrl: null, relativePages: fullUrls };
 }
 
@@ -228,7 +226,6 @@ async function fetchMangaPillPages(chapterSlug) {
 
 // 4. MAIN INGESTION ROUTINE FOR A SINGLE CHAPTER
 async function downloadAndSaveChapter(seriesId, chNum, chTitle, candidates) {
-  // Source Priority: Fast Scanlators -> Full Catalogs -> Aggregators
   const priority = ['hivetoons', 'arenascans', 'asura', 'flame', 'mangabuddy', 'comick', 'mangabat', 'mangadex', 'mangapill'];
   const sorted = [...candidates].sort((a, b) => priority.indexOf(a.platform) - priority.indexOf(b.platform));
 
@@ -246,7 +243,6 @@ async function downloadAndSaveChapter(seriesId, chNum, chTitle, candidates) {
       else if (src.platform === 'mangapill') rawPages = await fetchMangaPillPages(src.chapterSlug);
     } catch {}
 
-    // Require at least 5 comic panels to prevent empty or text novel contamination
     if (rawPages && rawPages.length >= 5) {
       const { baseUrl, relativePages } = compressPageUrls(rawPages);
 
@@ -276,7 +272,6 @@ async function downloadAndSaveChapter(seriesId, chNum, chTitle, candidates) {
 async function runWorker() {
   console.log(`=== MangaFlow Ingestion Worker ${WORKER_ID}/${TOTAL_WORKERS} Online ===`);
 
-  // Pull all priority series intel records
   const { data: intelList, error } = await supabase
     .from('series_intel')
     .select('series_id, source_platform, verified_chapters')
@@ -287,7 +282,6 @@ async function runWorker() {
     return;
   }
 
-  // Group verified manifests by series_id
   const seriesMap = new Map();
   for (const row of intelList) {
     if (!seriesMap.has(row.series_id)) seriesMap.set(row.series_id, []);
@@ -295,7 +289,6 @@ async function runWorker() {
   }
 
   const allSeriesIds = Array.from(seriesMap.keys());
-  // Distribute series across the 5 GitHub Action workers
   const workerSeriesIds = allSeriesIds.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
 
   console.log(`Worker ${WORKER_ID} assigned ${workerSeriesIds.length} series to ingest.`);
@@ -304,7 +297,6 @@ async function runWorker() {
     const { data: series } = await supabase.from('series').select('id, title, slug').eq('id', seriesId).single();
     if (!series) continue;
 
-    // Get list of chapters already saved in database
     const { data: existingChapters } = await supabase
       .from('chapters')
       .select('chapter_number')
@@ -312,7 +304,6 @@ async function runWorker() {
 
     const existingSet = new Set((existingChapters || []).map((c) => Number(c.chapter_number)));
 
-    // Aggregate all discovered chapters across sources
     const chapterCandidates = new Map();
     const sourceRows = seriesMap.get(seriesId) || [];
 
@@ -324,16 +315,14 @@ async function runWorker() {
       }
     }
 
-    // Determine missing chapters
     const missingNums = Array.from(chapterCandidates.keys())
       .filter((n) => !existingSet.has(n))
-      .sort((a, b) => b - a); // Ingest newest chapters first
+      .sort((a, b) => b - a);
 
     if (missingNums.length === 0) continue;
 
     console.log(`\n📥 "${series.title}": Ingesting ${missingNums.length} missing chapters.`);
 
-    // Ingest up to 40 missing chapters per worker run to prevent timeouts
     const batch = missingNums.slice(0, 40);
     for (const chNum of batch) {
       const candidates = chapterCandidates.get(chNum) || [];
