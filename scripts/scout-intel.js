@@ -85,6 +85,7 @@ async function fetchAniListMetadata(title) {
     query ($search: String) {
       Media (search: $search, type: MANGA) {
         id
+        idMal
         title { romaji english native }
         format
         status
@@ -109,6 +110,8 @@ async function fetchAniListMetadata(title) {
     if (!media || media.format === 'NOVEL') return null;
 
     return {
+      id: media.id,
+      mal_id: media.idMal || null,
       format: media.format,
       status: media.status,
       maxOfficialChapters: media.chapters || null,
@@ -450,15 +453,12 @@ async function harvestMangaPill(searchTerms) {
   return null;
 }
 
-// 4. SUPREMUM CONSENSUS (PREVENTS MEDIAN SUPPRESSION OF LONG MANHWA)
+// 4. SUPREMUM CONSENSUS
 function applySupremumConsensus(results, maxOfficialChapters) {
   if (!results.length) return [];
-
-  // Filter out corrupted lists with zero chapters
   const valid = results.filter((r) => Array.isArray(r.chapters) && r.chapters.length > 0);
   if (!valid.length) return [];
 
-  // If AniList provides an authoritative finished cap, respect it
   if (maxOfficialChapters && maxOfficialChapters > 0) {
     const hardLimit = maxOfficialChapters * 1.15;
     return valid.filter((r) => {
@@ -467,11 +467,10 @@ function applySupremumConsensus(results, maxOfficialChapters) {
     });
   }
 
-  // True Supremum: Retain the highest watermark across all verified providers
   return valid;
 }
 
-// 5. CONCURRENT ENGINE WORKER POOL
+// 5. WORKER POOL EXECUTION
 async function scoutSingleSeries(s) {
   console.log(`\n🔍 Verifying: "${s.title}" ${s.isGap ? `[GAP: -${s.missing_count}]` : '[CYCLE]'}`);
 
@@ -481,6 +480,16 @@ async function scoutSingleSeries(s) {
   if (anilist?.format === 'NOVEL') {
     console.log(`  ⛔ Skipped "${s.title}": AniList ground truth confirms light novel format.`);
     return;
+  }
+
+  if (anilist?.id) {
+    await supabase
+      .from('series')
+      .update({
+        anilist_id: anilist.id,
+        mal_id: anilist.mal_id || null,
+      })
+      .eq('id', s.id || s.series_id);
   }
 
   const aliases = [
@@ -542,17 +551,21 @@ async function scoutSingleSeries(s) {
 async function runScout() {
   console.log('=== MangaFlow 9-Source Supremum Recon Engine ===');
 
+  // Skip any title updated in the last 6 hours to prevent endless loops
+  const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+
   const { data: gappedSeries } = await supabase
     .from('v_series_with_gaps')
     .select('series_id, title, slug, english_title, synonyms, missing_count')
     .order('missing_count', { ascending: false })
-    .limit(80);
+    .limit(30);
 
   const { data: scheduledSeries } = await supabase
     .from('series')
     .select('id, title, slug, english_title, synonyms')
+    .lt('updated_at', sixHoursAgo)
     .order('updated_at', { ascending: true })
-    .limit(100);
+    .limit(30);
 
   const targetMap = new Map();
   for (const s of gappedSeries || []) {
