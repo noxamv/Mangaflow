@@ -18,12 +18,14 @@ export async function GET(req: NextRequest) {
     upstreamReferer = 'https://comick.io/';
   } else if (imageUrl.includes('mangadex.org') || imageUrl.includes('mangadex.network')) {
     upstreamReferer = 'https://mangadex.org/';
-  } else if (imageUrl.includes('mangabat') || imageUrl.includes('manganato') || imageUrl.includes('chapmanganato')) {
+  } else if (imageUrl.includes('mangabat') || imageUrl.includes('manganato') || imageUrl.includes('chapmanganato') || imageUrl.includes('natomanga')) {
     upstreamReferer = 'https://manganato.com/';
   } else if (imageUrl.includes('hivetoons')) {
     upstreamReferer = 'https://hivetoons.org/';
   } else if (imageUrl.includes('asurascans')) {
     upstreamReferer = 'https://asurascans.com/';
+  } else if (imageUrl.includes('flamecomics')) {
+    upstreamReferer = 'https://flamecomics.me/';
   }
 
   try {
@@ -31,7 +33,7 @@ export async function GET(req: NextRequest) {
       method: 'GET',
       headers: {
         'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
         'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         'Referer': upstreamReferer,
       },
