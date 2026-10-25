@@ -66,9 +66,29 @@ function isNovel(text) {
   );
 }
 
+// Strict title similarity check to prevent fuzzy-search mismatching
+function isTitleMatch(queryTitle, candidateTitle) {
+  if (!queryTitle || !candidateTitle) return false;
+  const cleanQ = queryTitle.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
+  const cleanC = candidateTitle.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
+
+  if (cleanQ.includes(cleanC) || cleanC.includes(cleanQ)) return true;
+
+  const qWords = cleanQ.split(/\s+/).filter((w) => w.length > 2);
+  const cWords = cleanC.split(/\s+/).filter((w) => w.length > 2);
+  if (!qWords.length || !cWords.length) return false;
+
+  const common = qWords.filter((w) => cWords.includes(w));
+  return common.length / Math.min(qWords.length, cWords.length) >= 0.5;
+}
+
 // --- 1. HIVETOONS HARVESTER (Lookism, Eleceed, Action Manhwa) ---
 async function harvestHiveToons(searchTerms, slug) {
-  const candidateSlugs = [slug, slug?.replace(/-/g, ''), ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
+  const candidateSlugs = [
+    slug,
+    slug?.replace(/-/g, ''),
+    ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-')),
+  ];
   const uniqueSlugs = [...new Set(candidateSlugs.filter(Boolean))];
 
   for (const s of uniqueSlugs) {
@@ -91,7 +111,7 @@ async function harvestHiveToons(searchTerms, slug) {
   return null;
 }
 
-// --- 2. ASURA SCANS HARVESTER (Solo, Glitch, Dungeon titles) ---
+// --- 2. ASURA SCANS HARVESTER ---
 async function harvestAsura(searchTerms, slug) {
   const candidateSlugs = [slug, ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
   const uniqueSlugs = [...new Set(candidateSlugs.filter(Boolean))];
@@ -116,7 +136,7 @@ async function harvestAsura(searchTerms, slug) {
   return null;
 }
 
-// --- 3. MANGANATO / MANGABAT MIRROR HARVESTER (Backlog Gaps & Cultivation) ---
+// --- 3. MANGANATO / MANGABAT MIRROR HARVESTER ---
 async function harvestMangaNato(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term)) continue;
@@ -125,11 +145,20 @@ async function harvestMangaNato(searchTerms) {
     const html = await safeFetchHtml(searchUrl);
     if (!html) continue;
 
-    const match = html.match(/href="(https:\/\/[^"]*(?:manganato|mangabat)\.com\/[^"]*manga-[^"]+)"/i) ||
-                  html.match(/href="(https:\/\/(?:read|chap)[^"]*\/(?:manga|read)-[^"]+)"/i);
+    const linkRegex = /href="(https:\/\/[^"]*(?:manganato|mangabat)\.com\/[^"]*manga-[^"]+)"[^>]*title="([^"]+)"/gi;
+    let match = linkRegex.exec(html);
+
+    if (!match) {
+      const generic = html.match(/href="(https:\/\/[^"]*(?:manganato|mangabat)\.com\/[^"]*manga-[^"]+)"/i);
+      if (generic) match = [null, generic[1], term];
+    }
+
     if (!match) continue;
 
     const mangaUrl = match[1];
+    const candidateTitle = match[2] || '';
+    if (candidateTitle && !isTitleMatch(term, candidateTitle)) continue;
+
     const pageHtml = await safeFetchHtml(mangaUrl);
     if (!pageHtml) continue;
 
@@ -159,9 +188,9 @@ async function harvestComicK(searchTerms) {
     );
     if (!Array.isArray(search) || !search.length) continue;
 
-    const comic =
-      search.find((c) => c.comic_type !== 'novel' && !isNovel(c.title) && !c.slug?.includes('novel')) ||
-      search[0];
+    const comic = search.find(
+      (c) => c.comic_type !== 'novel' && !isNovel(c.title) && !c.slug?.includes('novel') && isTitleMatch(clean, c.title)
+    );
     if (!comic?.hid) continue;
 
     const chapters = [];
@@ -201,11 +230,10 @@ async function harvestMangaDex(searchTerms) {
     );
     if (!json?.data?.length) continue;
 
-    const manga =
-      json.data.find((m) => {
-        const en = (m.attributes?.title?.en || Object.values(m.attributes?.title || {})[0] || '').toLowerCase();
-        return !en.includes('(novel)') && !en.includes('[novel]');
-      }) || json.data[0];
+    const manga = json.data.find((m) => {
+      const en = (m.attributes?.title?.en || Object.values(m.attributes?.title || {})[0] || '').toLowerCase();
+      return !en.includes('(novel)') && !en.includes('[novel]') && isTitleMatch(term, en);
+    });
 
     const mangaId = manga?.id;
     if (!mangaId) continue;
@@ -249,6 +277,9 @@ async function harvestMangaPill(searchTerms) {
     if (!match) continue;
 
     const slug = match[1];
+    const rawTitle = match[2].replace(/-/g, ' ');
+    if (!isTitleMatch(clean, rawTitle)) continue;
+
     const pageHtml = await safeFetchHtml(`https://mangapill.com/manga/${slug}`);
     if (!pageHtml) continue;
 
@@ -275,13 +306,13 @@ async function runScout() {
     .from('v_series_with_gaps')
     .select('series_id, title, slug, english_title, synonyms, missing_count')
     .order('missing_count', { ascending: false })
-    .limit(15);
+    .limit(30);
 
   const { data: scheduledSeries } = await supabase
     .from('series')
     .select('id, title, slug, english_title, synonyms')
     .order('updated_at', { ascending: true })
-    .limit(15);
+    .limit(50);
 
   const targetMap = new Map();
   for (const s of gappedSeries || []) {
@@ -372,7 +403,7 @@ async function runScout() {
       }
     } catch {}
 
-    // Priority 2: MangaNato / Mirrors (Full deep backlogs)
+    // Priority 2: MangaNato / Mirrors
     try {
       const nato = await harvestMangaNato(uniqueAliases);
       if (nato && nato.chapters.length) {
