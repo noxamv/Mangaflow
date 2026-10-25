@@ -18,11 +18,16 @@ export async function GET(req: NextRequest) {
     upstreamReferer = 'https://comick.io/';
   } else if (imageUrl.includes('mangadex.org') || imageUrl.includes('mangadex.network')) {
     upstreamReferer = 'https://mangadex.org/';
-  } else if (imageUrl.includes('mangabat') || imageUrl.includes('manganato') || imageUrl.includes('chapmanganato') || imageUrl.includes('natomanga')) {
+  } else if (
+    imageUrl.includes('mangabat') ||
+    imageUrl.includes('manganato') ||
+    imageUrl.includes('chapmanganato') ||
+    imageUrl.includes('natomanga')
+  ) {
     upstreamReferer = 'https://manganato.com/';
   } else if (imageUrl.includes('hivetoons')) {
     upstreamReferer = 'https://hivetoons.org/';
-  } else if (imageUrl.includes('asurascans')) {
+  } else if (imageUrl.includes('asurascans') || imageUrl.includes('asuracomic')) {
     upstreamReferer = 'https://asurascans.com/';
   } else if (imageUrl.includes('flamecomics')) {
     upstreamReferer = 'https://flamecomics.me/';
