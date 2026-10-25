@@ -52,6 +52,18 @@ function toKey(num) {
   return String(num);
 }
 
+// Check for 4-Koma / Short Strip Series
+function isFourKoma(slug) {
+  const shortStripSlugs = [
+    'd104c1c3-5d20-484d-9f36-24f149a6c889', // Chiikawa
+    '151bca3e-db98-4ad2-8d8d-239943b91437', // Fabulous Beasts
+    '9d3d3403-1a87-4737-9803-bc3d99db1424', // The Guy She Was Interested In
+    'my-new-girlfriend-is-not-human',
+    '6ad54367-4165-43ed-9a7d-71179c520180', // Chainsmoker Cat
+  ];
+  return shortStripSlugs.includes(slug);
+}
+
 // --- PAGE EXTRACTORS ---
 async function getHivePages(url) {
   const html = await fetchHtml(url);
@@ -102,7 +114,7 @@ async function getMangaPillPages(slug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// --- MULTI-SOURCE SYNC ENGINE ---
+// --- SYNC WORKER ---
 async function syncSeries(s) {
   const { data: intelRows } = await supabase
     .from('series_intel')
@@ -110,7 +122,7 @@ async function syncSeries(s) {
     .eq('series_id', s.id)
     .order('latest_known_chapter', { ascending: false });
 
-  if (!intelRows || intelRows.length === 0) return;
+  if (!intelRows || !intelRows.length) return;
 
   const unifiedMap = new Map();
 
@@ -121,7 +133,6 @@ async function syncSeries(s) {
 
       if (!unifiedMap.has(key)) unifiedMap.set(key, []);
 
-      // Balance priorities: preferred scanlator first, mirror backfills second
       if (intel.source_platform === 'hivetoons') {
         unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', priority: 1, title: item.title });
       } else if (intel.source_platform === 'asura') {
@@ -171,9 +182,9 @@ async function syncSeries(s) {
     }
   }
 
-  if (tasks.length === 0) return;
+  if (!tasks.length) return;
 
-  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Ingesting ${tasks.length} missing gap chapters...`);
+  console.log(`\n=> [Worker ${WORKER_ID}] [${s.title}] Ingesting ${tasks.length} missing chapters...`);
 
   let addedCount = 0;
   let repairedCount = 0;
@@ -214,6 +225,11 @@ async function syncSeries(s) {
     }
 
     if (!Array.isArray(pages) || pages.length === 0) return;
+
+    // Content Quorum Guard: Reject low-panel novel rips on full-length series
+    if (pages.length <= 4 && !isFourKoma(s.slug)) {
+      return;
+    }
 
     let baseUrl = '';
     let compressedPages = pages;
