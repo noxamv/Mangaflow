@@ -23,28 +23,30 @@ const HEADERS = {
   'Referer': 'https://www.google.com/',
 };
 
-async function fetchJson(url) {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-    const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
-    clearTimeout(timeout);
-    return res.ok ? await res.json() : null;
-  } catch {
-    return null;
+async function fetchWithRetry(url, options = {}, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.ok) return res;
+    } catch (e) {
+      if (i === retries) return null;
+      await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+    }
   }
+  return null;
+}
+
+async function fetchJson(url) {
+  const res = await fetchWithRetry(url, { headers: HEADERS });
+  return res ? await res.json() : null;
 }
 
 async function fetchHtml(url) {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-    const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
-    clearTimeout(timeout);
-    return res.ok ? await res.text() : null;
-  } catch {
-    return null;
-  }
+  const res = await fetchWithRetry(url, { headers: HEADERS });
+  return res ? await res.text() : null;
 }
 
 function toKey(num) {
@@ -52,19 +54,18 @@ function toKey(num) {
   return String(num);
 }
 
-// Check for 4-Koma / Short Strip Series
 function isFourKoma(slug) {
-  const shortStripSlugs = [
+  const shortStrips = [
     'd104c1c3-5d20-484d-9f36-24f149a6c889', // Chiikawa
     '151bca3e-db98-4ad2-8d8d-239943b91437', // Fabulous Beasts
     '9d3d3403-1a87-4737-9803-bc3d99db1424', // The Guy She Was Interested In
     'my-new-girlfriend-is-not-human',
     '6ad54367-4165-43ed-9a7d-71179c520180', // Chainsmoker Cat
   ];
-  return shortStripSlugs.includes(slug);
+  return shortStrips.includes(slug);
 }
 
-// --- PAGE EXTRACTORS ---
+// --- EXTRACTORS ---
 async function getHivePages(url) {
   const html = await fetchHtml(url);
   if (!html) return null;
@@ -114,18 +115,45 @@ async function getMangaPillPages(slug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// --- SYNC WORKER ---
+// DIRECT ON-THE-FLY EMERGENCY FALLBACK IF INTEL ROW WAS MISSED
+async function emergencyHarvestFallback(series) {
+  const title = series.english_title || series.title;
+  const search = await fetchJson(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=1&type=comic`);
+  if (!search?.[0]?.hid) return null;
+
+  const chapData = await fetchJson(`https://api.comick.io/comic/${search[0].hid}/chapters?lang=en&limit=100`);
+  if (!chapData?.chapters?.length) return null;
+
+  const chaps = [];
+  for (const c of chapData.chapters) {
+    const num = parseFloat(c.chap);
+    if (!isNaN(num) && c.hid) chaps.push({ chNum: num, hid: c.hid, title: c.title || null });
+  }
+
+  return {
+    source_platform: 'comick',
+    verified_chapters: chaps,
+  };
+}
+
 async function syncSeries(s) {
-  const { data: intelRows } = await supabase
+  let { data: intelRows } = await supabase
     .from('series_intel')
     .select('*')
     .eq('series_id', s.id)
     .order('latest_known_chapter', { ascending: false });
 
-  if (!intelRows || !intelRows.length) return;
+  // Direct Fallback Execution
+  if (!intelRows || !intelRows.length) {
+    const directIntel = await emergencyHarvestFallback(s);
+    if (directIntel) {
+      intelRows = [directIntel];
+    } else {
+      return;
+    }
+  }
 
   const unifiedMap = new Map();
-
   for (const intel of intelRows) {
     for (const item of intel.verified_chapters || []) {
       const key = toKey(item.chNum);
@@ -133,21 +161,13 @@ async function syncSeries(s) {
 
       if (!unifiedMap.has(key)) unifiedMap.set(key, []);
 
-      if (intel.source_platform === 'hivetoons') {
-        unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', priority: 1, title: item.title });
-      } else if (intel.source_platform === 'asura') {
-        unifiedMap.get(key).push({ id: item.url, type: 'asura', priority: 2, title: item.title });
-      } else if (intel.source_platform === 'flame') {
-        unifiedMap.get(key).push({ id: item.url, type: 'flame', priority: 3, title: item.title });
-      } else if (intel.source_platform === 'comick') {
-        unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 4, title: item.title });
-      } else if (intel.source_platform === 'mangabat') {
-        unifiedMap.get(key).push({ id: item.url, type: 'mangabat', priority: 5, title: item.title });
-      } else if (intel.source_platform === 'mangadex') {
-        unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 6, title: item.title });
-      } else if (intel.source_platform === 'mangapill') {
-        unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 7, title: null });
-      }
+      if (intel.source_platform === 'hivetoons') unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', priority: 1, title: item.title });
+      else if (intel.source_platform === 'asura') unifiedMap.get(key).push({ id: item.url, type: 'asura', priority: 2, title: item.title });
+      else if (intel.source_platform === 'flame') unifiedMap.get(key).push({ id: item.url, type: 'flame', priority: 3, title: item.title });
+      else if (intel.source_platform === 'comick') unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 4, title: item.title });
+      else if (intel.source_platform === 'mangabat') unifiedMap.get(key).push({ id: item.url, type: 'mangabat', priority: 5, title: item.title });
+      else if (intel.source_platform === 'mangadex') unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 6, title: item.title });
+      else if (intel.source_platform === 'mangapill') unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 7, title: null });
     }
   }
 
@@ -190,74 +210,65 @@ async function syncSeries(s) {
   let repairedCount = 0;
   const upsertBatch = [];
 
-  const runWithConcurrency = async (items, concurrency, fn) => {
-    let index = 0;
-    const workers = new Array(concurrency).fill(null).map(async () => {
-      while (index < items.length) {
-        const cur = items[index++];
-        await fn(cur);
-      }
-    });
-    await Promise.all(workers);
-  };
+  let index = 0;
+  const pool = new Array(3).fill(null).map(async () => {
+    while (index < tasks.length) {
+      const task = tasks[index++];
+      let pages = null;
+      let chapterTitle = null;
 
-  await runWithConcurrency(tasks, 3, async (task) => {
-    let pages = null;
-    let chapterTitle = null;
+      for (const cand of task.candidates) {
+        try {
+          if (cand.type === 'hivetoons') pages = await getHivePages(cand.id);
+          else if (cand.type === 'asura') pages = await getAsuraPages(cand.id);
+          else if (cand.type === 'flame') pages = await getFlamePages(cand.id);
+          else if (cand.type === 'comick') pages = await getComicKPages(cand.id);
+          else if (cand.type === 'mangabat') pages = await getMangaBatPages(cand.id);
+          else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
+          else if (cand.type === 'mangapill') pages = await getMangaPillPages(cand.id);
 
-    for (const cand of task.candidates) {
-      try {
-        if (cand.type === 'hivetoons') pages = await getHivePages(cand.id);
-        else if (cand.type === 'asura') pages = await getAsuraPages(cand.id);
-        else if (cand.type === 'flame') pages = await getFlamePages(cand.id);
-        else if (cand.type === 'comick') pages = await getComicKPages(cand.id);
-        else if (cand.type === 'mangabat') pages = await getMangaBatPages(cand.id);
-        else if (cand.type === 'mangadex') pages = await getMangaDexPages(cand.id);
-        else if (cand.type === 'mangapill') pages = await getMangaPillPages(cand.id);
-
-        if (Array.isArray(pages) && pages.length > 0) {
-          chapterTitle = cand.title;
-          break;
+          if (Array.isArray(pages) && pages.length > 0) {
+            chapterTitle = cand.title;
+            break;
+          }
+        } catch {
+          continue;
         }
-      } catch {
-        continue;
       }
-    }
 
-    if (!Array.isArray(pages) || pages.length === 0) return;
+      if (!Array.isArray(pages) || pages.length === 0) continue;
+      if (pages.length <= 4 && !isFourKoma(s.slug)) continue;
 
-    // Content Quorum Guard: Reject low-panel novel rips on full-length series
-    if (pages.length <= 4 && !isFourKoma(s.slug)) {
-      return;
-    }
+      let baseUrl = '';
+      let compressedPages = pages;
+      try {
+        const urlObj = new URL(pages[0]);
+        baseUrl = `${urlObj.protocol}//${urlObj.hostname}/`;
+        compressedPages = pages.map((p) => (p.startsWith(baseUrl) ? p.replace(baseUrl, '') : p));
+      } catch {}
 
-    let baseUrl = '';
-    let compressedPages = pages;
-    try {
-      const urlObj = new URL(pages[0]);
-      baseUrl = `${urlObj.protocol}//${urlObj.hostname}/`;
-      compressedPages = pages.map((p) => (p.startsWith(baseUrl) ? p.replace(baseUrl, '') : p));
-    } catch {}
+      const cleanTitle = chapterTitle || `Chapter ${task.chNum}`;
 
-    const cleanTitle = chapterTitle || `Chapter ${task.chNum}`;
-
-    if (task.existing) {
-      await supabase
-        .from('chapters')
-        .update({ base_url: baseUrl, pages: compressedPages, title: cleanTitle })
-        .eq('id', task.existing.id);
-      repairedCount++;
-    } else {
-      upsertBatch.push({
-        series_id: s.id,
-        chapter_number: task.chNum,
-        title: cleanTitle,
-        base_url: baseUrl,
-        pages: compressedPages,
-      });
-      addedCount++;
+      if (task.existing) {
+        await supabase
+          .from('chapters')
+          .update({ base_url: baseUrl, pages: compressedPages, title: cleanTitle })
+          .eq('id', task.existing.id);
+        repairedCount++;
+      } else {
+        upsertBatch.push({
+          series_id: s.id,
+          chapter_number: task.chNum,
+          title: cleanTitle,
+          base_url: baseUrl,
+          pages: compressedPages,
+        });
+        addedCount++;
+      }
     }
   });
+
+  await Promise.all(pool);
 
   if (upsertBatch.length > 0) {
     for (let i = 0; i < upsertBatch.length; i += 50) {
@@ -274,7 +285,7 @@ async function main() {
 
   const { data: prioritizedSeries, error } = await supabase
     .from('series')
-    .select('id, title, slug')
+    .select('id, title, slug, english_title')
     .order('updated_at', { ascending: false });
 
   if (error || !prioritizedSeries) {
