@@ -1,39 +1,37 @@
 // app/api/chapter/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '../../../../lib/supabase';
+import { supabase } from '@/lib/supabase';
 
 export const dynamic = 'force-dynamic';
 
-const HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  'Accept': 'application/json',
-};
-
-async function fetchComicKPages(hid: string) {
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
   try {
-    const res = await fetch(`https://api.comick.io/chapter/${hid}`, { headers: HEADERS });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data?.chapter?.images?.length) {
-      return data.chapter.images.map((img: any) =>
-        img.url?.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.b2key || img.url}`
-      );
+    const chapterId = params.id;
+    if (!chapterId) {
+      return NextResponse.json({ error: 'Chapter ID is required' }, { status: 400 });
     }
-  } catch {}
-  return null;
-}
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
-  const chapterId = params.id;
-  if (!chapterId) {
-    return NextResponse.json({ error: 'Chapter ID required' }, { status: 400 });
-  }
-
-  try {
     const { data: chapter, error } = await supabase
       .from('chapters')
-      .select('id, series_id, chapter_number, base_url, pages, series (title, english_title, slug, cover_image_url)')
+      .select(`
+        id,
+        series_id,
+        chapter_number,
+        title,
+        base_url,
+        pages,
+        created_at,
+        updated_at,
+        series:series_id (
+          id,
+          title,
+          slug,
+          cover_url
+        )
+      `)
       .eq('id', chapterId)
       .single();
 
@@ -41,56 +39,43 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       return NextResponse.json({ error: 'Chapter not found' }, { status: 404 });
     }
 
-    if (Array.isArray(chapter.pages) && chapter.pages.length > 0) {
-      return NextResponse.json(chapter);
-    }
-
-    // Direct On-Demand Fallback
-    const seriesObj: any = Array.isArray(chapter.series) ? chapter.series[0] : chapter.series;
-    const searchTitle = seriesObj?.english_title || seriesObj?.title;
-
-    if (searchTitle) {
-      const searchRes = await fetch(
-        `https://api.comick.io/v1.0/search?q=${encodeURIComponent(searchTitle)}&limit=1&type=comic`,
-        { headers: HEADERS }
-      );
-      const searchData = await searchRes.json();
-      const meta = searchData?.[0];
-
-      if (meta?.hid) {
-        const chapRes = await fetch(`https://api.comick.io/comic/${meta.hid}/chapters?lang=en&limit=100`, {
-          headers: HEADERS,
-        });
-        const chapData = await chapRes.json();
-        const targetChapter = chapData?.chapters?.find(
-          (c: any) => parseFloat(c.chap) === chapter.chapter_number
-        );
-
-        if (targetChapter?.hid) {
-          const freshPages = await fetchComicKPages(targetChapter.hid);
-          if (freshPages && freshPages.length > 0) {
-            let baseUrl = '';
-            let compressedPages = freshPages;
-            try {
-              const urlObj = new URL(freshPages[0]);
-              baseUrl = `${urlObj.protocol}//${urlObj.hostname}/`;
-              compressedPages = freshPages.map((p: string) => (p.startsWith(baseUrl) ? p.replace(baseUrl, '') : p));
-            } catch {}
-
-            await supabase
-              .from('chapters')
-              .update({ base_url: baseUrl, pages: compressedPages })
-              .eq('id', chapter.id);
-
-            chapter.base_url = baseUrl;
-            chapter.pages = compressedPages;
-          }
-        }
+    // Hybrid Storage Resolution: Stitch base_url + relative path on the fly
+    const baseUrl = chapter.base_url ? chapter.base_url.replace(/\/$/, '') : '';
+    const resolvedPages = (chapter.pages || []).map((page: string) => {
+      if (!page) return '';
+      if (page.startsWith('http://') || page.startsWith('https://')) {
+        return page;
       }
-    }
+      return baseUrl ? `${baseUrl}/${page.replace(/^\//, '')}` : page;
+    }).filter(Boolean);
 
-    return NextResponse.json(chapter);
+    // Fetch previous and next chapter IDs for instant navigation in the reader
+    const [prevRes, nextRes] = await Promise.all([
+      supabase
+        .from('chapters')
+        .select('id, chapter_number')
+        .eq('series_id', chapter.series_id)
+        .lt('chapter_number', chapter.chapter_number)
+        .order('chapter_number', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('chapters')
+        .select('id, chapter_number')
+        .eq('series_id', chapter.series_id)
+        .gt('chapter_number', chapter.chapter_number)
+        .order('chapter_number', { ascending: true })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
+    return NextResponse.json({
+      ...chapter,
+      pages: resolvedPages,
+      prevChapter: prevRes.data || null,
+      nextChapter: nextRes.data || null,
+    });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message || 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
   }
 }
