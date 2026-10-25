@@ -54,7 +54,6 @@ export default function ReaderPage() {
 
   const lastScrollY = useRef(0);
 
-  // Auto-hide navigation on scroll in webtoon mode
   useEffect(() => {
     if (readingMode !== 'webtoon') {
       setHeaderVisible(true);
@@ -75,7 +74,6 @@ export default function ReaderPage() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [readingMode]);
 
-  // Load Chapter & Adjacent Chapters
   useEffect(() => {
     async function loadReader() {
       if (!chapterId) return;
@@ -119,7 +117,6 @@ export default function ReaderPage() {
           setNextChapter(currentIndex < chaps.length - 1 ? chaps[currentIndex + 1] : null);
         }
 
-        // Record Reading History for Logged In User
         const {
           data: { session },
         } = await supabase.auth.getSession();
@@ -147,7 +144,6 @@ export default function ReaderPage() {
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [chapterId]);
 
-  // URL Resolver: correctly attach base_url if pages are relative
   const resolveImageUrl = useCallback(
     (page: string): string => {
       if (!page) return '';
@@ -174,7 +170,6 @@ export default function ReaderPage() {
 
   const totalPages = chapter?.pages?.length || 0;
 
-  // Single page step handlers
   const handleNextPage = useCallback(() => {
     if (currentPage < totalPages - 1) {
       setCurrentPage((prev) => prev + 1);
@@ -193,7 +188,6 @@ export default function ReaderPage() {
     }
   }, [currentPage, prevChapter, router]);
 
-  // Keyboard Navigation for Paged Mode
   useEffect(() => {
     if (readingMode !== 'paged') return;
 
@@ -233,7 +227,6 @@ export default function ReaderPage() {
 
   return (
     <div className="min-h-screen bg-[#07070a] text-neutral-100 flex flex-col select-none relative">
-      {/* 1. TOP FLOATING APP BAR */}
       <header
         className={`fixed top-0 left-0 right-0 z-50 bg-[#0c0d14]/95 backdrop-blur-md border-b border-neutral-800/80 px-3 sm:px-6 py-2.5 transition-transform duration-300 flex items-center justify-between ${
           headerVisible ? 'translate-y-0' : '-translate-y-full'
@@ -260,7 +253,6 @@ export default function ReaderPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Chapter Selector Drawer Toggle */}
           <button
             onClick={() => {
               setChapterListOpen(!chapterListOpen);
@@ -270,16 +262,10 @@ export default function ReaderPage() {
             aria-label="Chapter List"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 6h16M4 10h16M4 14h16M4 18h16"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
             </svg>
           </button>
 
-          {/* Reader Settings Toggle */}
           <button
             onClick={() => {
               setSettingsOpen(!settingsOpen);
@@ -301,7 +287,6 @@ export default function ReaderPage() {
         </div>
       </header>
 
-      {/* 2. SETTINGS DROPDOWN POPUP */}
       {settingsOpen && (
         <div className="fixed top-12 right-4 z-50 w-72 bg-[#13151f] border border-neutral-800 rounded-2xl p-4 shadow-2xl text-xs space-y-4">
           <div>
@@ -329,7 +314,7 @@ export default function ReaderPage() {
           {readingMode === 'paged' && (
             <>
               <div>
-                <span className="font-bold text-neutral-300 block mb-2">Page Reading Direction</span>
+                <span className="font-bold text-neutral-300 block mb-2">Reading Direction</span>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => setReadingDirection('ltr')}
@@ -376,7 +361,6 @@ export default function ReaderPage() {
         </div>
       )}
 
-      {/* 3. CHAPTER SELECTOR DRAWER */}
       {chapterListOpen && (
         <div className="fixed top-12 right-4 z-50 w-72 max-h-[70vh] bg-[#13151f] border border-neutral-800 rounded-2xl p-3 shadow-2xl overflow-y-auto no-scrollbar text-xs">
           <span className="font-bold text-neutral-300 block mb-2 px-2">Jump to Chapter</span>
@@ -397,10 +381,8 @@ export default function ReaderPage() {
         </div>
       )}
 
-      {/* 4. MAIN READER DISPLAY ENGINE */}
       <main className="flex-1 w-full flex flex-col items-center justify-center pt-14 pb-16">
         {readingMode === 'webtoon' ? (
-          /* CONTINUOUS WEBTOON SCROLL MODE */
           <div className="w-full max-w-3xl flex flex-col items-center">
             {chapter.pages.map((page, idx) => {
               const resolvedSrc = resolveImageUrl(page);
@@ -410,7 +392,6 @@ export default function ReaderPage() {
                   key={idx}
                   className="w-full flex justify-center bg-[#090a0f] min-h-[300px] border-b border-neutral-900/30 relative"
                 >
-                  {/* CLEAN IMAGE TAG: NO crossOrigin TO PREVENT CDN BLOCKS */}
                   <img
                     src={resolvedSrc}
                     alt={`Page ${idx + 1}`}
@@ -430,7 +411,6 @@ export default function ReaderPage() {
             })}
           </div>
         ) : (
-          /* SINGLE PAGE MODE (PAGED MANGA) */
           <div className="relative w-full flex-1 flex flex-col items-center justify-center p-2">
             <div className="relative max-h-[92vh] max-w-full flex items-center justify-center">
               <img
@@ -450,7 +430,6 @@ export default function ReaderPage() {
                 }}
               />
 
-              {/* Invisible Click Zones for Next / Prev */}
               <div
                 onClick={(e) => {
                   e.stopPropagation();
@@ -469,7 +448,6 @@ export default function ReaderPage() {
               />
             </div>
 
-            {/* Paged Step Progress Bar */}
             <div className="mt-4 flex items-center gap-3 text-xs text-neutral-400">
               <span>
                 Page {currentPage + 1} of {totalPages}
@@ -479,7 +457,6 @@ export default function ReaderPage() {
         )}
       </main>
 
-      {/* 5. BOTTOM FLOATING NAVIGATION BAR */}
       <footer
         className={`fixed bottom-0 left-0 right-0 z-40 bg-[#0c0d14]/95 backdrop-blur-md border-t border-neutral-800/80 px-4 py-2.5 transition-transform duration-300 flex items-center justify-between ${
           headerVisible ? 'translate-y-0' : 'translate-y-full'
