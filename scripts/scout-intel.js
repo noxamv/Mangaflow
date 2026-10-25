@@ -1,6 +1,6 @@
 // scripts/scout-intel.js
 import { createClient } from '@supabase/supabase-js';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -17,7 +17,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 let aiClient = null;
 if (GEMINI_API_KEY) {
-  aiClient = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  aiClient = new GoogleGenerativeAI(GEMINI_API_KEY);
 }
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -133,7 +133,7 @@ async function fetchAniListMetadata(title) {
   }
 }
 
-// 2. GEMINI 3.8 FLASH GROUND-TRUTH VALIDATOR
+// 2. GEMINI GROUND-TRUTH VALIDATOR
 async function verifyComicChapterWithAI(title, candidateMaxChapter) {
   if (!aiClient || !candidateMaxChapter || candidateMaxChapter <= 25) {
     return { isValidComic: true, maxComicChapter: candidateMaxChapter };
@@ -148,29 +148,21 @@ Task:
 Determine if the illustrated comic/manhwa adaptation has reached Chapter ${candidateMaxChapter} in unofficial English scanlations or Korean/Japanese raws.
 Flag web novel or light novel contamination (where the text novel has 200-1000 chapters, but the comic adaptation only has 50-140 chapters).
 
-Respond strictly with:
-- isValidComic: boolean (true if the comic adaptation is reasonably close to or past this chapter, false if this chapter count belongs to the text novel or is fake)
-- maxComicChapter: number (the actual maximum ongoing manhwa/manga/comic chapter count in fast scanlations)
-- reason: brief explanation`;
+Respond strictly with valid JSON without markdown fences:
+{
+  "isValidComic": boolean,
+  "maxComicChapter": number,
+  "reason": "brief explanation"
+}`;
 
-    const response = await aiClient.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            isValidComic: { type: Type.BOOLEAN },
-            maxComicChapter: { type: Type.NUMBER },
-            reason: { type: Type.STRING },
-          },
-          required: ['isValidComic', 'maxComicChapter'],
-        },
-      },
+    const model = aiClient.getGenerativeModel({
+      model: 'gemini-1.5-flash',
+      generationConfig: { responseMimeType: 'application/json' },
     });
 
-    return JSON.parse(response.text);
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    return JSON.parse(text);
   } catch (err) {
     console.warn(`  ⚠️ AI Ground-Truth fallback for "${title}":`, err.message);
     return { isValidComic: true, maxComicChapter: candidateMaxChapter };
@@ -225,7 +217,7 @@ function isHighPrecisionMatch(queryTitle, candidateTitle) {
 
 // 4. MULTI-MIRROR SOURCE HARVESTERS
 
-// 1. HIVETOONS (Multi-Slug)
+// 1. HIVETOONS
 async function harvestHiveToons(searchTerms, slug) {
   const mirrors = ['https://hivetoons.org', 'https://hivetoons.com'];
   const candidateSlugs = [
@@ -287,7 +279,7 @@ async function harvestArenaScans(searchTerms, slug) {
   return null;
 }
 
-// 3. MANGABUDDY (Multi-Slug)
+// 3. MANGABUDDY
 async function harvestMangaBuddy(searchTerms, slug) {
   const host = 'https://mangabuddy.com';
   const candidateSlugs = [
