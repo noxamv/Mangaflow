@@ -65,11 +65,25 @@ function isFourKoma(slug) {
   return shortStrips.includes(slug);
 }
 
-// --- EXTRACTORS ---
+// --- MULTI-SOURCE EXTRACTORS ---
 async function getHivePages(url) {
   const html = await fetchHtml(url);
   if (!html) return null;
   const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
+  return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
+}
+
+async function getArenaPages(url) {
+  const html = await fetchHtml(url);
+  if (!html) return null;
+  const matches = [...html.matchAll(/<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
+  return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
+}
+
+async function getMangaBuddyPages(url) {
+  const html = await fetchHtml(url);
+  if (!html) return null;
+  const matches = [...html.matchAll(/<img[^>]+(?:src|data-src)=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp))["']/gi)];
   return matches.map((m) => m[1]).filter((u) => !u.includes('logo') && !u.includes('banner'));
 }
 
@@ -115,7 +129,7 @@ async function getMangaPillPages(slug) {
   return matches.length ? matches.map((m) => m[1]) : null;
 }
 
-// DIRECT ON-THE-FLY EMERGENCY FALLBACK IF INTEL ROW WAS MISSED
+// DIRECT ON-THE-FLY EMERGENCY FALLBACK
 async function emergencyHarvestFallback(series) {
   const title = series.english_title || series.title;
   const search = await fetchJson(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(title)}&limit=1&type=comic`);
@@ -130,10 +144,7 @@ async function emergencyHarvestFallback(series) {
     if (!isNaN(num) && c.hid) chaps.push({ chNum: num, hid: c.hid, title: c.title || null });
   }
 
-  return {
-    source_platform: 'comick',
-    verified_chapters: chaps,
-  };
+  return { source_platform: 'comick', verified_chapters: chaps };
 }
 
 async function syncSeries(s) {
@@ -143,7 +154,6 @@ async function syncSeries(s) {
     .eq('series_id', s.id)
     .order('latest_known_chapter', { ascending: false });
 
-  // Direct Fallback Execution
   if (!intelRows || !intelRows.length) {
     const directIntel = await emergencyHarvestFallback(s);
     if (directIntel) {
@@ -153,6 +163,7 @@ async function syncSeries(s) {
     }
   }
 
+  // UNION MAP: Merges all platforms without dropping earlier backlog or new releases
   const unifiedMap = new Map();
   for (const intel of intelRows) {
     for (const item of intel.verified_chapters || []) {
@@ -161,13 +172,16 @@ async function syncSeries(s) {
 
       if (!unifiedMap.has(key)) unifiedMap.set(key, []);
 
+      // Priority ranking: Primary scanlators first, followed by deep archive aggregators
       if (intel.source_platform === 'hivetoons') unifiedMap.get(key).push({ id: item.url, type: 'hivetoons', priority: 1, title: item.title });
-      else if (intel.source_platform === 'asura') unifiedMap.get(key).push({ id: item.url, type: 'asura', priority: 2, title: item.title });
-      else if (intel.source_platform === 'flame') unifiedMap.get(key).push({ id: item.url, type: 'flame', priority: 3, title: item.title });
-      else if (intel.source_platform === 'comick') unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 4, title: item.title });
-      else if (intel.source_platform === 'mangabat') unifiedMap.get(key).push({ id: item.url, type: 'mangabat', priority: 5, title: item.title });
-      else if (intel.source_platform === 'mangadex') unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 6, title: item.title });
-      else if (intel.source_platform === 'mangapill') unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 7, title: null });
+      else if (intel.source_platform === 'arenascans') unifiedMap.get(key).push({ id: item.url, type: 'arenascans', priority: 2, title: item.title });
+      else if (intel.source_platform === 'asura') unifiedMap.get(key).push({ id: item.url, type: 'asura', priority: 3, title: item.title });
+      else if (intel.source_platform === 'flame') unifiedMap.get(key).push({ id: item.url, type: 'flame', priority: 4, title: item.title });
+      else if (intel.source_platform === 'mangabuddy') unifiedMap.get(key).push({ id: item.url, type: 'mangabuddy', priority: 5, title: item.title });
+      else if (intel.source_platform === 'comick') unifiedMap.get(key).push({ id: item.hid, type: 'comick', priority: 6, title: item.title });
+      else if (intel.source_platform === 'mangabat') unifiedMap.get(key).push({ id: item.url, type: 'mangabat', priority: 7, title: item.title });
+      else if (intel.source_platform === 'mangadex') unifiedMap.get(key).push({ id: item.id, type: 'mangadex', priority: 8, title: item.title });
+      else if (intel.source_platform === 'mangapill') unifiedMap.get(key).push({ id: item.chapterSlug, type: 'mangapill', priority: 9, title: null });
     }
   }
 
@@ -220,6 +234,8 @@ async function syncSeries(s) {
       for (const cand of task.candidates) {
         try {
           if (cand.type === 'hivetoons') pages = await getHivePages(cand.id);
+          else if (cand.type === 'arenascans') pages = await getArenaPages(cand.id);
+          else if (cand.type === 'mangabuddy') pages = await getMangaBuddyPages(cand.id);
           else if (cand.type === 'asura') pages = await getAsuraPages(cand.id);
           else if (cand.type === 'flame') pages = await getFlamePages(cand.id);
           else if (cand.type === 'comick') pages = await getComicKPages(cand.id);
@@ -237,6 +253,7 @@ async function syncSeries(s) {
       }
 
       if (!Array.isArray(pages) || pages.length === 0) continue;
+      // Content Quorum Guard: Reject low-panel rips unless registered short strip
       if (pages.length <= 4 && !isFourKoma(s.slug)) continue;
 
       let baseUrl = '';
