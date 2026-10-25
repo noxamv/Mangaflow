@@ -131,24 +131,24 @@ async function fetchAniListMetadata(title) {
   }
 }
 
-// 2. GEMINI GROUND-TRUTH VALIDATOR
+// 2. GEMINI 3.8 FLASH GROUND-TRUTH VALIDATOR
 async function verifyComicChapterWithAI(title, candidateMaxChapter) {
   if (!aiClient || !candidateMaxChapter || candidateMaxChapter <= 25) {
     return { isValidComic: true, maxComicChapter: candidateMaxChapter };
   }
 
   try {
-    const prompt = `You are an accurate Manga/Manhwa/Comic verification system.
+    const prompt = `You are a strict manga/manhwa/comic database validator.
 Series Title: "${title}"
 Scraped Chapter Ceiling: ${candidateMaxChapter}
 
 Task:
-Determine if the illustrated comic/manhwa adaptation has actually released Chapter ${candidateMaxChapter} (in official Korean/Japanese raws or English fan scanlations).
-Check for web novel or light novel contamination (where the text novel has 200-1000 chapters, but the comic adaptation only has 50-140 chapters).
+Determine if the illustrated comic/manhwa adaptation has actually released Chapter ${candidateMaxChapter} in unofficial English scanlations or Korean/Japanese raws.
+Flag web novel or light novel contamination (where the text novel has 200-1000 chapters, but the comic adaptation only has 50-140 chapters).
 
 Respond strictly with:
 - isValidComic: boolean (true if the comic adaptation is reasonably close to or past this chapter, false if this chapter count belongs to the text novel or is fake)
-- maxComicChapter: number (the actual maximum ongoing manhwa/manga/comic chapter count)
+- maxComicChapter: number (the actual maximum ongoing manhwa/manga/comic chapter count in fast scanlations)
 - reason: brief explanation`;
 
     const response = await aiClient.models.generateContent({
@@ -208,38 +208,51 @@ function isHighPrecisionMatch(queryTitle, candidateTitle) {
   const tokenRecall = matchedTokens.length / qTokens.length;
 
   const extraTokens = cTokens.filter((token) => !qTokens.includes(token));
-  const disqualifiers = ['double', 'reboot', 'side', 'after', 'anthology', 'novel'];
+  const disqualifiers = ['double', 'reboot', 'side', 'after', 'anthology', 'novel', 'special', 'remake', 'oneshot', 'spinoff'];
   if (extraTokens.some((t) => disqualifiers.includes(t))) return false;
+
+  if (qTokens.length === 1 && cTokens.length > 1) {
+    if (q !== c) return false;
+  }
 
   const maxLen = Math.max(q.length, c.length);
   const dist = levenshteinDistance(q, c);
   const stringSim = 1 - dist / maxLen;
 
-  return tokenRecall >= 0.85 || stringSim >= 0.85;
+  return tokenRecall >= 0.88 || stringSim >= 0.88;
 }
 
 // 4. SOURCE HARVESTERS
 
-// 1. HIVETOONS
+// 1. HIVETOONS (With Multi-Slug Variant Search)
 async function harvestHiveToons(searchTerms, slug) {
   const mirrors = ['https://hivetoons.org', 'https://hivetoons.com'];
-  const candidateSlugs = [slug, slug?.replace(/-/g, ''), ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
+  const candidateSlugs = [
+    slug,
+    slug?.replace(/-/g, ''),
+    slug ? `${slug}-comic` : null,
+    slug ? `${slug}-manhwa` : null,
+    ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-')),
+  ];
   const uniqueSlugs = [...new Set(candidateSlugs.filter(Boolean))];
 
   for (const host of mirrors) {
     for (const s of uniqueSlugs) {
-      const url = `${host}/series/${s}`;
-      const html = await safeFetchHtml(url, `${host}/`);
-      if (!html || html.includes('404 Not Found') || !html.includes('chapter-')) continue;
+      const paths = [`/series/${s}`, `/${s}`];
+      for (const p of paths) {
+        const url = `${host}${p}`;
+        const html = await safeFetchHtml(url, `${host}/`);
+        if (!html || html.includes('404 Not Found') || !html.includes('chapter-')) continue;
 
-      const chapters = [];
-      const regex = /href=["'](https?:\/\/[^"']*\/series\/[^"']*\/chapter-([0-9]+(?:\.[0-9]+)?)[^"']*)["']/gi;
-      let match;
-      while ((match = regex.exec(html)) !== null) {
-        const num = cleanNum(match[2]);
-        if (num !== null) chapters.push({ chNum: num, url: match[1], title: `Chapter ${num}` });
+        const chapters = [];
+        const regex = /href=["'](https?:\/\/[^"']*\/chapter-([0-9]+(?:\.[0-9]+)?)[^"']*)["']/gi;
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+          const num = cleanNum(match[2]);
+          if (num !== null) chapters.push({ chNum: num, url: match[1], title: `Chapter ${num}` });
+        }
+        if (chapters.length > 0) return { url, chapters };
       }
-      if (chapters.length > 0) return { url, chapters };
     }
   }
   return null;
@@ -273,10 +286,15 @@ async function harvestArenaScans(searchTerms, slug) {
   return null;
 }
 
-// 3. MANGABUDDY
+// 3. MANGABUDDY (With Multi-Slug Variant Search)
 async function harvestMangaBuddy(searchTerms, slug) {
   const host = 'https://mangabuddy.com';
-  const candidateSlugs = [slug, ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-'))];
+  const candidateSlugs = [
+    slug,
+    slug?.replace(/-/g, ''),
+    slug ? `${slug}-comic` : null,
+    ...searchTerms.map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, '-')),
+  ];
   const uniqueSlugs = [...new Set(candidateSlugs.filter(Boolean))];
 
   for (const s of uniqueSlugs) {
@@ -389,14 +407,14 @@ async function harvestMangaNato(searchTerms) {
   return null;
 }
 
-// 7. COMICK
+// 7. COMICK (Deep Pagination up to 40 pages for 600+ chapters)
 async function harvestComicK(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term)) continue;
     const clean = term.replace(/['’]/g, '').trim();
 
     const search = await safeFetchJson(
-      `https://api.comick.io/v1.0/search?q=${encodeURIComponent(clean)}&limit=5&type=comic`,
+      `https://api.comick.io/v1.0/search?q=${encodeURIComponent(clean)}&limit=10&type=comic`,
       'https://comick.io/'
     );
     if (!Array.isArray(search) || !search.length) continue;
@@ -408,7 +426,7 @@ async function harvestComicK(searchTerms) {
 
     const chapters = [];
     let page = 1;
-    while (page <= 35) {
+    while (page <= 40) {
       const json = await safeFetchJson(
         `https://api.comick.io/comic/${comic.hid}/chapters?lang=en&page=${page}&limit=100`,
         'https://comick.io/'
@@ -432,7 +450,7 @@ async function harvestComicK(searchTerms) {
   return null;
 }
 
-// 8. MANGADEX
+// 8. MANGADEX (Checks page counts to drop empty/text novel chapters)
 async function harvestMangaDex(searchTerms) {
   for (const term of searchTerms) {
     if (!term || isNovel(term)) continue;
@@ -566,10 +584,10 @@ async function scoutSingleSeries(s) {
 
   if (!harvested.length) return;
 
-  // Determine the highest candidate chapter scraped across all sources
+  // Determine highest candidate chapter scraped across all platforms
   const candidateMax = Math.max(...harvested.flatMap((r) => r.chapters.map((c) => c.chNum)), 0);
 
-  // Run Gemini Ground-Truth Validator
+  // Run Gemini 3.8 Flash Ground-Truth Validator
   const aiAudit = await verifyComicChapterWithAI(s.title, candidateMax);
 
   let trueComicCeiling = candidateMax;
@@ -579,6 +597,7 @@ async function scoutSingleSeries(s) {
   }
 
   for (const res of harvested) {
+    // Drops any chapter that exceeds the verified comic ceiling (eliminating novel contamination)
     const validChapters = res.chapters.filter((c) => c.chNum <= trueComicCeiling);
     if (!validChapters.length) continue;
 
