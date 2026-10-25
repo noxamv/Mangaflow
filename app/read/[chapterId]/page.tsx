@@ -53,7 +53,9 @@ export default function ReaderPage() {
   const [chapterListOpen, setChapterListOpen] = useState(false);
 
   const lastScrollY = useRef(0);
+  const touchStartX = useRef<number | null>(null);
 
+  // Dynamic header visibility in webtoon mode
   useEffect(() => {
     if (readingMode !== 'webtoon') {
       setHeaderVisible(true);
@@ -74,6 +76,7 @@ export default function ReaderPage() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [readingMode]);
 
+  // Load chapter data
   useEffect(() => {
     async function loadReader() {
       if (!chapterId) return;
@@ -170,6 +173,14 @@ export default function ReaderPage() {
 
   const totalPages = chapter?.pages?.length || 0;
 
+  // Instant Page Turns: Invisible preloader for next image in paged mode
+  useEffect(() => {
+    if (readingMode === 'paged' && chapter?.pages && currentPage < totalPages - 1) {
+      const nextImg = new Image();
+      nextImg.src = resolveImageUrl(chapter.pages[currentPage + 1]);
+    }
+  }, [readingMode, chapter?.pages, currentPage, totalPages, resolveImageUrl]);
+
   const handleNextPage = useCallback(() => {
     if (currentPage < totalPages - 1) {
       setCurrentPage((prev) => prev + 1);
@@ -188,6 +199,7 @@ export default function ReaderPage() {
     }
   }, [currentPage, prevChapter, router]);
 
+  // Keyboard navigation
   useEffect(() => {
     if (readingMode !== 'paged') return;
 
@@ -203,6 +215,24 @@ export default function ReaderPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [readingMode, readingDirection, handleNextPage, handlePrevPage]);
 
+  // Touch swipe support for mobile
+  const onTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current === null || readingMode !== 'paged') return;
+    const diff = touchStartX.current - e.changedTouches[0].clientX;
+    if (Math.abs(diff) > 40) {
+      if (diff > 0) {
+        readingDirection === 'rtl' ? handlePrevPage() : handleNextPage();
+      } else {
+        readingDirection === 'rtl' ? handleNextPage() : handlePrevPage();
+      }
+    }
+    touchStartX.current = null;
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#07070a] flex items-center justify-center">
@@ -214,8 +244,8 @@ export default function ReaderPage() {
   if (!chapter || !chapter.pages?.length) {
     return (
       <div className="min-h-screen bg-[#07070a] flex flex-col items-center justify-center p-4 text-center">
-        <h1 className="text-xl font-bold text-white mb-2">Chapter Not Found or Empty</h1>
-        <p className="text-xs text-neutral-400 mb-6">This chapter is currently being ingested from upstream mirrors.</p>
+        <h1 className="text-xl font-bold text-white mb-2">Chapter Ingestion In Progress</h1>
+        <p className="text-xs text-neutral-400 mb-6">This chapter is currently syncing across upstream mirrors.</p>
         {series?.slug && (
           <Link href={`/series/${series.slug}`} className="px-4 py-2 bg-indigo-600 rounded-xl text-xs font-bold text-white">
             Return to Series
@@ -226,7 +256,11 @@ export default function ReaderPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#07070a] text-neutral-100 flex flex-col select-none relative">
+    <div
+      className="min-h-screen bg-[#07070a] text-neutral-100 flex flex-col select-none relative"
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+    >
       <header
         className={`fixed top-0 left-0 right-0 z-50 bg-[#0c0d14]/95 backdrop-blur-md border-b border-neutral-800/80 px-3 sm:px-6 py-2.5 transition-transform duration-300 flex items-center justify-between ${
           headerVisible ? 'translate-y-0' : '-translate-y-full'
