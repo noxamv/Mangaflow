@@ -28,7 +28,7 @@ jobs:
     name: 🛰️ Intel Scout (Recon)
     if: ${{ github.event.inputs.mode == 'all' || github.event.inputs.mode == 'scout-only' || github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
 
     steps:
       - name: Checkout Code Repository
@@ -70,7 +70,7 @@ jobs:
       fail-fast: false
       matrix:
         worker_id: [1, 2, 3, 4, 5]
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - name: Checkout Code Repository
