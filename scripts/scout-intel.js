@@ -156,9 +156,9 @@ Respond strictly with valid JSON without markdown fences:
 }`;
 
     const model = aiClient.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      generationConfig: { responseMimeType: 'application/json' },
-    });
+  model: 'gemini-3.8-flash',
+  generationConfig: { responseMimeType: 'application/json' },
+});
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
