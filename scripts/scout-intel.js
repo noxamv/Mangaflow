@@ -1,8 +1,10 @@
 // scripts/scout-intel.js
 import { createClient } from '@supabase/supabase-js';
+import { GoogleGenAI, Type } from '@google/genai';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing Supabase credentials');
@@ -12,6 +14,11 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
+
+let aiClient = null;
+if (GEMINI_API_KEY) {
+  aiClient = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+}
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -79,7 +86,7 @@ function isNovel(text) {
   );
 }
 
-// 1. ANILIST GROUND-TRUTH ANCHOR
+// 1. ANILIST METADATA ANCHOR
 async function fetchAniListMetadata(title) {
   const query = `
     query ($search: String) {
@@ -124,7 +131,52 @@ async function fetchAniListMetadata(title) {
   }
 }
 
-// 2. HIGH-PRECISION LEVENSHTEIN & TOKEN SIMILARITY
+// 2. GEMINI GROUND-TRUTH VALIDATOR
+async function verifyComicChapterWithAI(title, candidateMaxChapter) {
+  if (!aiClient || !candidateMaxChapter || candidateMaxChapter <= 25) {
+    return { isValidComic: true, maxComicChapter: candidateMaxChapter };
+  }
+
+  try {
+    const prompt = `You are an accurate Manga/Manhwa/Comic verification system.
+Series Title: "${title}"
+Scraped Chapter Ceiling: ${candidateMaxChapter}
+
+Task:
+Determine if the illustrated comic/manhwa adaptation has actually released Chapter ${candidateMaxChapter} (in official Korean/Japanese raws or English fan scanlations).
+Check for web novel or light novel contamination (where the text novel has 200-1000 chapters, but the comic adaptation only has 50-140 chapters).
+
+Respond strictly with:
+- isValidComic: boolean (true if the comic adaptation is reasonably close to or past this chapter, false if this chapter count belongs to the text novel or is fake)
+- maxComicChapter: number (the actual maximum ongoing manhwa/manga/comic chapter count)
+- reason: brief explanation`;
+
+    const response = await aiClient.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            isValidComic: { type: Type.BOOLEAN },
+            maxComicChapter: { type: Type.NUMBER },
+            reason: { type: Type.STRING },
+          },
+          required: ['isValidComic', 'maxComicChapter'],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text);
+    return parsed;
+  } catch (err) {
+    console.warn(`  ⚠️ AI Ground-Truth check fallback for "${title}":`, err.message);
+    return { isValidComic: true, maxComicChapter: candidateMaxChapter };
+  }
+}
+
+// 3. TITLE SIMILARITY
 function levenshteinDistance(s1, s2) {
   const m = s1.length;
   const n = s2.length;
@@ -166,7 +218,7 @@ function isHighPrecisionMatch(queryTitle, candidateTitle) {
   return tokenRecall >= 0.85 || stringSim >= 0.85;
 }
 
-// 3. SOURCE HARVESTERS
+// 4. SOURCE HARVESTERS
 
 // 1. HIVETOONS
 async function harvestHiveToons(searchTerms, slug) {
@@ -366,7 +418,8 @@ async function harvestComicK(searchTerms) {
       for (const c of json.chapters) {
         if (isNovel(c.title)) continue;
         const num = cleanNum(c.chap);
-        if (num !== null && c.hid) {
+        const imageCount = c.images_count || (Array.isArray(c.images) ? c.images.length : 10);
+        if (num !== null && c.hid && imageCount >= 5) {
           chapters.push({ chNum: num, hid: c.hid, title: c.title || null });
         }
       }
@@ -409,7 +462,8 @@ async function harvestMangaDex(searchTerms) {
 
       for (const item of feed.data) {
         const num = cleanNum(item.attributes?.chapter);
-        if (num !== null && item.id) {
+        const pageCount = item.attributes?.pages || 0;
+        if (num !== null && item.id && pageCount >= 5) {
           chapters.push({ chNum: num, id: item.id, title: item.attributes?.title || null });
         }
       }
@@ -451,23 +505,6 @@ async function harvestMangaPill(searchTerms) {
     if (chapters.length > 0) return { slug, chapters };
   }
   return null;
-}
-
-// 4. SUPREMUM CONSENSUS
-function applySupremumConsensus(results, maxOfficialChapters) {
-  if (!results.length) return [];
-  const valid = results.filter((r) => Array.isArray(r.chapters) && r.chapters.length > 0);
-  if (!valid.length) return [];
-
-  if (maxOfficialChapters && maxOfficialChapters > 0) {
-    const hardLimit = maxOfficialChapters * 1.15;
-    return valid.filter((r) => {
-      const sMax = Math.max(...r.chapters.map((c) => c.chNum));
-      return sMax <= hardLimit;
-    });
-  }
-
-  return valid;
 }
 
 // 5. WORKER POOL EXECUTION
@@ -527,10 +564,26 @@ async function scoutSingleSeries(s) {
   if (md?.chapters?.length) harvested.push({ platform: 'mangadex', url: `https://mangadex.org/title/${md.mangaId}`, id: md.mangaId, chapters: md.chapters });
   if (mp?.chapters?.length) harvested.push({ platform: 'mangapill', url: `https://mangapill.com/manga/${mp.slug}`, id: mp.slug, chapters: mp.chapters });
 
-  const verified = applySupremumConsensus(harvested, anilist?.maxOfficialChapters);
+  if (!harvested.length) return;
 
-  for (const res of verified) {
-    const maxCh = Math.max(...res.chapters.map((c) => c.chNum));
+  // Determine the highest candidate chapter scraped across all sources
+  const candidateMax = Math.max(...harvested.flatMap((r) => r.chapters.map((c) => c.chNum)), 0);
+
+  // Run Gemini Ground-Truth Validator
+  const aiAudit = await verifyComicChapterWithAI(s.title, candidateMax);
+
+  let trueComicCeiling = candidateMax;
+  if (!aiAudit.isValidComic) {
+    trueComicCeiling = aiAudit.maxComicChapter || candidateMax;
+    console.log(`  🤖 AI Ground-Truth Guard: "${s.title}" trimmed from ${candidateMax} down to true comic max ${trueComicCeiling} (${aiAudit.reason})`);
+  }
+
+  for (const res of harvested) {
+    const validChapters = res.chapters.filter((c) => c.chNum <= trueComicCeiling);
+    if (!validChapters.length) continue;
+
+    const maxCh = Math.max(...validChapters.map((c) => c.chNum));
+
     await supabase.from('series_intel').upsert(
       {
         series_id: seriesId,
@@ -539,19 +592,18 @@ async function scoutSingleSeries(s) {
         target_url: res.url,
         target_identifier: res.id,
         latest_known_chapter: maxCh,
-        verified_chapters: res.chapters,
+        verified_chapters: validChapters,
         last_scouted_at: new Date().toISOString(),
       },
       { onConflict: 'series_id,source_platform' }
     );
-    console.log(`  -> [${res.platform}] Saved ${res.chapters.length} verified chapters (Max: ${maxCh}).`);
+    console.log(`  -> [${res.platform}] Saved ${validChapters.length} verified chapters (Max: ${maxCh}).`);
   }
 }
 
 async function runScout() {
-  console.log('=== MangaFlow 9-Source Supremum Recon Engine ===');
+  console.log('=== MangaFlow 9-Source Recon Engine with AI Validation ===');
 
-  // Skip any title updated in the last 6 hours to prevent endless loops
   const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
 
   const { data: gappedSeries } = await supabase
@@ -578,7 +630,7 @@ async function runScout() {
   }
 
   const targets = Array.from(targetMap.values());
-  console.log(`🎯 Scouting ${targets.length} priority series across 9 source rings.`);
+  console.log(`🎯 Scouting ${targets.length} priority series with AI-grounded validation.`);
 
   let index = 0;
   const pool = new Array(4).fill(null).map(async () => {
@@ -593,7 +645,7 @@ async function runScout() {
   });
 
   await Promise.all(pool);
-  console.log('\n✅ 9-Source Recon pass completed.');
+  console.log('\n✅ AI-Grounded Recon pass completed.');
 }
 
 runScout().catch(console.error);
