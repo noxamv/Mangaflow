@@ -133,14 +133,16 @@ async function fetchAniListMetadata(title) {
   }
 }
 
-// 2. GEMINI GROUND-TRUTH VALIDATOR
+// 2. GEMINI GROUND-TRUTH VALIDATOR (With 503 Auto-Retry & Backoff)
 async function verifyComicChapterWithAI(title, candidateMaxChapter) {
   if (!aiClient || !candidateMaxChapter || candidateMaxChapter <= 25) {
     return { isValidComic: true, maxComicChapter: candidateMaxChapter };
   }
 
-  try {
-    const prompt = `You are a strict manga/manhwa/comic database validator.
+  // Rate-limiting delay to prevent burst 503 errors from Google
+  await delay(600);
+
+  const prompt = `You are a strict manga/manhwa/comic database validator.
 Series Title: "${title}"
 Scraped Chapter Ceiling: ${candidateMaxChapter}
 
@@ -155,18 +157,34 @@ Respond strictly with valid JSON without markdown fences:
   "reason": "brief explanation"
 }`;
 
-    const model = aiClient.getGenerativeModel({
-  model: 'gemini-3.8-flash',
-  generationConfig: { responseMimeType: 'application/json' },
-});
+  const modelCandidates = ['gemini-3.8-flash', 'gemini-2.5-flash'];
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    return JSON.parse(text);
-  } catch (err) {
-    console.warn(`  ⚠️ AI Ground-Truth fallback for "${title}":`, err.message);
-    return { isValidComic: true, maxComicChapter: candidateMaxChapter };
+  for (const modelName of modelCandidates) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const model = aiClient.getGenerativeModel({
+          model: modelName,
+          generationConfig: { responseMimeType: 'application/json' },
+        });
+
+        const result = await model.generateContent(prompt);
+        const text = result.response.text();
+        return JSON.parse(text);
+      } catch (err) {
+        const isTransient = err.message?.includes('503') || err.message?.includes('429');
+        if (isTransient && attempt < 3) {
+          // Exponential backoff: wait 1.5s, 3.0s before retrying
+          await delay(attempt * 1500);
+          continue;
+        }
+        // If not transient, try next fallback model
+        break;
+      }
+    }
   }
+
+  // Graceful fallback: maintain candidate max if Google APIs are experiencing global downtime
+  return { isValidComic: true, maxComicChapter: candidateMaxChapter };
 }
 
 // 3. TITLE SIMILARITY
