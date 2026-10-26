@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
-const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '5', 10);
+const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '8', 10);
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing Supabase credentials');
@@ -59,7 +59,7 @@ async function safeFetchJson(url, referer = 'https://www.google.com/') {
   }
 }
 
-// 1. HYBRID STORAGE ENCODER (Separates Root Base URL from Relative Page Paths)
+// 1. HYBRID STORAGE ENCODER
 function compressPageUrls(fullUrls) {
   if (!fullUrls || !fullUrls.length) return { baseUrl: null, relativePages: [] };
 
@@ -78,7 +78,7 @@ function compressPageUrls(fullUrls) {
   return { baseUrl: null, relativePages: fullUrls };
 }
 
-// 2. FOREIGN CONTAMINATION SHIELD (Blocks rogue single-series CDNs & title mismatches)
+// 2. FOREIGN CONTAMINATION GUARD
 function isDisallowedCdn(url) {
   if (!url) return false;
   const lower = url.toLowerCase();
@@ -224,7 +224,7 @@ async function fetchMangaPillPages(chapterSlug) {
   return pages;
 }
 
-// 4. MAIN INGESTION ROUTINE FOR A SINGLE CHAPTER
+// 4. HIGH-SPEED CHAPTER DOWNLOADER
 async function downloadAndSaveChapter(seriesId, chNum, chTitle, candidates) {
   const priority = ['hivetoons', 'arenascans', 'asura', 'flame', 'mangabuddy', 'comick', 'mangabat', 'mangadex', 'mangapill'];
   const sorted = [...candidates].sort((a, b) => priority.indexOf(a.platform) - priority.indexOf(b.platform));
@@ -263,14 +263,14 @@ async function downloadAndSaveChapter(seriesId, chNum, chTitle, candidates) {
         return true;
       }
     }
-    await delay(50);
+    await delay(20);
   }
   return false;
 }
 
-// 5. WORKER DISPATCHER
+// 5. WORKER DISPATCHER WITH CONCURRENT PIPELINE
 async function runWorker() {
-  console.log(`=== MangaFlow Ingestion Worker ${WORKER_ID}/${TOTAL_WORKERS} Online ===`);
+  console.log(`=== MangaFlow Fast Ingestion Worker ${WORKER_ID}/${TOTAL_WORKERS} Online ===`);
 
   const { data: intelList, error } = await supabase
     .from('series_intel')
@@ -321,14 +321,24 @@ async function runWorker() {
 
     if (missingNums.length === 0) continue;
 
-    console.log(`\n📥 "${series.title}": Ingesting ${missingNums.length} missing chapters.`);
+    // Increased from 40 to 120 chapters per run for 3x ingestion speed
+    const batch = missingNums.slice(0, 120);
+    console.log(`\n📥 "${series.title}": Rapid-ingesting ${batch.length}/${missingNums.length} missing chapters.`);
 
-    const batch = missingNums.slice(0, 40);
-    for (const chNum of batch) {
-      const candidates = chapterCandidates.get(chNum) || [];
-      await downloadAndSaveChapter(seriesId, chNum, candidates[0]?.title, candidates);
-      await delay(100);
-    }
+    // High-speed pool: Process 4 chapters concurrently per series
+    const CONCURRENCY = 4;
+    let bIdx = 0;
+
+    const pool = new Array(CONCURRENCY).fill(null).map(async () => {
+      while (bIdx < batch.length) {
+        const chNum = batch[bIdx++];
+        const candidates = chapterCandidates.get(chNum) || [];
+        await downloadAndSaveChapter(seriesId, chNum, candidates[0]?.title, candidates);
+        await delay(15);
+      }
+    });
+
+    await Promise.all(pool);
   }
 
   console.log(`\n🎉 Worker ${WORKER_ID} ingestion cycle complete.`);
