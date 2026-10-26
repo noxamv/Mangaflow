@@ -28,7 +28,7 @@ jobs:
     name: 🛰️ Intel Scout (Recon)
     if: ${{ github.event.inputs.mode == 'all' || github.event.inputs.mode == 'scout-only' || github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
       - name: Checkout Code Repository
@@ -50,7 +50,6 @@ jobs:
       - name: Install Dependencies
         run: |
           npm install --no-audit --no-fund
-          npm install @google/genai --no-audit --no-fund
 
       - name: Run Recon Intel Scout
         env:
@@ -61,7 +60,7 @@ jobs:
         run: node scripts/scout-intel.js
 
   # ==========================================================
-  # STAGE 2: 5-WORKER INGESTION MATRIX (Parallel Chapter Ingestion)
+  # STAGE 2: 8-WORKER FAST INGESTION MATRIX
   # ==========================================================
   token-relay:
     name: 📥 Ingestion Worker ${{ matrix.worker_id }}
@@ -72,8 +71,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        worker_id: [1, 2, 3, 4, 5]
-    timeout-minutes: 30
+        # Scaled to 8 parallel workers for maximum backlog clearing
+        worker_id: [1, 2, 3, 4, 5, 6, 7, 8]
+    timeout-minutes: 35
 
     steps:
       - name: Checkout Code Repository
@@ -100,6 +100,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           WORKER_ID: ${{ matrix.worker_id }}
-          TOTAL_WORKERS: 5
+          TOTAL_WORKERS: 8
           NODE_NO_WARNINGS: 1
         run: node scripts/sync-multi-source.js
