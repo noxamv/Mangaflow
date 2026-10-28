@@ -2,14 +2,14 @@ name: MangaFlow Ingestion Pipeline
 
 on:
   schedule:
-    - cron: '0 */3 * * *' # Automatically runs every 3 hours
-  workflow_dispatch:        # Allows manual trigger at any time
+    - cron: '0 */3 * * *' # Every 3 hours
+  workflow_dispatch:        # Manual on-demand run
 
 jobs:
-  run-pipeline:
+  run-ingestion:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -18,17 +18,17 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: npm ci
 
-      - name: Run Scout Intel (Gemini Powered)
+      - name: 1. Run Scout Intel (Gemini AI Powered)
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: node scripts/scout-intel.js
 
-      - name: Run Chapter Synchronizer
+      - name: 2. Run Chapter Synchronizer (Anti-Pollution Gate)
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
