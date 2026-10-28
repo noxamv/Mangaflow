@@ -50,6 +50,21 @@ async function fetchMangaPillPages(targetUrl: string): Promise<string[]> {
   }
 }
 
+async function fetchComicKPages(chapterHid: string): Promise<string[]> {
+  try {
+    const res = await fetch(`https://api.comick.fun/chapter/${chapterHid}`, {
+      headers: BROWSER_HEADERS,
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const mdImages = json.chapter?.md_images || [];
+    return mdImages.map((img: { bkey: string }) => `https://meo.comick.pictures/${img.bkey}`);
+  } catch {
+    return [];
+  }
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
@@ -90,7 +105,6 @@ export async function GET(
 
     let finalPages: string[] = chapter.pages || [];
 
-    // Check if chapter holds only a single placeholder URL/ID
     const isPlaceholder =
       finalPages.length <= 1 &&
       finalPages[0] &&
@@ -102,13 +116,14 @@ export async function GET(
       const source = chapter.source || '';
       const identifier = chapter.external_id || finalPages[0];
 
-      if (source === 'mangadex' || identifier.length === 36) {
+      if (source === 'comick') {
+        finalPages = await fetchComicKPages(identifier);
+      } else if (source === 'mangadex' || identifier.length === 36) {
         finalPages = await fetchMangaDexPages(identifier);
       } else {
         finalPages = await fetchMangaPillPages(identifier);
       }
 
-      // Cache resolved image URLs to Supabase for all subsequent reads
       if (finalPages.length > 0) {
         await supabase
           .from('chapters')
@@ -117,7 +132,6 @@ export async function GET(
       }
     }
 
-    // Hybrid Storage Resolution: Stitch base_url + relative path if stored relatively
     const baseUrl = chapter.base_url ? chapter.base_url.replace(/\/$/, '') : '';
     const resolvedPages = finalPages
       .map((page: string) => {
@@ -129,7 +143,6 @@ export async function GET(
       })
       .filter(Boolean);
 
-    // Fetch adjacent chapters for seamless reader controls
     const [prevRes, nextRes, allChapsRes] = await Promise.all([
       supabase
         .from('chapters')
