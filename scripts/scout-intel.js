@@ -2,12 +2,17 @@ import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as cheerio from 'cheerio';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = 
+  process.env.SUPABASE_SERVICE_ROLE_KEY || 
+  process.env.SUPABASE_SERVICE_KEY || 
+  process.env.SUPABASE_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing Supabase credentials');
+  console.error('URL present:', Boolean(SUPABASE_URL));
+  console.error('Key present:', Boolean(SUPABASE_SERVICE_ROLE_KEY));
   process.exit(1);
 }
 
