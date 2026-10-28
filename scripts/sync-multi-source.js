@@ -103,7 +103,6 @@ async function fetchMangaDexChapters(mangaDexId) {
 async function sync() {
   console.log('=== High-Throughput Deficit Ingestion Starting ===');
 
-  // Pulls top 40 series with the largest missing chapter gaps from the live view
   const { data: targets, error } = await supabase
     .from('v_automated_sync_queue')
     .select('intel_id, series_id, title, source_platform, target_url, target_identifier, missing_gap')
@@ -144,8 +143,17 @@ async function sync() {
       continue;
     }
 
-    // 3. Deduplicate
-    const missing = remoteChapters.filter((rc) => !existingSet.has(rc.chapter_number));
+    // 3. In-memory deduplication: prevent duplicate chapter numbers within the same batch
+    const seenInBatch = new Set();
+    const missing = [];
+
+    for (const rc of remoteChapters) {
+      if (!existingSet.has(rc.chapter_number) && !seenInBatch.has(rc.chapter_number)) {
+        seenInBatch.add(rc.chapter_number);
+        missing.push(rc);
+      }
+    }
+
     if (missing.length === 0) continue;
 
     console.log(`[Ingesting] ${title}: adding ${missing.length} missing chapters...`);
