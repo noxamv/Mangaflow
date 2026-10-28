@@ -34,12 +34,14 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-async function fetchWithRetry(url, isJson = false, retries = 3) {
+async function fetchWithRetry(url, isJson = false, extraHeaders = {}, retries = 3) {
   for (let i = 1; i <= retries; i++) {
     try {
-      const res = await fetch(url, { headers: BROWSER_HEADERS });
+      const res = await fetch(url, { 
+        headers: { ...BROWSER_HEADERS, ...extraHeaders } 
+      });
       if (res.status === 429) {
-        await sleep(2000 * i);
+        await sleep(2500 * i);
         continue;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -60,7 +62,7 @@ async function scoutMangaDexLatest(dexId) {
       return isNaN(num) ? null : num;
     }
   } catch (err) {
-    // Silent fail to allow fallback
+    // Silent ignore to allow fallbacks
   }
   return null;
 }
@@ -70,17 +72,18 @@ async function scoutMangaPillLatest(targetUrl, seriesTitle) {
     const html = await fetchWithRetry(targetUrl, false);
     const $ = cheerio.load(html);
 
-    // Validate page H1 title
     const pageTitle = $('h1').first().text().trim().toLowerCase();
-    const firstWord = (seriesTitle || '').toLowerCase().split(/[\s:_-]+/)[0].replace(/[^a-z0-9]/g, '');
-    if (pageTitle && firstWord && firstWord.length > 2) {
-      if (!pageTitle.replace(/[^a-z0-9]/g, '').includes(firstWord)) {
+    const knownCollisions = ['one piece', 'naruto', 'bleach', 'detective conan'];
+    const targetLower = (seriesTitle || '').toLowerCase();
+    
+    for (const collision of knownCollisions) {
+      if (pageTitle.includes(collision) && !targetLower.includes(collision)) {
         return null;
       }
     }
 
     let maxNum = null;
-    $('div[id*="chapters"] a[href*="/chapters/"], #chapters a, .chapters-list a').slice(0, 15).each((_, el) => {
+    $('div[id*="chapters"] a[href*="/chapters/"], #chapters a, .chapters-list a, a[href*="/chapters/"]').slice(0, 20).each((_, el) => {
       const href = $(el).attr('href') || '';
       const text = $(el).text().trim();
 
@@ -123,7 +126,6 @@ async function scoutComicKLatest(comicSlug) {
 async function runScout() {
   console.log('=== Running Round-Robin Scout Worker ===');
 
-  // Select 80 series prioritized by drop schedule and stale scouts
   const { data: targets, error } = await supabase
     .from('v_automated_sync_queue')
     .select('series_id, title, slug, source_platform, target_url, target_identifier, comick_hid, upstream_latest')
@@ -139,7 +141,7 @@ async function runScout() {
   console.log(`Scouting ${targets.length} series...`);
 
   for (const item of targets) {
-    const { series_id, title, slug, source_platform, target_url, target_identifier, comick_hid, upstream_latest } = item;
+    const { series_id, title, source_platform, target_url, target_identifier, comick_hid, upstream_latest } = item;
     const currentCeiling = Number(upstream_latest) || 0;
     let discovered = null;
 
@@ -156,9 +158,9 @@ async function runScout() {
     }
 
     if (discovered !== null && !isNaN(discovered)) {
-      // Ceiling anomaly guard: Prevent astronomical jumps (e.g. from 600 to 1196)
+      // Guard: Block abnormal chapter leaps (>30 above known ceiling for established series)
       if (currentCeiling > 50 && discovered > currentCeiling + 30) {
-        console.warn(`[Scout Anomaly Blocked] ${title}: Detected Ch. ${discovered} exceeds known ceiling ${currentCeiling} by >30. Ignoring.`);
+        console.warn(`[Scout Anomaly Blocked] ${title}: Detected Ch. ${discovered} exceeds known ceiling ${currentCeiling} by >30. Skipping.`);
         await supabase
           .from('series_intel')
           .update({ last_scouted_at: new Date().toISOString() })
