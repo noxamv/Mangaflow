@@ -69,7 +69,7 @@ function isSlugMatch(targetUrl, seriesSlug, seriesTitle) {
   return true;
 }
 
-// 1. MangaDex (Official API)
+// 1. MangaDex Ingestion
 async function fetchMangaDex(dexId) {
   const chapters = [];
   let offset = 0;
@@ -100,25 +100,39 @@ async function fetchMangaDex(dexId) {
   return chapters;
 }
 
-// 2. MangaPill (Primary Unblocked Aggregator)
+// 2. MangaPill Ingestion (Hardened Selector + Strict Title Overlap Defense)
 async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   const html = await fetchWithRetry(url, false);
+  if (!html) return [];
   const $ = cheerio.load(html);
 
   const pageTitle = $('h1').first().text().trim().toLowerCase();
-  const knownCollisions = ['one piece', 'naruto', 'bleach', 'detective conan'];
   const targetLower = (seriesTitle || '').toLowerCase();
-  
+
+  // Known hard franchise collision check
+  const knownCollisions = ['one piece', 'naruto', 'bleach', 'detective conan'];
   for (const collision of knownCollisions) {
     if (pageTitle.includes(collision) && !targetLower.includes(collision)) {
-      console.warn(`[Safety Block] Cross-franchise collision detected! Target: "${seriesTitle}", Page H1: "${pageTitle}". Skipping.`);
+      console.warn(`[Safety Block] Franchise collision! Target: "${seriesTitle}", Page H1: "${pageTitle}". Skipping.`);
       return [];
     }
   }
 
+  // Soft title overlap validation: verifies page contains at least 1 significant word
+  const targetWords = targetLower
+    .replace(/[^a-z0-9\s]/g, '')
+    .split(/\s+/)
+    .filter(w => !['the', 'a', 'an', 'of', 'and', 'in', 'is', 'to', 'class', 're'].includes(w) && w.length > 2);
+
+  const hasTitleOverlap = targetWords.some(w => pageTitle.includes(w));
+  if (!hasTitleOverlap && targetWords.length > 0) {
+    console.warn(`[Safety Block] ID Mismatch Detected! Target: "${seriesTitle}", MangaPill Page H1: "${pageTitle}". Skipping.`);
+    return [];
+  }
+
   const chaptersMap = new Map();
 
-  $('div[id*="chapters"] a[href*="/chapters/"], #chapters a, .chapters-list a, a[href*="/chapters/"]').each((_, el) => {
+  $('a[href^="/chapters/"], a[href*="/chapters/"]').each((_, el) => {
     const href = $(el).attr('href');
     const text = $(el).text().trim();
     if (!href) return;
@@ -132,9 +146,9 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
     if (textMatch) {
       num = parseFloat(textMatch[1]);
     } else {
-      const slugMatch = href.match(/chapter-([\d.]+)(?:[^\d]|$)/i);
-      if (slugMatch) {
-        num = parseFloat(slugMatch[1]);
+      const urlMatch = href.match(/chapter-([\d.]+)(?:[^\d]|$)/i);
+      if (urlMatch) {
+        num = parseFloat(urlMatch[1]);
       }
     }
 
@@ -154,7 +168,7 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   return Array.from(chaptersMap.values()).sort((a, b) => a.chapter_number - b.chapter_number);
 }
 
-// 3. Manhwatop Fallback (Madara Theme - Item #16)
+// 3. Manhwatop Fallback (Madara WordPress - Unblocked Runner Safe)
 async function fetchManhwatop(slug) {
   try {
     const cleanSlug = slug.replace(/^https?:\/\/[^\/]+\/manga\//, '').replace(/\/$/, '');
@@ -220,7 +234,7 @@ async function runSynchronizer() {
     const existingSet = new Set((existing || []).map((c) => Number(c.chapter_number)));
     let remoteChapters = [];
 
-    // Tier 1 & 2: Primary Scraping
+    // TIER 1 & 2: Primary Scraping (MangaDex or MangaPill)
     try {
       if (source_platform === 'mangadex' && (target_identifier || target_url)) {
         const dexId = target_identifier || target_url.split('/').pop();
@@ -232,7 +246,7 @@ async function runSynchronizer() {
       console.warn(`[Primary Failed] ${title}: ${err.message}`);
     }
 
-    // Tier 3: Manhwatop Fallback (Activates if primary returned <= 15 teaser chapters)
+    // TIER 3: Manhwatop Fallback (Activates if primary only returns <= 15 promo chapters)
     if (remoteChapters.length <= 15 && title) {
       const fallbackSlug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const fallbackChapters = await fetchManhwatop(fallbackSlug);
