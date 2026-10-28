@@ -164,7 +164,8 @@ async function sync() {
         source: item.source_platform,
         source_provider: item.source_platform,
         external_id: c.external_id,
-        pages: []
+        // Using external_id as placeholder satisfies non-empty array constraints
+        pages: [c.external_id]
       }));
 
       const { error: insertErr } = await supabase
