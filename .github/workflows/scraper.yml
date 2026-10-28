@@ -1,18 +1,18 @@
-name: Catalog & Gaps Sync
+name: MangaFlow Ingestion Pipeline
 
 on:
   schedule:
-    - cron: '0 */3 * * *' # Runs every 3 hours
-  workflow_dispatch:
+    - cron: '0 */3 * * *' # Automatically runs every 3 hours
+  workflow_dispatch:        # Allows manual trigger at any time
 
 jobs:
-  sync:
+  run-pipeline:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repo
+      - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -21,8 +21,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run Smart Sync
+      - name: Run Scout Intel (Gemini Powered)
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node scripts/smart-sync.js
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: node scripts/scout-intel.js
+
+      - name: Run Chapter Synchronizer
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/sync-multi-source.js
