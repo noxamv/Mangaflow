@@ -28,21 +28,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Realistic modern Chrome browser headers to bypass Cloudflare 403 on cloud runners
 const BROWSER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Sec-Ch-Ua': '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
-  'Sec-Ch-Ua-Mobile': '?0',
-  'Sec-Ch-Ua-Platform': '"Windows"',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Sec-Fetch-User': '?1',
-  'Upgrade-Insecure-Requests': '1',
-  'Cache-Control': 'max-age=0'
 };
 
 async function fetchWithRetry(url, isJson = false, extraHeaders = {}, retries = 3) {
@@ -80,7 +69,7 @@ function isSlugMatch(targetUrl, seriesSlug, seriesTitle) {
   return true;
 }
 
-// 1. MangaDex Ingestion
+// 1. MangaDex (Official API)
 async function fetchMangaDex(dexId) {
   const chapters = [];
   let offset = 0;
@@ -111,7 +100,7 @@ async function fetchMangaDex(dexId) {
   return chapters;
 }
 
-// 2. MangaPill Ingestion
+// 2. MangaPill (Primary Unblocked Aggregator)
 async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   const html = await fetchWithRetry(url, false);
   const $ = cheerio.load(html);
@@ -165,83 +154,21 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   return Array.from(chaptersMap.values()).sort((a, b) => a.chapter_number - b.chapter_number);
 }
 
-// 3. ComicK Fallback (Uses live api.comick.io endpoint with fallback mirrors)
-async function fetchComicK(comicSlug) {
-  const domains = ['https://api.comick.io', 'https://api.comick.cc', 'https://api.comick.app'];
-  
-  for (const domain of domains) {
-    try {
-      const headers = {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-        'Referer': 'https://comick.io/'
-      };
-
-      const comicRes = await fetch(`${domain}/comic/${comicSlug}`, { headers });
-      if (!comicRes.ok) continue;
-      const comicInfo = await comicRes.json();
-      const hid = comicInfo?.comic?.hid;
-      if (!hid) continue;
-
-      const chapters = [];
-      let page = 1;
-      let hasMore = true;
-
-      while (hasMore && page <= 10) {
-        const url = `${domain}/comic/${hid}/chapters?lang=en&page=${page}&limit=100`;
-        const res = await fetch(url, { headers });
-        if (!res.ok) break;
-        const data = await res.json();
-        const list = data?.chapters || [];
-
-        if (!list.length) break;
-
-        for (const ch of list) {
-          const num = parseFloat(ch.chap);
-          if (!isNaN(num)) {
-            chapters.push({
-              chapter_number: num,
-              title: ch.title || `Chapter ${num}`,
-              external_id: ch.hid,
-              source: 'comick',
-              pages: [ch.hid]
-            });
-          }
-        }
-
-        if (list.length < 100) hasMore = false;
-        page++;
-        await sleep(150);
-      }
-
-      if (chapters.length > 0) {
-        return chapters.sort((a, b) => a.chapter_number - b.chapter_number);
-      }
-    } catch (err) {
-      // Try next mirror domain
-    }
-  }
-
-  console.warn(`[ComicK Warning] Failed fetching ${comicSlug} across all mirrors.`);
-  return [];
-}
-
-// 4. Toonily Fallback
-async function fetchToonily(toonilySlug) {
+// 3. Manhwatop Fallback (Madara Theme - Item #16)
+async function fetchManhwatop(slug) {
   try {
-    const cleanSlug = toonilySlug.replace(/^https?:\/\/[^\/]+\/webtoon\//, '').replace(/\/$/, '');
-    const url = `https://toonily.com/webtoon/${cleanSlug}/`;
+    const cleanSlug = slug.replace(/^https?:\/\/[^\/]+\/manga\//, '').replace(/\/$/, '');
+    const url = `https://manhwatop.com/manga/${cleanSlug}/`;
     
     const html = await fetchWithRetry(url, false, {
-      'Referer': 'https://www.google.com/',
-      'Sec-Fetch-Site': 'cross-site'
+      'Referer': 'https://manhwatop.com/',
     });
 
     if (!html) return [];
     const $ = cheerio.load(html);
     const chapters = [];
 
-    $('li.wp-manga-chapter a, ul.main.version-chap a, .listing-chapters_wrap a').each((_, el) => {
+    $('li.wp-manga-chapter a').each((_, el) => {
       const href = $(el).attr('href');
       const text = $(el).text().trim();
       if (!href || !href.includes('/chapter-')) return;
@@ -254,7 +181,7 @@ async function fetchToonily(toonilySlug) {
           chapter_number: num,
           title: text.replace(/\s+/g, ' ').trim() || `Chapter ${num}`,
           external_id: href,
-          source: 'toonily',
+          source: 'manhwatop',
           pages: [href]
         });
       }
@@ -262,54 +189,12 @@ async function fetchToonily(toonilySlug) {
 
     return chapters.sort((a, b) => a.chapter_number - b.chapter_number);
   } catch (err) {
-    console.warn(`[Toonily Error] ${toonilySlug}:`, err.message);
-    return [];
-  }
-}
-
-// 5. ToonGod Fallback
-async function fetchToonGod(slug) {
-  try {
-    const cleanSlug = slug.replace(/^https?:\/\/[^\/]+\/webtoon\//, '').replace(/\/$/, '');
-    const url = `https://www.toongod.org/webtoon/${cleanSlug}/`;
-    
-    const html = await fetchWithRetry(url, false, {
-      'Referer': 'https://www.google.com/',
-      'Sec-Fetch-Site': 'cross-site'
-    });
-
-    if (!html) return [];
-    const $ = cheerio.load(html);
-    const chapters = [];
-
-    $('li.wp-manga-chapter a').each((_, el) => {
-      const href = $(el).attr('href');
-      const text = $(el).text().trim();
-      if (!href) return;
-
-      const match = text.match(/(?:chapter|ch\.?)\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i);
-      const num = match ? parseFloat(match[1]) : null;
-
-      if (num !== null && !isNaN(num)) {
-        chapters.push({
-          chapter_number: num,
-          title: text.replace(/\s+/g, ' ').trim() || `Chapter ${num}`,
-          external_id: href,
-          source: 'toongod',
-          pages: [href]
-        });
-      }
-    });
-
-    return chapters.sort((a, b) => a.chapter_number - b.chapter_number);
-  } catch (err) {
-    console.warn(`[ToonGod Error] ${slug}:`, err.message);
     return [];
   }
 }
 
 async function runSynchronizer() {
-  console.log('=== Starting Smart Multi-Tier Ingestion Pipeline ===');
+  console.log('=== Starting MangaFlow High-Speed Synchronizer ===');
 
   const { data: queue, error: qErr } = await supabase
     .from('v_automated_sync_queue')
@@ -325,17 +210,7 @@ async function runSynchronizer() {
   let totalAdded = 0;
 
   for (const item of queue) {
-    const { 
-      series_id, 
-      title, 
-      slug, 
-      source_platform, 
-      target_url, 
-      target_identifier, 
-      comick_hid, 
-      toonily_slug, 
-      toongod_slug 
-    } = item;
+    const { series_id, title, slug, source_platform, target_url, target_identifier } = item;
 
     const { data: existing } = await supabase
       .from('chapters')
@@ -345,7 +220,7 @@ async function runSynchronizer() {
     const existingSet = new Set((existing || []).map((c) => Number(c.chapter_number)));
     let remoteChapters = [];
 
-    // TIER 1 & 2: Primary Scraping
+    // Tier 1 & 2: Primary Scraping
     try {
       if (source_platform === 'mangadex' && (target_identifier || target_url)) {
         const dexId = target_identifier || target_url.split('/').pop();
@@ -354,36 +229,16 @@ async function runSynchronizer() {
         remoteChapters = await fetchMangaPill(target_url, slug, title);
       }
     } catch (err) {
-      console.warn(`[Tier 1/2 Failed] ${title}: ${err.message}`);
+      console.warn(`[Primary Failed] ${title}: ${err.message}`);
     }
 
-    // TIER 3: ComicK Fallback (activates if empty or <= 15 teaser chapters found)
-    if (remoteChapters.length <= 15 && (comick_hid || title)) {
-      const fallbackSlug = comick_hid || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      console.log(`[Tier 3 ComicK] Checking fallback for: ${title} (${fallbackSlug})`);
-      const comickChapters = await fetchComicK(fallbackSlug);
-      if (comickChapters.length > remoteChapters.length) {
-        remoteChapters = comickChapters;
-      }
-    }
-
-    // TIER 4: Toonily Fallback
-    if (remoteChapters.length <= 15 && (toonily_slug || title)) {
-      const fallbackSlug = toonily_slug || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      console.log(`[Tier 4 Toonily] Checking fallback for: ${title} (${fallbackSlug})`);
-      const toonilyChapters = await fetchToonily(fallbackSlug);
-      if (toonilyChapters.length > remoteChapters.length) {
-        remoteChapters = toonilyChapters;
-      }
-    }
-
-    // TIER 5: ToonGod Fallback
-    if (remoteChapters.length <= 15 && (toongod_slug || title)) {
-      const fallbackSlug = toongod_slug || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      console.log(`[Tier 5 ToonGod] Checking fallback for: ${title} (${fallbackSlug})`);
-      const toonGodChapters = await fetchToonGod(fallbackSlug);
-      if (toonGodChapters.length > remoteChapters.length) {
-        remoteChapters = toonGodChapters;
+    // Tier 3: Manhwatop Fallback (Activates if primary returned <= 15 teaser chapters)
+    if (remoteChapters.length <= 15 && title) {
+      const fallbackSlug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const fallbackChapters = await fetchManhwatop(fallbackSlug);
+      if (fallbackChapters.length > remoteChapters.length) {
+        console.log(`[Manhwatop Fallback Used] ${title}: Found ${fallbackChapters.length} chapters`);
+        remoteChapters = fallbackChapters;
       }
     }
 
@@ -439,7 +294,7 @@ async function runSynchronizer() {
       })
       .eq('series_id', series_id);
 
-    await sleep(250);
+    await sleep(200);
   }
 
   console.log(`\n=== Finished Ingestion: Successfully inserted ${totalAdded} chapters! ===`);
