@@ -1,4 +1,4 @@
-// Polyfill global WebSocket for Supabase on Node environments
+// scripts/scout-intel.js
 if (typeof globalThis.WebSocket === 'undefined') {
   try {
     const { default: WebSocket } = await import('ws');
@@ -9,7 +9,6 @@ if (typeof globalThis.WebSocket === 'undefined') {
 }
 
 import { createClient } from '@supabase/supabase-js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import * as cheerio from 'cheerio';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -17,10 +16,9 @@ const SUPABASE_SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY || 
   process.env.SUPABASE_SERVICE_KEY || 
   process.env.SUPABASE_KEY;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('Missing Supabase credentials');
+  console.error('[Fatal] Missing Supabase credentials');
   process.exit(1);
 }
 
@@ -28,7 +26,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false }
 });
 
-const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const BROWSER_HEADERS = {
@@ -37,16 +34,16 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-async function fetchHtml(url, retries = 3) {
+async function fetchWithRetry(url, isJson = false, retries = 3) {
   for (let i = 1; i <= retries; i++) {
     try {
       const res = await fetch(url, { headers: BROWSER_HEADERS });
       if (res.status === 429) {
-        await sleep(3000 * i);
+        await sleep(2000 * i);
         continue;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.text();
+      return isJson ? await res.json() : await res.text();
     } catch (e) {
       if (i === retries) throw e;
       await sleep(1000 * i);
@@ -54,102 +51,147 @@ async function fetchHtml(url, retries = 3) {
   }
 }
 
-async function aiScoutChapterNumber(seriesTitle, htmlSnippet) {
-  if (!genAI) return null;
+async function scoutMangaDexLatest(dexId) {
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    const prompt = `
-Extract the exact highest chapter number released for "${seriesTitle}" from this raw webpage snippet.
-If there are side stories or epilogues (e.g., 201, 205.5), return the absolute highest numeric index.
-Return ONLY JSON: {"latest_chapter": number}
+    const url = `https://api.mangadex.org/chapter?manga=${dexId}&translatedLanguage[]=en&limit=1&order[chapter]=desc`;
+    const json = await fetchWithRetry(url, true);
+    if (json?.data?.length > 0) {
+      const num = parseFloat(json.data[0].attributes.chapter);
+      return isNaN(num) ? null : num;
+    }
+  } catch (err) {
+    // Silent fail to allow fallback
+  }
+  return null;
+}
 
-Snippet:
-${htmlSnippet.slice(0, 7000)}
-`;
-    const res = await model.generateContent(prompt);
-    const cleaned = res.response.text().replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-    return typeof parsed.latest_chapter === 'number' ? parsed.latest_chapter : null;
-  } catch {
+async function scoutMangaPillLatest(targetUrl, seriesTitle) {
+  try {
+    const html = await fetchWithRetry(targetUrl, false);
+    const $ = cheerio.load(html);
+
+    // Validate page H1 title
+    const pageTitle = $('h1').first().text().trim().toLowerCase();
+    const firstWord = (seriesTitle || '').toLowerCase().split(/[\s:_-]+/)[0].replace(/[^a-z0-9]/g, '');
+    if (pageTitle && firstWord && firstWord.length > 2) {
+      if (!pageTitle.replace(/[^a-z0-9]/g, '').includes(firstWord)) {
+        return null;
+      }
+    }
+
+    let maxNum = null;
+    $('div[id*="chapters"] a[href*="/chapters/"], #chapters a, .chapters-list a').slice(0, 15).each((_, el) => {
+      const href = $(el).attr('href') || '';
+      const text = $(el).text().trim();
+
+      const textMatch = text.match(/(?:chapter|ch\.?)\s*([\d.]+)/i);
+      const slugMatch = href.match(/chapter-([\d.]+)(?:[^\d]|$)/i);
+      const num = textMatch ? parseFloat(textMatch[1]) : (slugMatch ? parseFloat(slugMatch[1]) : null);
+
+      if (num !== null && !isNaN(num)) {
+        if (maxNum === null || num > maxNum) {
+          maxNum = num;
+        }
+      }
+    });
+
+    return maxNum;
+  } catch (err) {
     return null;
   }
 }
 
-async function scout() {
-  console.log('=== Fair Round-Robin Scout Engine Starting ===');
+async function scoutComicKLatest(comicSlug) {
+  try {
+    const comicInfo = await fetchWithRetry(`https://api.comick.fun/comic/${comicSlug}`, true);
+    const hid = comicInfo?.comic?.hid;
+    if (!hid) return null;
 
-  // Pulls the top 80 series by rotation (oldest checked + unverified)
+    const url = `https://api.comick.fun/comic/${hid}/chapters?lang=en&page=1&limit=1`;
+    const data = await fetchWithRetry(url, true);
+    const first = data?.chapters?.[0];
+    if (first && first.chap) {
+      const num = parseFloat(first.chap);
+      return isNaN(num) ? null : num;
+    }
+  } catch (err) {
+    return null;
+  }
+  return null;
+}
+
+async function runScout() {
+  console.log('=== Running Round-Robin Scout Worker ===');
+
+  // Select 80 series prioritized by drop schedule and stale scouts
   const { data: targets, error } = await supabase
-    .from('series_intel')
-    .select('id, series_id, source_platform, target_url, target_identifier, latest_known_chapter, series:series_id(title)')
+    .from('v_automated_sync_queue')
+    .select('series_id, title, slug, source_platform, target_url, target_identifier, comick_hid, upstream_latest')
+    .order('is_release_today', { ascending: false })
     .order('last_scouted_at', { ascending: true, nullsFirst: true })
     .limit(80);
 
-  if (error || !targets) {
-    console.error('Failed to query targets:', error?.message);
+  if (error || !targets?.length) {
+    console.log('No targets to scout or error:', error?.message);
     return;
   }
 
+  console.log(`Scouting ${targets.length} series...`);
+
   for (const item of targets) {
-    const title = item.series?.title || 'Unknown';
-    if (!item.target_url) continue;
+    const { series_id, title, slug, source_platform, target_url, target_identifier, comick_hid, upstream_latest } = item;
+    const currentCeiling = Number(upstream_latest) || 0;
+    let discovered = null;
 
-    let detectedLatest = 0;
+    if (source_platform === 'mangadex' && (target_identifier || target_url)) {
+      const dexId = target_identifier || target_url.split('/').pop();
+      discovered = await scoutMangaDexLatest(dexId);
+    } else if (source_platform === 'mangapill' && target_url) {
+      discovered = await scoutMangaPillLatest(target_url, title);
+    }
 
-    try {
-      if (item.source_platform === 'mangadex') {
-        const dexId = item.target_identifier || item.target_url.split('/').pop();
-        const res = await fetch(`https://api.mangadex.org/manga/${dexId}/feed?limit=1&order[chapter]=desc&translatedLanguage[]=en`, { headers: BROWSER_HEADERS });
-        if (res.ok) {
-          const json = await res.json();
-          const ch = json.data?.[0]?.attributes?.chapter;
-          if (ch) detectedLatest = parseFloat(ch);
-        }
+    if (!discovered && (comick_hid || title)) {
+      const fallbackSlug = comick_hid || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      discovered = await scoutComicKLatest(fallbackSlug);
+    }
+
+    if (discovered !== null && !isNaN(discovered)) {
+      // Ceiling anomaly guard: Prevent astronomical jumps (e.g. from 600 to 1196)
+      if (currentCeiling > 50 && discovered > currentCeiling + 30) {
+        console.warn(`[Scout Anomaly Blocked] ${title}: Detected Ch. ${discovered} exceeds known ceiling ${currentCeiling} by >30. Ignoring.`);
+        await supabase
+          .from('series_intel')
+          .update({ last_scouted_at: new Date().toISOString() })
+          .eq('series_id', series_id);
+        continue;
+      }
+
+      if (discovered > currentCeiling) {
+        console.log(`[New Release/Epilogue Detected] ${title} -> Ch. ${discovered} (was ${currentCeiling})`);
+        await supabase
+          .from('series_intel')
+          .update({
+            latest_known_chapter: discovered,
+            last_scouted_at: new Date().toISOString()
+          })
+          .eq('series_id', series_id);
       } else {
-        const html = await fetchHtml(item.target_url);
-        const $ = cheerio.load(html);
-
-        $('a').each((_, el) => {
-          const t = $(el).text();
-          const href = $(el).attr('href') || '';
-          const match = t.match(/Chapter\s+([\d.]+)/i) || href.match(/chapter-([\d.]+)/i);
-          if (match) {
-            const num = parseFloat(match[1]);
-            if (num > detectedLatest && num < 10000) detectedLatest = num;
-          }
-        });
-
-        if (detectedLatest === 0 && GEMINI_API_KEY) {
-          const aiNum = await aiScoutChapterNumber(title, html);
-          if (aiNum) detectedLatest = aiNum;
-        }
+        await supabase
+          .from('series_intel')
+          .update({ last_scouted_at: new Date().toISOString() })
+          .eq('series_id', series_id);
       }
-
-      // Safe ratchet: Never lower the chapter ceiling even if upstream source is slow to refresh
-      const finalLatest = Math.max(detectedLatest, item.latest_known_chapter || 0);
-
-      // Always update last_scouted_at so this series moves to the back of the line
-      await supabase
-        .from('series_intel')
-        .update({
-          latest_known_chapter: finalLatest > 0 ? finalLatest : item.latest_known_chapter,
-          last_scouted_at: new Date().toISOString()
-        })
-        .eq('id', item.id);
-
-      if (detectedLatest > (item.latest_known_chapter || 0)) {
-        console.log(`[New Release/Epilogue Detected] ${title} -> Ch. ${detectedLatest}`);
-      }
-    } catch (err) {
-      // Mark scouted anyway so one failing URL doesn't clog the entire queue
+    } else {
       await supabase
         .from('series_intel')
         .update({ last_scouted_at: new Date().toISOString() })
-        .eq('id', item.id);
+        .eq('series_id', series_id);
     }
-    await sleep(150);
+
+    await sleep(200);
   }
+
   console.log('=== Round-Robin Scout Finished ===');
 }
 
-scout();
+runScout();
