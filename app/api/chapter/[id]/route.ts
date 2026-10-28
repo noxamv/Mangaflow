@@ -6,7 +6,8 @@ import * as cheerio from 'cheerio';
 export const dynamic = 'force-dynamic';
 
 const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
 };
@@ -15,7 +16,7 @@ async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   try {
     const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterDexId}`, {
       headers: BROWSER_HEADERS,
-      next: { revalidate: 3600 }
+      next: { revalidate: 3600 },
     });
     if (!res.ok) return [];
     const json = await res.json();
@@ -89,7 +90,7 @@ export async function GET(
 
     let finalPages: string[] = chapter.pages || [];
 
-    // Check if pages holds only a placeholder reference (1 link matching external_id or ending in html/manga URL)
+    // Check if chapter holds only a single placeholder URL/ID
     const isPlaceholder =
       finalPages.length <= 1 &&
       finalPages[0] &&
@@ -107,7 +108,7 @@ export async function GET(
         finalPages = await fetchMangaPillPages(identifier);
       }
 
-      // If resolved, cache back into Supabase for instant loads on subsequent visits
+      // Cache resolved image URLs to Supabase for all subsequent reads
       if (finalPages.length > 0) {
         await supabase
           .from('chapters')
@@ -116,7 +117,7 @@ export async function GET(
       }
     }
 
-    // Hybrid Storage Resolution: Stitch base_url + relative path if legacy relative structure
+    // Hybrid Storage Resolution: Stitch base_url + relative path if stored relatively
     const baseUrl = chapter.base_url ? chapter.base_url.replace(/\/$/, '') : '';
     const resolvedPages = finalPages
       .map((page: string) => {
@@ -128,7 +129,7 @@ export async function GET(
       })
       .filter(Boolean);
 
-    // Fetch adjacent chapters for instant reader navigation
+    // Fetch adjacent chapters for seamless reader controls
     const [prevRes, nextRes, allChapsRes] = await Promise.all([
       supabase
         .from('chapters')
@@ -150,7 +151,7 @@ export async function GET(
         .from('chapters')
         .select('id, chapter_number')
         .eq('series_id', chapter.series_id)
-        .order('chapter_number', { ascending: true })
+        .order('chapter_number', { ascending: true }),
     ]);
 
     return NextResponse.json({
@@ -158,7 +159,7 @@ export async function GET(
       pages: resolvedPages,
       prevChapter: prevRes.data || null,
       nextChapter: nextRes.data || null,
-      allChapters: allChapsRes.data || []
+      allChapters: allChapsRes.data || [],
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
