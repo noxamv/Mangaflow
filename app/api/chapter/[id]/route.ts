@@ -7,8 +7,8 @@ export const dynamic = 'force-dynamic';
 
 const BROWSER_HEADERS = {
   'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
@@ -31,7 +31,10 @@ async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
 
 async function fetchMangaPillPages(targetUrl: string): Promise<string[]> {
   try {
-    const res = await fetch(targetUrl, { headers: BROWSER_HEADERS, next: { revalidate: 3600 } });
+    const res = await fetch(targetUrl, {
+      headers: BROWSER_HEADERS,
+      next: { revalidate: 3600 },
+    });
     if (!res.ok) return [];
     const html = await res.text();
     const $ = cheerio.load(html);
@@ -50,49 +53,13 @@ async function fetchMangaPillPages(targetUrl: string): Promise<string[]> {
   }
 }
 
-async function fetchComicKPages(chapterHid: string): Promise<string[]> {
-  try {
-    const res = await fetch(`https://api.comick.fun/chapter/${chapterHid}`, {
-      headers: { ...BROWSER_HEADERS, 'Accept': 'application/json' },
-      next: { revalidate: 3600 },
-    });
-    if (!res.ok) return [];
-    const json = await res.json();
-    const mdImages = json.chapter?.md_images || [];
-    return mdImages.map((img: { bkey: string }) => `https://meo.comick.pictures/${img.bkey}`);
-  } catch {
-    return [];
-  }
-}
-
-async function fetchToonilyPages(chapterUrl: string): Promise<string[]> {
+async function fetchManhwatopPages(chapterUrl: string): Promise<string[]> {
   try {
     const res = await fetch(chapterUrl, {
-      headers: BROWSER_HEADERS,
-      next: { revalidate: 3600 },
-    });
-    if (!res.ok) return [];
-    const html = await res.text();
-    const $ = cheerio.load(html);
-    const pages: string[] = [];
-
-    $('.reading-content img, .page-break img').each((_, el) => {
-      const src = $(el).attr('data-src') || $(el).attr('src');
-      if (src && !pages.includes(src.trim())) {
-        pages.push(src.trim());
-      }
-    });
-
-    return pages;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchToonGodPages(chapterUrl: string): Promise<string[]> {
-  try {
-    const res = await fetch(chapterUrl, {
-      headers: BROWSER_HEADERS,
+      headers: {
+        ...BROWSER_HEADERS,
+        'Referer': 'https://manhwatop.com/',
+      },
       next: { revalidate: 3600 },
     });
     if (!res.ok) return [];
@@ -153,31 +120,28 @@ export async function GET(
 
     let finalPages: string[] = chapter.pages || [];
 
+    // Detect if pages array only stores an external link or placeholder
     const isPlaceholder =
       finalPages.length <= 1 &&
       finalPages[0] &&
       (finalPages[0] === chapter.external_id ||
         finalPages[0].includes('mangapill.com') ||
-        finalPages[0].includes('toonily.com') ||
-        finalPages[0].includes('toongod.org') ||
+        finalPages[0].includes('manhwatop.com') ||
         !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i));
 
     if (isPlaceholder) {
       const source = chapter.source || '';
       const identifier = chapter.external_id || finalPages[0];
 
-      if (source === 'toonily') {
-        finalPages = await fetchToonilyPages(identifier);
-      } else if (source === 'toongod') {
-        finalPages = await fetchToonGodPages(identifier);
-      } else if (source === 'comick') {
-        finalPages = await fetchComicKPages(identifier);
+      if (source === 'manhwatop') {
+        finalPages = await fetchManhwatopPages(identifier);
       } else if (source === 'mangadex' || identifier.length === 36) {
         finalPages = await fetchMangaDexPages(identifier);
       } else {
         finalPages = await fetchMangaPillPages(identifier);
       }
 
+      // Persist resolved pages in Supabase so subsequent reads load instantly
       if (finalPages.length > 0) {
         await supabase
           .from('chapters')
@@ -197,6 +161,7 @@ export async function GET(
       })
       .filter(Boolean);
 
+    // Fetch pagination controls
     const [prevRes, nextRes, allChapsRes] = await Promise.all([
       supabase
         .from('chapters')
