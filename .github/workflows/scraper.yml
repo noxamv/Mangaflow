@@ -2,12 +2,13 @@ name: MangaFlow Ingestion Pipeline
 
 on:
   schedule:
-    - cron: '0 */3 * * *'
-  workflow_dispatch:
+    - cron: '*/30 * * * *' # Runs automatically every 30 minutes
+  workflow_dispatch:        # Manual on-demand run
 
 jobs:
   run-ingestion:
     runs-on: ubuntu-latest
+    timeout-minutes: 20      # Automatically cuts off if a site hangs, saving GitHub Actions quota
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -30,7 +31,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: node scripts/scout-intel.js
 
-      - name: 2. Run Chapter Synchronizer (Anti-Pollution Gate)
+      - name: 2. Run Chapter Synchronizer (Max Limit Boost)
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
