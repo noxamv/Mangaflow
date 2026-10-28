@@ -1,4 +1,4 @@
-// Polyfill global WebSocket for Supabase on Node environments
+// scripts/sync-multi-source.js
 if (typeof globalThis.WebSocket === 'undefined') {
   try {
     const { default: WebSocket } = await import('ws');
@@ -18,7 +18,7 @@ const SUPABASE_SERVICE_ROLE_KEY =
   process.env.SUPABASE_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('Missing Supabase credentials');
+  console.error('[Fatal] Missing Supabase credentials');
   process.exit(1);
 }
 
@@ -30,20 +30,20 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const BROWSER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-async function fetchHtml(url, retries = 3) {
+async function fetchWithRetry(url, isJson = false, retries = 3) {
   for (let i = 1; i <= retries; i++) {
     try {
       const res = await fetch(url, { headers: BROWSER_HEADERS });
       if (res.status === 429) {
-        await sleep(3000 * i);
+        await sleep(2500 * i);
         continue;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.text();
+      return isJson ? await res.json() : await res.text();
     } catch (e) {
       if (i === retries) throw e;
       await sleep(1000 * i);
@@ -51,140 +51,211 @@ async function fetchHtml(url, retries = 3) {
   }
 }
 
-function parseMangapill(html) {
-  const $ = cheerio.load(html);
-  const chapters = [];
-  $('a[href*="/chapters/"]').each((_, el) => {
-    const href = $(el).attr('href');
-    const titleText = $(el).text().trim();
-    if (!href) return;
-
-    const match = titleText.match(/Chapter\s+([\d.]+)/i) || href.match(/-chapter-([\d.]+)/i);
-    if (match) {
-      chapters.push({
-        chapter_number: parseFloat(match[1]),
-        title: titleText,
-        external_id: href.startsWith('http') ? href : `https://mangapill.com${href}`
-      });
-    }
-  });
-  return chapters;
-}
-
-async function fetchMangaDexChapters(mangaDexId) {
+// 1. MangaDex Ingestion
+async function fetchMangaDex(dexId) {
   const chapters = [];
   let offset = 0;
   const limit = 100;
-  let total = 100;
+  let total = 1;
 
-  while (offset < total) {
-    const url = `https://api.mangadex.org/manga/${mangaDexId}/feed?limit=${limit}&offset=${offset}&order[chapter]=asc&translatedLanguage[]=en`;
-    const res = await fetch(url, { headers: BROWSER_HEADERS });
-    if (!res.ok) break;
-    const json = await res.json();
+  while (offset < total && offset < 1000) {
+    const url = `https://api.mangadex.org/chapter?manga=${dexId}&translatedLanguage[]=en&limit=${limit}&offset=${offset}&order[chapter]=asc`;
+    const json = await fetchWithRetry(url, true);
+    if (!json?.data?.length) break;
+
     total = json.total || 0;
-
-    for (const item of json.data || []) {
-      const chNum = parseFloat(item.attributes.chapter);
-      if (!isNaN(chNum)) {
+    for (const c of json.data) {
+      const num = parseFloat(c.attributes.chapter);
+      if (!isNaN(num)) {
         chapters.push({
-          chapter_number: chNum,
-          title: item.attributes.title || `Chapter ${chNum}`,
-          external_id: item.id
+          chapter_number: num,
+          title: c.attributes.title || `Chapter ${num}`,
+          external_id: c.id,
+          source: 'mangadex',
+          pages: [c.id]
         });
       }
     }
     offset += limit;
-    await sleep(120);
+    await sleep(200);
   }
   return chapters;
 }
 
-async function sync() {
-  console.log('=== High-Throughput Deficit Ingestion Starting ===');
+// 2. MangaPill Ingestion
+async function fetchMangaPill(url) {
+  const html = await fetchWithRetry(url, false);
+  const $ = cheerio.load(html);
+  const chapters = [];
 
-  const { data: targets, error } = await supabase
+  $('div[id*="chapters"] a, .chapters-list a, a[href*="/chapters/"]').each((_, el) => {
+    const href = $(el).attr('href');
+    const text = $(el).text().trim();
+    if (!href) return;
+
+    const fullUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
+    const match = text.match(/chapter\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i);
+    const num = match ? parseFloat(match[1]) : null;
+
+    if (num !== null && !isNaN(num)) {
+      chapters.push({
+        chapter_number: num,
+        title: text || `Chapter ${num}`,
+        external_id: fullUrl,
+        source: 'mangapill',
+        pages: [fullUrl]
+      });
+    }
+  });
+
+  return chapters;
+}
+
+// 3. ComicK Ingestion (Fallback)
+async function fetchComicK(comicSlug) {
+  try {
+    const comicInfo = await fetchWithRetry(`https://api.comick.fun/comic/${comicSlug}`, true);
+    const hid = comicInfo?.comic?.hid;
+    if (!hid) return [];
+
+    const chapters = [];
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore && page <= 10) {
+      const url = `https://api.comick.fun/comic/${hid}/chapters?lang=en&page=${page}&limit=100`;
+      const data = await fetchWithRetry(url, true);
+      const list = data?.chapters || [];
+
+      if (!list.length) break;
+
+      for (const ch of list) {
+        const num = parseFloat(ch.chap);
+        if (!isNaN(num)) {
+          chapters.push({
+            chapter_number: num,
+            title: ch.title || `Chapter ${num}`,
+            external_id: ch.hid,
+            source: 'comick',
+            pages: [ch.hid]
+          });
+        }
+      }
+
+      if (list.length < 100) hasMore = false;
+      page++;
+      await sleep(150);
+    }
+
+    return chapters;
+  } catch (err) {
+    console.warn(`[ComicK Warning] Failed fetching ${comicSlug}:`, err.message);
+    return [];
+  }
+}
+
+async function runSynchronizer() {
+  console.log('=== Starting Smart 3-Tier Multi-Source Synchronizer ===');
+
+  const { data: queue, error: qErr } = await supabase
     .from('v_automated_sync_queue')
-    .select('intel_id, series_id, title, source_platform, target_url, target_identifier, missing_gap')
-    .gt('missing_gap', 0)
-    .limit(40);
+    .select('*')
+    .limit(45);
 
-  if (error || !targets) {
-    console.error('Failed to query automated sync queue:', error?.message);
+  if (qErr || !queue?.length) {
+    console.log('Queue empty or error:', qErr?.message);
     return;
   }
 
-  let totalIngestedThisRun = 0;
+  console.log(`Processing ${queue.length} target series from queue...`);
+  let totalAdded = 0;
 
-  for (const item of targets) {
-    const seriesId = item.series_id;
-    const title = item.title;
+  for (const item of queue) {
+    const { series_id, title, source_platform, target_url, target_identifier, comick_hid } = item;
 
-    // 1. Fetch existing chapters
-    const { data: existingRows } = await supabase
+    const { data: existing } = await supabase
       .from('chapters')
       .select('chapter_number')
-      .eq('series_id', seriesId);
+      .eq('series_id', series_id);
 
-    const existingSet = new Set((existingRows || []).map((r) => Number(r.chapter_number)));
-
-    // 2. Fetch remote chapters
+    const existingSet = new Set((existing || []).map((c) => Number(c.chapter_number)));
     let remoteChapters = [];
+
+    // Tier 1 & 2: Primary scraping
     try {
-      if (item.source_platform === 'mangadex') {
-        const dexId = item.target_identifier || item.target_url.split('/').pop();
-        remoteChapters = await fetchMangaDexChapters(dexId);
-      } else if (item.source_platform === 'mangapill') {
-        const html = await fetchHtml(item.target_url);
-        remoteChapters = parseMangapill(html);
+      if (source_platform === 'mangadex' && (target_identifier || target_url)) {
+        const dexId = target_identifier || target_url.split('/').pop();
+        remoteChapters = await fetchMangaDex(dexId);
+      } else if (source_platform === 'mangapill' && target_url) {
+        remoteChapters = await fetchMangaPill(target_url);
       }
     } catch (err) {
-      console.warn(`[Skip] Failed fetching ${title}:`, err.message);
+      console.warn(`[Tier 1/2 Failed] ${title}: ${err.message}`);
+    }
+
+    // Tier 3: ComicK Fallback (activates if 0 chapters were returned)
+    if (remoteChapters.length === 0 && (comick_hid || title)) {
+      const fallbackSlug = comick_hid || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      console.log(`[Tier 3 Fallback] Activating ComicK for: ${title} (${fallbackSlug})`);
+      remoteChapters = await fetchComicK(fallbackSlug);
+    }
+
+    console.log(`[Scan Result] ${title}: Found ${remoteChapters.length} remote chapters`);
+
+    const missing = remoteChapters.filter((rc) => !existingSet.has(Number(rc.chapter_number)));
+
+    if (missing.length === 0) {
+      await supabase
+        .from('series_intel')
+        .update({ last_scouted_at: new Date().toISOString() })
+        .eq('series_id', series_id);
       continue;
     }
 
-    // 3. In-memory deduplication: prevent duplicate chapter numbers within the same batch
-    const seenInBatch = new Set();
-    const missing = [];
+    console.log(`-> ${title}: Ingesting ${missing.length} missing chapters...`);
 
-    for (const rc of remoteChapters) {
-      if (!existingSet.has(rc.chapter_number) && !seenInBatch.has(rc.chapter_number)) {
-        seenInBatch.add(rc.chapter_number);
-        missing.push(rc);
+    const dedupedMap = new Map();
+    for (const ch of missing) {
+      if (!dedupedMap.has(ch.chapter_number)) {
+        dedupedMap.set(ch.chapter_number, {
+          series_id,
+          chapter_number: ch.chapter_number,
+          title: ch.title,
+          source: ch.source,
+          external_id: ch.external_id,
+          pages: ch.pages
+        });
       }
     }
 
-    if (missing.length === 0) continue;
+    const payload = Array.from(dedupedMap.values());
 
-    console.log(`[Ingesting] ${title}: adding ${missing.length} missing chapters...`);
-
-    // 4. Batch upsert in chunks of 200
-    const BATCH = 200;
-    for (let i = 0; i < missing.length; i += BATCH) {
-      const chunk = missing.slice(i, i + BATCH).map((c) => ({
-        series_id: seriesId,
-        chapter_number: c.chapter_number,
-        title: c.title,
-        source: item.source_platform,
-        source_provider: item.source_platform,
-        external_id: c.external_id,
-        pages: [c.external_id]
-      }));
-
-      const { error: insertErr } = await supabase
+    for (let i = 0; i < payload.length; i += 150) {
+      const batch = payload.slice(i, i + 150);
+      const { error: insErr } = await supabase
         .from('chapters')
-        .upsert(chunk, { onConflict: 'series_id,chapter_number' });
+        .upsert(batch, { onConflict: 'series_id,chapter_number' });
 
-      if (!insertErr) {
-        totalIngestedThisRun += chunk.length;
+      if (insErr) {
+        console.error(`Error inserting batch for ${title}:`, insErr.message);
       } else {
-        console.error(`Insert failed for ${title}:`, insertErr.message);
+        totalAdded += batch.length;
       }
-      await sleep(100);
     }
+
+    const maxRemote = Math.max(...remoteChapters.map((c) => c.chapter_number));
+    await supabase
+      .from('series_intel')
+      .update({
+        latest_known_chapter: maxRemote,
+        last_scouted_at: new Date().toISOString()
+      })
+      .eq('series_id', series_id);
+
+    await sleep(250);
   }
 
-  console.log(`\n=== Ingestion Pass Finished: Total ${totalIngestedThisRun} chapters added ===`);
+  console.log(`\n=== Finished Ingestion: Successfully inserted ${totalAdded} chapters! ===`);
 }
 
-sync();
+runSynchronizer();
