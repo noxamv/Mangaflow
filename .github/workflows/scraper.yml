@@ -2,13 +2,19 @@ name: MangaFlow Ingestion Pipeline
 
 on:
   schedule:
-    - cron: '*/30 * * * *' # Runs automatically every 30 minutes
-  workflow_dispatch:        # Manual on-demand run
+    # Run every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: scraper-pipeline
+  cancel-in-progress: false
 
 jobs:
   run-ingestion:
     runs-on: ubuntu-latest
-    timeout-minutes: 20      # Automatically cuts off if a site hangs, saving GitHub Actions quota
+    timeout-minutes: 35
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -16,24 +22,21 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '20'
+          cache: 'npm'
 
-      - name: Install Project & Scraper Dependencies
+      - name: Install Dependencies
         run: |
-          npm install
-          npm install cheerio @google/generative-ai ws
+          npm ci || npm install --legacy-peer-deps
 
-      - name: 1. Run Scout Intel (Gemini AI Powered)
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - name: 1. Run Scout Intel
         run: node scripts/scout-intel.js
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
       - name: 2. Run Chapter Synchronizer (Max Limit Boost)
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
         run: node scripts/sync-multi-source.js
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
