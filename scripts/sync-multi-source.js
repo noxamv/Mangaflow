@@ -1,3 +1,13 @@
+// Polyfill global WebSocket for Supabase on Node environments
+if (typeof globalThis.WebSocket === 'undefined') {
+  try {
+    const { default: WebSocket } = await import('ws');
+    globalThis.WebSocket = WebSocket;
+  } catch (e) {
+    globalThis.WebSocket = class DummyWebSocket {};
+  }
+}
+
 import { createClient } from '@supabase/supabase-js';
 import * as cheerio from 'cheerio';
 
@@ -14,16 +24,10 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   process.exit(1);
 }
 
-// Disables WebSocket connections on Node.js 20 runner
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
-  },
-  realtime: {
-    params: {
-      eventsPerSecond: 0,
-    },
   },
 });
 
