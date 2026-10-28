@@ -25,10 +25,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-  },
+  auth: { persistSession: false, autoRefreshToken: false }
 });
 
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
@@ -62,8 +59,9 @@ async function aiScoutChapterNumber(seriesTitle, htmlSnippet) {
   try {
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const prompt = `
-Extract the exact latest released chapter number for "${seriesTitle}" from this snippet.
-Return ONLY JSON: {"latest_chapter": number, "status": "ongoing"|"completed"|"hiatus"}
+Extract the exact highest chapter number released for "${seriesTitle}" from this raw webpage snippet.
+If there are side stories or epilogues (e.g., 201, 205.5), return the absolute highest numeric index.
+Return ONLY JSON: {"latest_chapter": number}
 
 Snippet:
 ${htmlSnippet.slice(0, 7000)}
@@ -78,9 +76,9 @@ ${htmlSnippet.slice(0, 7000)}
 }
 
 async function scout() {
-  console.log('=== High-Capacity Scout Intel Starting ===');
+  console.log('=== Fair Round-Robin Scout Engine Starting ===');
 
-  // BOOST: Scout up to 80 series per run
+  // Pulls the top 80 series by rotation (oldest checked + unverified)
   const { data: targets, error } = await supabase
     .from('series_intel')
     .select('id, series_id, source_platform, target_url, target_identifier, latest_known_chapter, series:series_id(title)')
@@ -88,7 +86,7 @@ async function scout() {
     .limit(80);
 
   if (error || !targets) {
-    console.error('Failed to query series_intel:', error?.message);
+    console.error('Failed to query targets:', error?.message);
     return;
   }
 
@@ -127,27 +125,31 @@ async function scout() {
         }
       }
 
-      if (detectedLatest > 0) {
-        console.log(`[Scout] ${title} -> Ch. ${detectedLatest}`);
-        await supabase
-          .from('series_intel')
-          .update({
-            latest_known_chapter: detectedLatest,
-            last_scouted_at: new Date().toISOString()
-          })
-          .eq('id', item.id);
+      // Safe ratchet: Never lower the chapter ceiling even if upstream source is slow to refresh
+      const finalLatest = Math.max(detectedLatest, item.latest_known_chapter || 0);
 
-        await supabase
-          .from('series')
-          .update({ sync_status: 'IDLE', delay_retry_count: 0 })
-          .eq('id', item.series_id);
+      // Always update last_scouted_at so this series moves to the back of the line
+      await supabase
+        .from('series_intel')
+        .update({
+          latest_known_chapter: finalLatest > 0 ? finalLatest : item.latest_known_chapter,
+          last_scouted_at: new Date().toISOString()
+        })
+        .eq('id', item.id);
+
+      if (detectedLatest > (item.latest_known_chapter || 0)) {
+        console.log(`[New Release/Epilogue Detected] ${title} -> Ch. ${detectedLatest}`);
       }
     } catch (err) {
-      // Keep going without halting loop
+      // Mark scouted anyway so one failing URL doesn't clog the entire queue
+      await supabase
+        .from('series_intel')
+        .update({ last_scouted_at: new Date().toISOString() })
+        .eq('id', item.id);
     }
-    await sleep(200); // 200ms rate-limit buffer
+    await sleep(150);
   }
-  console.log('=== High-Capacity Scout Finished ===');
+  console.log('=== Round-Robin Scout Finished ===');
 }
 
 scout();
