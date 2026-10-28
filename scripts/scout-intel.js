@@ -21,8 +21,6 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing Supabase credentials');
-  console.error('URL present:', Boolean(SUPABASE_URL));
-  console.error('Key present:', Boolean(SUPABASE_SERVICE_ROLE_KEY));
   process.exit(1);
 }
 
@@ -47,14 +45,14 @@ async function fetchHtml(url, retries = 3) {
     try {
       const res = await fetch(url, { headers: BROWSER_HEADERS });
       if (res.status === 429) {
-        await sleep(4000 * i);
+        await sleep(3000 * i);
         continue;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.text();
     } catch (e) {
       if (i === retries) throw e;
-      await sleep(1500 * i);
+      await sleep(1000 * i);
     }
   }
 }
@@ -80,13 +78,14 @@ ${htmlSnippet.slice(0, 7000)}
 }
 
 async function scout() {
-  console.log('=== Hybrid Scout Intel Engine Starting ===');
+  console.log('=== High-Capacity Scout Intel Starting ===');
 
+  // BOOST: Scout up to 80 series per run
   const { data: targets, error } = await supabase
     .from('series_intel')
     .select('id, series_id, source_platform, target_url, target_identifier, latest_known_chapter, series:series_id(title)')
     .order('last_scouted_at', { ascending: true, nullsFirst: true })
-    .limit(25);
+    .limit(80);
 
   if (error || !targets) {
     console.error('Failed to query series_intel:', error?.message);
@@ -97,7 +96,6 @@ async function scout() {
     const title = item.series?.title || 'Unknown';
     if (!item.target_url) continue;
 
-    console.log(`\nScouting [${title}] on [${item.source_platform}]...`);
     let detectedLatest = 0;
 
     try {
@@ -124,14 +122,13 @@ async function scout() {
         });
 
         if (detectedLatest === 0 && GEMINI_API_KEY) {
-          console.log(`Regex missed on ${title}. Engaging Gemini intelligent fallback...`);
           const aiNum = await aiScoutChapterNumber(title, html);
           if (aiNum) detectedLatest = aiNum;
         }
       }
 
       if (detectedLatest > 0) {
-        console.log(`-> Detected latest for ${title}: Ch. ${detectedLatest}`);
+        console.log(`[Scout] ${title} -> Ch. ${detectedLatest}`);
         await supabase
           .from('series_intel')
           .update({
@@ -146,11 +143,11 @@ async function scout() {
           .eq('id', item.series_id);
       }
     } catch (err) {
-      console.warn(`Scout skipped ${title}:`, err.message);
+      // Keep going without halting loop
     }
-    await sleep(1000);
+    await sleep(200); // 200ms rate-limit buffer
   }
-  console.log('\n=== Scout Completed ===');
+  console.log('=== High-Capacity Scout Finished ===');
 }
 
 scout();
