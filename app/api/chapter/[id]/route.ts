@@ -1,8 +1,53 @@
 // app/api/chapter/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
+import * as cheerio from 'cheerio';
 
 export const dynamic = 'force-dynamic';
+
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
+  try {
+    const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterDexId}`, {
+      headers: BROWSER_HEADERS,
+      next: { revalidate: 3600 }
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const baseUrl = json.baseUrl;
+    const hash = json.chapter?.hash;
+    const files = json.chapter?.data || [];
+    return files.map((file: string) => `${baseUrl}/data/${hash}/${file}`);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchMangaPillPages(targetUrl: string): Promise<string[]> {
+  try {
+    const res = await fetch(targetUrl, { headers: BROWSER_HEADERS, next: { revalidate: 3600 } });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const pages: string[] = [];
+
+    $('picture img, img.lazy, .container-reader img').each((_, el) => {
+      const src = $(el).attr('data-src') || $(el).attr('src');
+      if (src && !pages.includes(src)) {
+        pages.push(src);
+      }
+    });
+
+    return pages;
+  } catch {
+    return [];
+  }
+}
 
 export async function GET(
   req: NextRequest,
@@ -21,6 +66,8 @@ export async function GET(
         series_id,
         chapter_number,
         title,
+        source,
+        external_id,
         base_url,
         pages,
         created_at,
@@ -29,7 +76,8 @@ export async function GET(
           id,
           title,
           slug,
-          cover_url
+          cover_url,
+          reading_mode
         )
       `)
       .eq('id', chapterId)
@@ -39,18 +87,49 @@ export async function GET(
       return NextResponse.json({ error: 'Chapter not found' }, { status: 404 });
     }
 
-    // Hybrid Storage Resolution: Stitch base_url + relative path on the fly
-    const baseUrl = chapter.base_url ? chapter.base_url.replace(/\/$/, '') : '';
-    const resolvedPages = (chapter.pages || []).map((page: string) => {
-      if (!page) return '';
-      if (page.startsWith('http://') || page.startsWith('https://')) {
-        return page;
-      }
-      return baseUrl ? `${baseUrl}/${page.replace(/^\//, '')}` : page;
-    }).filter(Boolean);
+    let finalPages: string[] = chapter.pages || [];
 
-    // Fetch previous and next chapter IDs for instant navigation in the reader
-    const [prevRes, nextRes] = await Promise.all([
+    // Check if pages holds only a placeholder reference (1 link matching external_id or ending in html/manga URL)
+    const isPlaceholder =
+      finalPages.length <= 1 &&
+      finalPages[0] &&
+      (finalPages[0] === chapter.external_id ||
+        finalPages[0].includes('mangapill.com') ||
+        !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i));
+
+    if (isPlaceholder) {
+      const source = chapter.source || '';
+      const identifier = chapter.external_id || finalPages[0];
+
+      if (source === 'mangadex' || identifier.length === 36) {
+        finalPages = await fetchMangaDexPages(identifier);
+      } else {
+        finalPages = await fetchMangaPillPages(identifier);
+      }
+
+      // If resolved, cache back into Supabase for instant loads on subsequent visits
+      if (finalPages.length > 0) {
+        await supabase
+          .from('chapters')
+          .update({ pages: finalPages })
+          .eq('id', chapterId);
+      }
+    }
+
+    // Hybrid Storage Resolution: Stitch base_url + relative path if legacy relative structure
+    const baseUrl = chapter.base_url ? chapter.base_url.replace(/\/$/, '') : '';
+    const resolvedPages = finalPages
+      .map((page: string) => {
+        if (!page) return '';
+        if (page.startsWith('http://') || page.startsWith('https://')) {
+          return page;
+        }
+        return baseUrl ? `${baseUrl}/${page.replace(/^\//, '')}` : page;
+      })
+      .filter(Boolean);
+
+    // Fetch adjacent chapters for instant reader navigation
+    const [prevRes, nextRes, allChapsRes] = await Promise.all([
       supabase
         .from('chapters')
         .select('id, chapter_number')
@@ -67,6 +146,11 @@ export async function GET(
         .order('chapter_number', { ascending: true })
         .limit(1)
         .maybeSingle(),
+      supabase
+        .from('chapters')
+        .select('id, chapter_number')
+        .eq('series_id', chapter.series_id)
+        .order('chapter_number', { ascending: true })
     ]);
 
     return NextResponse.json({
@@ -74,6 +158,7 @@ export async function GET(
       pages: resolvedPages,
       prevChapter: prevRes.data || null,
       nextChapter: nextRes.data || null,
+      allChapters: allChapsRes.data || []
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
