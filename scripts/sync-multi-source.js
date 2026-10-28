@@ -1,11 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 import * as cheerio from 'cheerio';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY = 
+  process.env.SUPABASE_SERVICE_ROLE_KEY || 
+  process.env.SUPABASE_SERVICE_KEY || 
+  process.env.SUPABASE_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing Supabase credentials');
+  console.error('URL present:', Boolean(SUPABASE_URL));
+  console.error('Key present:', Boolean(SUPABASE_SERVICE_ROLE_KEY));
   process.exit(1);
 }
 
@@ -87,7 +92,6 @@ async function fetchMangaDexChapters(mangaDexId) {
 async function sync() {
   console.log('=== Hybrid Chapter Synchronization Starting ===');
 
-  // Prioritize active backlogs
   const { data: targets, error } = await supabase
     .from('series_intel')
     .select('id, series_id, source_platform, target_url, target_identifier, series:series_id(id, title)')
@@ -143,7 +147,6 @@ async function sync() {
         title: c.title,
         source: item.source_platform,
         source_provider: item.source_platform,
-        source_platform: item.source_platform,
         external_id: c.external_id,
         pages: []
       }));
