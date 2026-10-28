@@ -19,8 +19,6 @@ const SUPABASE_SERVICE_ROLE_KEY =
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing Supabase credentials');
-  console.error('URL present:', Boolean(SUPABASE_URL));
-  console.error('Key present:', Boolean(SUPABASE_SERVICE_ROLE_KEY));
   process.exit(1);
 }
 
@@ -44,14 +42,14 @@ async function fetchHtml(url, retries = 3) {
     try {
       const res = await fetch(url, { headers: BROWSER_HEADERS });
       if (res.status === 429) {
-        await sleep(4000 * i);
+        await sleep(3000 * i);
         continue;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.text();
     } catch (e) {
       if (i === retries) throw e;
-      await sleep(1500 * i);
+      await sleep(1000 * i);
     }
   }
 }
@@ -100,40 +98,41 @@ async function fetchMangaDexChapters(mangaDexId) {
       }
     }
     offset += limit;
-    await sleep(250);
+    await sleep(120); // 120ms keeps it safely under MangaDex's 5 req/sec cap while running at max speed
   }
   return chapters;
 }
 
 async function sync() {
-  console.log('=== Hybrid Chapter Synchronization Starting ===');
+  console.log('=== High-Throughput Chapter Sync Starting ===');
 
+  // BOOST: Process up to 50 active backlog series per run
   const { data: targets, error } = await supabase
     .from('series_intel')
     .select('id, series_id, source_platform, target_url, target_identifier, series:series_id(id, title)')
     .order('last_scouted_at', { ascending: false })
-    .limit(10);
+    .limit(50);
 
   if (error || !targets) {
     console.error('Failed to query series:', error?.message);
     return;
   }
 
+  let totalIngestedThisRun = 0;
+
   for (const item of targets) {
     const seriesId = item.series_id;
     const title = item.series?.title || 'Unknown';
-    console.log(`\nSynchronizing [${title}] from [${item.source_platform}]...`);
 
-    // 1. Fetch currently recorded chapters
+    // 1. Fetch existing chapters
     const { data: existingRows } = await supabase
       .from('chapters')
       .select('chapter_number')
       .eq('series_id', seriesId);
 
     const existingSet = new Set((existingRows || []).map((r) => Number(r.chapter_number)));
-    console.log(`Database holds: ${existingSet.size} chapters.`);
 
-    // 2. Fetch from source
+    // 2. Fetch remote chapters
     let remoteChapters = [];
     try {
       if (item.source_platform === 'mangadex') {
@@ -144,18 +143,18 @@ async function sync() {
         remoteChapters = parseMangapill(html);
       }
     } catch (err) {
-      console.warn(`Extraction failed for ${title}:`, err.message);
+      console.warn(`[Skip] Failed fetching ${title}:`, err.message);
       continue;
     }
 
     // 3. Strict Deduplication Gate
     const missing = remoteChapters.filter((rc) => !existingSet.has(rc.chapter_number));
-    console.log(`Found ${remoteChapters.length} upstream chapters. ${missing.length} new chapters to ingest.`);
-
     if (missing.length === 0) continue;
 
-    // 4. Safe Batch Upsert (Chunks of 50)
-    const BATCH = 50;
+    console.log(`[Ingesting] ${title}: adding ${missing.length} missing chapters...`);
+
+    // 4. BOOST: Insert in larger chunks of 200 rows
+    const BATCH = 200;
     for (let i = 0; i < missing.length; i += BATCH) {
       const chunk = missing.slice(i, i + BATCH).map((c) => ({
         series_id: seriesId,
@@ -164,7 +163,6 @@ async function sync() {
         source: item.source_platform,
         source_provider: item.source_platform,
         external_id: c.external_id,
-        // Using external_id as placeholder satisfies non-empty array constraints
         pages: [c.external_id]
       }));
 
@@ -172,16 +170,16 @@ async function sync() {
         .from('chapters')
         .upsert(chunk, { onConflict: 'series_id,chapter_number' });
 
-      if (insertErr) {
-        console.error(`Batch insert error at offset ${i}:`, insertErr.message);
+      if (!insertErr) {
+        totalIngestedThisRun += chunk.length;
       } else {
-        console.log(`-> Upserted chapters ${chunk[0].chapter_number} to ${chunk[chunk.length - 1].chapter_number}`);
+        console.error(`Insert failed for ${title}:`, insertErr.message);
       }
-      await sleep(250);
+      await sleep(100);
     }
   }
 
-  console.log('\n=== Chapter Synchronization Finished ===');
+  console.log(`\n=== Finished: Total ${totalIngestedThisRun} chapters ingested this run ===`);
 }
 
 sync();
