@@ -1,347 +1,171 @@
-// scripts/sync-multi-source.js
 import { createClient } from '@supabase/supabase-js';
+import * as cheerio from 'cheerio';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const WORKER_ID = parseInt(process.env.WORKER_ID || '1', 10);
-const TOTAL_WORKERS = parseInt(process.env.TOTAL_WORKERS || '8', 10);
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing Supabase credentials');
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false },
-});
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const BROWSER_HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+const HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none',
-  'Sec-Fetch-User': '?1',
-  'Upgrade-Insecure-Requests': '1',
 };
 
-async function safeFetchHtml(url, referer = 'https://www.google.com/') {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-    const res = await fetch(url, {
-      headers: { ...BROWSER_HEADERS, 'Referer': referer },
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    return res.ok ? await res.text() : null;
-  } catch {
-    return null;
-  }
-}
-
-async function safeFetchJson(url, referer = 'https://www.google.com/') {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000);
-    const res = await fetch(url, {
-      headers: { ...BROWSER_HEADERS, 'Accept': 'application/json', 'Referer': referer },
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    return res.ok ? await res.json() : null;
-  } catch {
-    return null;
-  }
-}
-
-// 1. HYBRID STORAGE ENCODER
-function compressPageUrls(fullUrls) {
-  if (!fullUrls || !fullUrls.length) return { baseUrl: null, relativePages: [] };
-
-  const firstUrl = fullUrls[0];
-  try {
-    const parsed = new URL(firstUrl);
-    const baseUrl = `${parsed.protocol}//${parsed.host}/`;
-
-    const canCompress = fullUrls.every((u) => u.startsWith(baseUrl));
-    if (canCompress) {
-      const relativePages = fullUrls.map((u) => u.slice(baseUrl.length));
-      return { baseUrl, relativePages };
-    }
-  } catch {}
-
-  return { baseUrl: null, relativePages: fullUrls };
-}
-
-// 2. FOREIGN CONTAMINATION GUARD
-function isDisallowedCdn(url) {
-  if (!url) return false;
-  const lower = url.toLowerCase();
-  const blockedCdns = [
-    'readdetectiveconan',
-    'onepiecechapters',
-    'readsololeveling',
-    'readjujutsukaisen',
-    'example.com',
-  ];
-  return blockedCdns.some((domain) => lower.includes(domain));
-}
-
-// 3. SOURCE PAGE EXTRACTORS
-
-// COMICK
-async function fetchComicKPages(hid) {
-  const json = await safeFetchJson(`https://api.comick.io/chapter/${hid}`, 'https://comick.io/');
-  if (!json?.chapter?.images?.length) return [];
-  return json.chapter.images
-    .map((img) => (img.url ? (img.url.startsWith('http') ? img.url : `https://meo3.comick.pictures/${img.url}`) : null))
-    .filter(Boolean);
-}
-
-// HIVETOONS
-async function fetchHiveToonsPages(chapterUrl) {
-  const html = await safeFetchHtml(chapterUrl, 'https://hivetoons.org/');
-  if (!html) return [];
-  const pages = [];
-  const regex = /<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp|avif)[^"']*)["'][^>]*>/gi;
-  let m;
-  while ((m = regex.exec(html)) !== null) {
-    const src = m[1];
-    if (!src.includes('logo') && !src.includes('banner') && !src.includes('icon') && !isDisallowedCdn(src)) {
-      pages.push(src);
-    }
-  }
-  return pages;
-}
-
-// ARENASCANS
-async function fetchArenaScansPages(chapterUrl) {
-  const html = await safeFetchHtml(chapterUrl, 'https://arenascan.com/');
-  if (!html) return [];
-  const pages = [];
-  const regex = /<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp|avif)[^"']*)["'][^>]*>/gi;
-  let m;
-  while ((m = regex.exec(html)) !== null) {
-    const src = m[1];
-    if (!src.includes('logo') && !src.includes('banner') && !src.includes('icon') && !isDisallowedCdn(src)) {
-      pages.push(src);
-    }
-  }
-  return pages;
-}
-
-// MANGABUDDY
-async function fetchMangaBuddyPages(chapterUrl) {
-  const html = await safeFetchHtml(chapterUrl, 'https://mangabuddy.com/');
-  if (!html) return [];
-  const pages = [];
-  const regex = /<img[^>]+(?:data-)?src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp|avif)[^"']*)["'][^>]*>/gi;
-  let m;
-  while ((m = regex.exec(html)) !== null) {
-    const src = m[1];
-    if (!src.includes('logo') && !src.includes('banner') && !src.includes('icon') && !isDisallowedCdn(src)) {
-      pages.push(src);
-    }
-  }
-  return pages;
-}
-
-// ASURA
-async function fetchAsuraPages(chapterUrl) {
-  const html = await safeFetchHtml(chapterUrl, 'https://asuracomic.net/');
-  if (!html) return [];
-  const pages = [];
-  const regex = /<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp|avif)[^"']*)["'][^>]*>/gi;
-  let m;
-  while ((m = regex.exec(html)) !== null) {
-    const src = m[1];
-    if (!src.includes('logo') && !src.includes('banner') && !isDisallowedCdn(src)) {
-      pages.push(src);
-    }
-  }
-  return pages;
-}
-
-// FLAME COMICS
-async function fetchFlamePages(chapterUrl) {
-  const html = await safeFetchHtml(chapterUrl, 'https://flamecomics.me/');
-  if (!html) return [];
-  const pages = [];
-  const regex = /<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp|avif)[^"']*)["'][^>]*>/gi;
-  let m;
-  while ((m = regex.exec(html)) !== null) {
-    const src = m[1];
-    if (!src.includes('logo') && !src.includes('banner') && !isDisallowedCdn(src)) {
-      pages.push(src);
-    }
-  }
-  return pages;
-}
-
-// MANGADEX
-async function fetchMangaDexPages(chapterId) {
-  const atHome = await safeFetchJson(`https://api.mangadex.org/at-home/server/${chapterId}`, 'https://mangadex.org/');
-  if (!atHome?.baseUrl || !atHome?.chapter?.data?.length) return [];
-  const host = atHome.baseUrl;
-  const hash = atHome.chapter.hash;
-  return atHome.chapter.data.map((file) => `${host}/data/${hash}/${file}`);
-}
-
-// MANGANATO / MANGABAT
-async function fetchMangaNatoPages(chapterUrl) {
-  const html = await safeFetchHtml(chapterUrl, 'https://natomanga.com/');
-  if (!html) return [];
-  const pages = [];
-  const regex = /<img[^>]+src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|webp|avif)[^"']*)["'][^>]*>/gi;
-  let m;
-  while ((m = regex.exec(html)) !== null) {
-    const src = m[1];
-    if (!src.includes('logo') && !src.includes('banner') && !isDisallowedCdn(src)) {
-      pages.push(src);
-    }
-  }
-  return pages;
-}
-
-// MANGAPILL
-async function fetchMangaPillPages(chapterSlug) {
-  const url = `https://mangapill.com/chapters/${chapterSlug}`;
-  const html = await safeFetchHtml(url, 'https://mangapill.com/');
-  if (!html) return [];
-  const pages = [];
-  const regex = /<img[^>]+data-src=["'](https?:\/\/[^"']+)["']/gi;
-  let m;
-  while ((m = regex.exec(html)) !== null) {
-    if (!isDisallowedCdn(m[1])) {
-      pages.push(m[1]);
-    }
-  }
-  return pages;
-}
-
-// 4. HIGH-SPEED CHAPTER DOWNLOADER
-async function downloadAndSaveChapter(seriesId, chNum, chTitle, candidates) {
-  const priority = ['hivetoons', 'arenascans', 'asura', 'flame', 'mangabuddy', 'comick', 'mangabat', 'mangadex', 'mangapill'];
-  const sorted = [...candidates].sort((a, b) => priority.indexOf(a.platform) - priority.indexOf(b.platform));
-
-  for (const src of sorted) {
-    let rawPages = [];
+async function fetchWithRetry(url, retries = 3) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      if (src.platform === 'hivetoons') rawPages = await fetchHiveToonsPages(src.url);
-      else if (src.platform === 'arenascans') rawPages = await fetchArenaScansPages(src.url);
-      else if (src.platform === 'mangabuddy') rawPages = await fetchMangaBuddyPages(src.url);
-      else if (src.platform === 'asura') rawPages = await fetchAsuraPages(src.url);
-      else if (src.platform === 'flame') rawPages = await fetchFlamePages(src.url);
-      else if (src.platform === 'comick') rawPages = await fetchComicKPages(src.hid);
-      else if (src.platform === 'mangadex') rawPages = await fetchMangaDexPages(src.id);
-      else if (src.platform === 'mangabat') rawPages = await fetchMangaNatoPages(src.url);
-      else if (src.platform === 'mangapill') rawPages = await fetchMangaPillPages(src.chapterSlug);
-    } catch {}
+      const res = await fetch(url, { headers: HEADERS });
+      if (res.status === 429) {
+        await sleep(5000 * attempt);
+        continue;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.text();
+    } catch (err) {
+      if (attempt === retries) throw err;
+      await sleep(2000 * attempt);
+    }
+  }
+}
 
-    if (rawPages && rawPages.length >= 5) {
-      const { baseUrl, relativePages } = compressPageUrls(rawPages);
+/**
+ * Parses chapter lists from Mangapill
+ */
+function parseMangapill(html) {
+  const $ = cheerio.load(html);
+  const chapters = [];
+  $('a[href*="/chapters/"]').each((_, el) => {
+    const href = $(el).attr('href');
+    const titleText = $(el).text().trim();
+    if (!href) return;
 
-      const { error } = await supabase.from('chapters').upsert(
-        {
-          series_id: seriesId,
+    const match = titleText.match(/Chapter\s+([\d.]+)/i) || href.match(/-chapter-([\d.]+)/i);
+    if (match) {
+      chapters.push({
+        chapter_number: parseFloat(match[1]),
+        title: titleText,
+        external_id: href.startsWith('http') ? href : `https://mangapill.com${href}`
+      });
+    }
+  });
+  return chapters;
+}
+
+/**
+ * Parses chapter lists from MangaDex API with full pagination
+ */
+async function fetchMangaDexChapters(mangaDexId) {
+  const chapters = [];
+  let offset = 0;
+  const limit = 100;
+  let total = 100;
+
+  while (offset < total) {
+    const url = `https://api.mangadex.org/manga/${mangaDexId}/feed?limit=${limit}&offset=${offset}&order[chapter]=asc&translatedLanguage[]=en`;
+    const res = await fetch(url, { headers: HEADERS });
+    if (!res.ok) break;
+    const json = await res.json();
+    total = json.total || 0;
+
+    for (const item of json.data || []) {
+      const chNum = parseFloat(item.attributes.chapter);
+      if (!isNaN(chNum)) {
+        chapters.push({
           chapter_number: chNum,
-          title: chTitle || `Chapter ${chNum}`,
-          base_url: baseUrl,
-          pages: relativePages,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'series_id,chapter_number' }
-      );
-
-      if (!error) {
-        console.log(`    ✅ Saved Ch. ${chNum} via [${src.platform}] (${rawPages.length} panels, lean hybrid format)`);
-        return true;
+          title: item.attributes.title || `Chapter ${chNum}`,
+          external_id: item.id
+        });
       }
     }
-    await delay(20);
+    offset += limit;
+    await sleep(250); // MangaDex rate limit buffer
   }
-  return false;
+  return chapters;
 }
 
-// 5. WORKER DISPATCHER WITH CONCURRENT PIPELINE
-async function runWorker() {
-  console.log(`=== MangaFlow Fast Ingestion Worker ${WORKER_ID}/${TOTAL_WORKERS} Online ===`);
+async function syncSeries() {
+  console.log('--- Starting Multi-Source Chapter Sync ---');
 
-  const { data: intelList, error } = await supabase
+  // Find series prioritized for sync
+  const { data: targets, error } = await supabase
     .from('series_intel')
-    .select('series_id, source_platform, verified_chapters')
-    .order('last_scouted_at', { ascending: false });
+    .select('id, series_id, source_platform, target_url, target_identifier, series:series_id(id, title)')
+    .order('last_scouted_at', { ascending: false })
+    .limit(10);
 
-  if (error || !intelList?.length) {
-    console.log('No series intel found to ingest.');
+  if (error || !targets) {
+    console.error('Error fetching series for sync:', error?.message);
     return;
   }
 
-  const seriesMap = new Map();
-  for (const row of intelList) {
-    if (!seriesMap.has(row.series_id)) seriesMap.set(row.series_id, []);
-    seriesMap.get(row.series_id).push(row);
-  }
+  for (const item of targets) {
+    const seriesId = item.series_id;
+    const seriesTitle = item.series?.title || 'Unknown';
+    console.log(`\nProcessing [${seriesTitle}] from ${item.source_platform}...`);
 
-  const allSeriesIds = Array.from(seriesMap.keys());
-  const workerSeriesIds = allSeriesIds.filter((_, idx) => idx % TOTAL_WORKERS === WORKER_ID - 1);
-
-  console.log(`Worker ${WORKER_ID} assigned ${workerSeriesIds.length} series to ingest.`);
-
-  for (const seriesId of workerSeriesIds) {
-    const { data: series } = await supabase.from('series').select('id, title, slug').eq('id', seriesId).single();
-    if (!series) continue;
-
-    const { data: existingChapters } = await supabase
+    // 1. Get existing chapter numbers from DB
+    const { data: existingRows } = await supabase
       .from('chapters')
       .select('chapter_number')
       .eq('series_id', seriesId);
 
-    const existingSet = new Set((existingChapters || []).map((c) => Number(c.chapter_number)));
+    const existingSet = new Set((existingRows || []).map((r) => Number(r.chapter_number)));
+    console.log(`Current DB count: ${existingSet.size} chapters.`);
 
-    const chapterCandidates = new Map();
-    const sourceRows = seriesMap.get(seriesId) || [];
-
-    for (const sRow of sourceRows) {
-      for (const ch of sRow.verified_chapters || []) {
-        const num = Number(ch.chNum);
-        if (!chapterCandidates.has(num)) chapterCandidates.set(num, []);
-        chapterCandidates.get(num).push({ ...ch, platform: sRow.source_platform });
+    // 2. Extract chapters from source
+    let remoteChapters = [];
+    try {
+      if (item.source_platform === 'mangadex') {
+        const mangaDexId = item.target_identifier || item.target_url.split('/').pop();
+        remoteChapters = await fetchMangaDexChapters(mangaDexId);
+      } else if (item.source_platform === 'mangapill') {
+        const html = await fetchWithRetry(item.target_url);
+        remoteChapters = parseMangapill(html);
       }
+    } catch (err) {
+      console.error(`Failed reading remote source for ${seriesTitle}:`, err.message);
+      continue;
     }
 
-    const missingNums = Array.from(chapterCandidates.keys())
-      .filter((n) => !existingSet.has(n))
-      .sort((a, b) => b - a);
+    // 3. Filter strictly to missing chapters
+    const toInsert = remoteChapters.filter((rc) => !existingSet.has(rc.chapter_number));
+    console.log(`Found ${remoteChapters.length} remote chapters. ${toInsert.length} are missing from DB.`);
 
-    if (missingNums.length === 0) continue;
+    if (toInsert.length === 0) continue;
 
-    // Increased from 40 to 120 chapters per run for 3x ingestion speed
-    const batch = missingNums.slice(0, 120);
-    console.log(`\n📥 "${series.title}": Rapid-ingesting ${batch.length}/${missingNums.length} missing chapters.`);
+    // 4. Batch upsert in chunks of 50
+    const BATCH_SIZE = 50;
+    for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
+      const chunk = toInsert.slice(i, i + BATCH_SIZE).map((c) => ({
+        series_id: seriesId,
+        chapter_number: c.chapter_number,
+        title: c.title,
+        source: item.source_platform,
+        source_provider: item.source_platform,
+        external_id: c.external_id,
+        pages: []
+      }));
 
-    // High-speed pool: Process 4 chapters concurrently per series
-    const CONCURRENCY = 4;
-    let bIdx = 0;
+      const { error: insertErr } = await supabase
+        .from('chapters')
+        .upsert(chunk, { onConflict: 'series_id,chapter_number' });
 
-    const pool = new Array(CONCURRENCY).fill(null).map(async () => {
-      while (bIdx < batch.length) {
-        const chNum = batch[bIdx++];
-        const candidates = chapterCandidates.get(chNum) || [];
-        await downloadAndSaveChapter(seriesId, chNum, candidates[0]?.title, candidates);
-        await delay(15);
+      if (insertErr) {
+        console.error(`Batch insert error:`, insertErr.message);
+      } else {
+        console.log(`Inserted chapters ${chunk[0].chapter_number} to ${chunk[chunk.length - 1].chapter_number}`);
       }
-    });
-
-    await Promise.all(pool);
+      await sleep(300);
+    }
   }
-
-  console.log(`\n🎉 Worker ${WORKER_ID} ingestion cycle complete.`);
+  console.log('\n--- Multi-Source Chapter Sync Complete ---');
 }
 
-runWorker().catch(console.error);
+syncSeries();
