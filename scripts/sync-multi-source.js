@@ -34,11 +34,13 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-async function fetchWithRetry(url, isJson = false, extraHeaders = {}, retries = 3) {
+async function fetchWithRetry(url, isJson = false, options = {}, retries = 3) {
   for (let i = 1; i <= retries; i++) {
     try {
-      const res = await fetch(url, { 
-        headers: { ...BROWSER_HEADERS, ...extraHeaders } 
+      const res = await fetch(url, {
+        headers: { ...BROWSER_HEADERS, ...(options.headers || {}) },
+        method: options.method || 'GET',
+        body: options.body || undefined
       });
       if (res.status === 429) {
         await sleep(2500 * i);
@@ -69,7 +71,7 @@ function isSlugMatch(targetUrl, seriesSlug, seriesTitle) {
   return true;
 }
 
-// 1. MangaDex Ingestion
+// Tier 1: MangaDex
 async function fetchMangaDex(dexId) {
   const chapters = [];
   let offset = 0;
@@ -100,14 +102,12 @@ async function fetchMangaDex(dexId) {
   return chapters;
 }
 
-// 2. MangaPill Ingestion (Protects against cross-franchise leaks while allowing romaji headers)
+// Tier 2: MangaPill
 async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   const html = await fetchWithRetry(url, false);
   const $ = cheerio.load(html);
 
   const pageTitle = $('h1').first().text().trim().toLowerCase();
-
-  // Hard blocker: only reject if the page explicitly belongs to a known unrelated franchise
   const knownCollisions = ['one piece', 'naruto', 'bleach', 'detective conan'];
   const targetLower = (seriesTitle || '').toLowerCase();
   
@@ -120,17 +120,14 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
 
   const chaptersMap = new Map();
 
-  $('div[id*="chapters"] a[href*="/chapters/"], #chapters a, .chapters-list a').each((_, el) => {
+  $('a[href*="/chapters/"]').each((_, el) => {
     const href = $(el).attr('href');
     const text = $(el).text().trim();
     if (!href) return;
 
     const fullUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
 
-    // Verify individual chapter URLs do not point to a known conflicting franchise
-    if (!isSlugMatch(fullUrl, seriesSlug, seriesTitle)) {
-      return;
-    }
+    if (!isSlugMatch(fullUrl, seriesSlug, seriesTitle)) return;
 
     let num = null;
     const textMatch = text.match(/(?:chapter|ch\.?)\s*([\d.]+)/i);
@@ -159,56 +156,88 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   return Array.from(chaptersMap.values()).sort((a, b) => a.chapter_number - b.chapter_number);
 }
 
-// 3. ComicK Ingestion (Fallback with complete headers)
-async function fetchComicK(comicSlug) {
+// Tier 3: Toonily (Direct Madara AJAX Endpoint)
+async function fetchToonily(toonilySlug) {
   try {
-    const headers = {
-      'Referer': 'https://comick.io/',
-      'Origin': 'https://comick.io'
-    };
-
-    const comicInfo = await fetchWithRetry(`https://api.comick.fun/comic/${comicSlug}`, true, headers);
-    const hid = comicInfo?.comic?.hid;
-    if (!hid) return [];
-
-    const chapters = [];
-    let page = 1;
-    let hasMore = true;
-
-    while (hasMore && page <= 10) {
-      const url = `https://api.comick.fun/comic/${hid}/chapters?lang=en&page=${page}&limit=100`;
-      const data = await fetchWithRetry(url, true, headers);
-      const list = data?.chapters || [];
-
-      if (!list.length) break;
-
-      for (const ch of list) {
-        const num = parseFloat(ch.chap);
-        if (!isNaN(num)) {
-          chapters.push({
-            chapter_number: num,
-            title: ch.title || `Chapter ${num}`,
-            external_id: ch.hid,
-            source: 'comick',
-            pages: [ch.hid]
-          });
-        }
+    const cleanSlug = toonilySlug.replace(/^https?:\/\/[^\/]+\/webtoon\//, '').replace(/\/$/, '');
+    const url = `https://toonily.com/webtoon/${cleanSlug}/ajax/chapters/`;
+    
+    const html = await fetchWithRetry(url, false, {
+      method: 'POST',
+      headers: {
+        'Referer': `https://toonily.com/webtoon/${cleanSlug}/`,
+        'X-Requested-With': 'XMLHttpRequest'
       }
+    });
 
-      if (list.length < 100) hasMore = false;
-      page++;
-      await sleep(150);
-    }
+    if (!html) return [];
+    const $ = cheerio.load(html);
+    const chapters = [];
 
-    return chapters;
+    $('li.wp-manga-chapter a').each((_, el) => {
+      const href = $(el).attr('href');
+      const text = $(el).text().trim();
+      if (!href) return;
+
+      const match = text.match(/(?:chapter|ch\.?)\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i);
+      const num = match ? parseFloat(match[1]) : null;
+
+      if (num !== null && !isNaN(num)) {
+        chapters.push({
+          chapter_number: num,
+          title: text.replace(/\s+/g, ' ').trim() || `Chapter ${num}`,
+          external_id: href,
+          source: 'toonily',
+          pages: [href]
+        });
+      }
+    });
+
+    return chapters.sort((a, b) => a.chapter_number - b.chapter_number);
   } catch (err) {
-    console.warn(`[ComicK Warning] Failed fetching ${comicSlug}:`, err.message);
+    console.warn(`[Toonily Error] ${toonilySlug}:`, err.message);
+    return [];
+  }
+}
+
+// Tier 4: WeebCentral
+async function fetchWeebCentral(seriesId) {
+  try {
+    const url = `https://weebcentral.com/series/${seriesId}/full-chapter-list`;
+    const html = await fetchWithRetry(url, false);
+    if (!html) return [];
+
+    const $ = cheerio.load(html);
+    const chapters = [];
+
+    $('a[href*="/chapters/"]').each((_, el) => {
+      const href = $(el).attr('href');
+      const text = $(el).text().trim();
+      if (!href) return;
+
+      const match = text.match(/(?:chapter|ch\.?)\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i);
+      const num = match ? parseFloat(match[1]) : null;
+
+      if (num !== null && !isNaN(num)) {
+        chapters.push({
+          chapter_number: num,
+          title: text.replace(/\s+/g, ' ').trim() || `Chapter ${num}`,
+          external_id: href,
+          source: 'weebcentral',
+          pages: [href]
+        });
+      }
+    });
+
+    return chapters.sort((a, b) => a.chapter_number - b.chapter_number);
+  } catch (err) {
+    console.warn(`[WeebCentral Error] ${seriesId}:`, err.message);
     return [];
   }
 }
 
 async function runSynchronizer() {
-  console.log('=== Starting Smart 3-Tier Multi-Source Synchronizer ===');
+  console.log('=== Starting Hardened Multi-Tier Ingestion Pipeline ===');
 
   const { data: queue, error: qErr } = await supabase
     .from('v_automated_sync_queue')
@@ -224,7 +253,7 @@ async function runSynchronizer() {
   let totalAdded = 0;
 
   for (const item of queue) {
-    const { series_id, title, slug, source_platform, target_url, target_identifier, comick_hid } = item;
+    const { series_id, title, slug, source_platform, target_url, target_identifier, toonily_slug, weebcentral_id } = item;
 
     const { data: existing } = await supabase
       .from('chapters')
@@ -234,7 +263,7 @@ async function runSynchronizer() {
     const existingSet = new Set((existing || []).map((c) => Number(c.chapter_number)));
     let remoteChapters = [];
 
-    // Tier 1 & 2: Primary scraping
+    // 1. Try Primary Source
     try {
       if (source_platform === 'mangadex' && (target_identifier || target_url)) {
         const dexId = target_identifier || target_url.split('/').pop();
@@ -246,15 +275,22 @@ async function runSynchronizer() {
       console.warn(`[Tier 1/2 Failed] ${title}: ${err.message}`);
     }
 
-    // Tier 3: ComicK Fallback (activates if 0 chapters returned)
-    if (remoteChapters.length === 0 && (comick_hid || title)) {
-      const fallbackSlug = comick_hid || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      console.log(`[Tier 3 Fallback] Activating ComicK for: ${title} (${fallbackSlug})`);
-      remoteChapters = await fetchComicK(fallbackSlug);
+    // 2. Try Toonily Fallback (if remote returned 0 chapters)
+    if (remoteChapters.length === 0 && (toonily_slug || title)) {
+      const fallbackSlug = toonily_slug || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      console.log(`[Tier 3 Fallback] Activating Toonily for: ${title} (${fallbackSlug})`);
+      remoteChapters = await fetchToonily(fallbackSlug);
+    }
+
+    // 3. Try WeebCentral Fallback (if still 0 chapters)
+    if (remoteChapters.length === 0 && weebcentral_id) {
+      console.log(`[Tier 4 Fallback] Activating WeebCentral for: ${title} (${weebcentral_id})`);
+      remoteChapters = await fetchWeebCentral(weebcentral_id);
     }
 
     console.log(`[Scan Result] ${title}: Found ${remoteChapters.length} remote chapters`);
 
+    // Ingest missing chapters only
     const missing = remoteChapters.filter((rc) => !existingSet.has(Number(rc.chapter_number)));
 
     if (missing.length === 0) {
