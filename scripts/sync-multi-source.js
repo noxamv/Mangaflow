@@ -28,10 +28,21 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Realistic modern Chrome browser headers to bypass Cloudflare 403 on cloud runners
 const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Sec-Ch-Ua': '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"Windows"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
+  'Cache-Control': 'max-age=0'
 };
 
 async function fetchWithRetry(url, isJson = false, extraHeaders = {}, retries = 3) {
@@ -69,7 +80,7 @@ function isSlugMatch(targetUrl, seriesSlug, seriesTitle) {
   return true;
 }
 
-// Tier 1: MangaDex
+// 1. MangaDex Ingestion
 async function fetchMangaDex(dexId) {
   const chapters = [];
   let offset = 0;
@@ -100,7 +111,7 @@ async function fetchMangaDex(dexId) {
   return chapters;
 }
 
-// Tier 2: MangaPill
+// 2. MangaPill Ingestion
 async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   const html = await fetchWithRetry(url, false);
   const $ = cheerio.load(html);
@@ -154,59 +165,76 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   return Array.from(chaptersMap.values()).sort((a, b) => a.chapter_number - b.chapter_number);
 }
 
-// Tier 3: ComicK Fallback
+// 3. ComicK Fallback (Uses live api.comick.io endpoint with fallback mirrors)
 async function fetchComicK(comicSlug) {
-  try {
-    const headers = { 'Accept': 'application/json, text/plain, */*' };
-    const comicInfo = await fetchWithRetry(`https://api.comick.fun/comic/${comicSlug}`, true, headers);
-    const hid = comicInfo?.comic?.hid;
-    if (!hid) return [];
+  const domains = ['https://api.comick.io', 'https://api.comick.cc', 'https://api.comick.app'];
+  
+  for (const domain of domains) {
+    try {
+      const headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        'Referer': 'https://comick.io/'
+      };
 
-    const chapters = [];
-    let page = 1;
-    let hasMore = true;
+      const comicRes = await fetch(`${domain}/comic/${comicSlug}`, { headers });
+      if (!comicRes.ok) continue;
+      const comicInfo = await comicRes.json();
+      const hid = comicInfo?.comic?.hid;
+      if (!hid) continue;
 
-    while (hasMore && page <= 10) {
-      const url = `https://api.comick.fun/comic/${hid}/chapters?lang=en&page=${page}&limit=100`;
-      const data = await fetchWithRetry(url, true, headers);
-      const list = data?.chapters || [];
+      const chapters = [];
+      let page = 1;
+      let hasMore = true;
 
-      if (!list.length) break;
+      while (hasMore && page <= 10) {
+        const url = `${domain}/comic/${hid}/chapters?lang=en&page=${page}&limit=100`;
+        const res = await fetch(url, { headers });
+        if (!res.ok) break;
+        const data = await res.json();
+        const list = data?.chapters || [];
 
-      for (const ch of list) {
-        const num = parseFloat(ch.chap);
-        if (!isNaN(num)) {
-          chapters.push({
-            chapter_number: num,
-            title: ch.title || `Chapter ${num}`,
-            external_id: ch.hid,
-            source: 'comick',
-            pages: [ch.hid]
-          });
+        if (!list.length) break;
+
+        for (const ch of list) {
+          const num = parseFloat(ch.chap);
+          if (!isNaN(num)) {
+            chapters.push({
+              chapter_number: num,
+              title: ch.title || `Chapter ${num}`,
+              external_id: ch.hid,
+              source: 'comick',
+              pages: [ch.hid]
+            });
+          }
         }
+
+        if (list.length < 100) hasMore = false;
+        page++;
+        await sleep(150);
       }
 
-      if (list.length < 100) hasMore = false;
-      page++;
-      await sleep(150);
+      if (chapters.length > 0) {
+        return chapters.sort((a, b) => a.chapter_number - b.chapter_number);
+      }
+    } catch (err) {
+      // Try next mirror domain
     }
-
-    return chapters;
-  } catch (err) {
-    console.warn(`[ComicK Warning] Failed fetching ${comicSlug}:`, err.message);
-    return [];
   }
+
+  console.warn(`[ComicK Warning] Failed fetching ${comicSlug} across all mirrors.`);
+  return [];
 }
 
-// Tier 4: Toonily Fallback
+// 4. Toonily Fallback
 async function fetchToonily(toonilySlug) {
   try {
     const cleanSlug = toonilySlug.replace(/^https?:\/\/[^\/]+\/webtoon\//, '').replace(/\/$/, '');
     const url = `https://toonily.com/webtoon/${cleanSlug}/`;
     
     const html = await fetchWithRetry(url, false, {
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-      'Referer': 'https://toonily.com/',
+      'Referer': 'https://www.google.com/',
+      'Sec-Fetch-Site': 'cross-site'
     });
 
     if (!html) return [];
@@ -239,14 +267,15 @@ async function fetchToonily(toonilySlug) {
   }
 }
 
-// Tier 5: ToonGod Fallback
+// 5. ToonGod Fallback
 async function fetchToonGod(slug) {
   try {
     const cleanSlug = slug.replace(/^https?:\/\/[^\/]+\/webtoon\//, '').replace(/\/$/, '');
-    const url = `https://toongod.org/webtoon/${cleanSlug}/`;
+    const url = `https://www.toongod.org/webtoon/${cleanSlug}/`;
     
     const html = await fetchWithRetry(url, false, {
-      'Referer': 'https://toongod.org/',
+      'Referer': 'https://www.google.com/',
+      'Sec-Fetch-Site': 'cross-site'
     });
 
     if (!html) return [];
