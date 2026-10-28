@@ -50,16 +50,49 @@ async function fetchMangaPillPages(targetUrl: string): Promise<string[]> {
   }
 }
 
-async function fetchComicKPages(chapterHid: string): Promise<string[]> {
+async function fetchToonilyPages(chapterUrl: string): Promise<string[]> {
   try {
-    const res = await fetch(`https://api.comick.fun/chapter/${chapterHid}`, {
+    const res = await fetch(chapterUrl, {
       headers: BROWSER_HEADERS,
       next: { revalidate: 3600 },
     });
     if (!res.ok) return [];
-    const json = await res.json();
-    const mdImages = json.chapter?.md_images || [];
-    return mdImages.map((img: { bkey: string }) => `https://meo.comick.pictures/${img.bkey}`);
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const pages: string[] = [];
+
+    $('.reading-content img, .page-break img').each((_, el) => {
+      const src = $(el).attr('data-src') || $(el).attr('src');
+      if (src && !pages.includes(src.trim())) {
+        pages.push(src.trim());
+      }
+    });
+
+    return pages;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchWeebCentralPages(chapterUrl: string): Promise<string[]> {
+  try {
+    const res = await fetch(chapterUrl, {
+      headers: BROWSER_HEADERS,
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const pages: string[] = [];
+
+    $('section[data-page] img').each((_, el) => {
+      const src = $(el).attr('src');
+      if (src && !pages.includes(src.trim())) {
+        pages.push(src.trim());
+      }
+    });
+
+    return pages;
   } catch {
     return [];
   }
@@ -110,14 +143,18 @@ export async function GET(
       finalPages[0] &&
       (finalPages[0] === chapter.external_id ||
         finalPages[0].includes('mangapill.com') ||
+        finalPages[0].includes('toonily.com') ||
+        finalPages[0].includes('weebcentral.com') ||
         !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i));
 
     if (isPlaceholder) {
       const source = chapter.source || '';
       const identifier = chapter.external_id || finalPages[0];
 
-      if (source === 'comick') {
-        finalPages = await fetchComicKPages(identifier);
+      if (source === 'toonily') {
+        finalPages = await fetchToonilyPages(identifier);
+      } else if (source === 'weebcentral') {
+        finalPages = await fetchWeebCentralPages(identifier);
       } else if (source === 'mangadex' || identifier.length === 36) {
         finalPages = await fetchMangaDexPages(identifier);
       } else {
