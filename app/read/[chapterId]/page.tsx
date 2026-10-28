@@ -55,7 +55,6 @@ export default function ReaderPage() {
   const lastScrollY = useRef(0);
   const touchStartX = useRef<number | null>(null);
 
-  // Dynamic header visibility in webtoon mode
   useEffect(() => {
     if (readingMode !== 'webtoon') {
       setHeaderVisible(true);
@@ -76,60 +75,42 @@ export default function ReaderPage() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [readingMode]);
 
-  // Load chapter data
   useEffect(() => {
     async function loadReader() {
       if (!chapterId) return;
       setLoading(true);
 
       try {
-        const { data: chapData, error: chapErr } = await supabase
-          .from('chapters')
-          .select('id, series_id, chapter_number, title, base_url, pages')
-          .eq('id', chapterId)
-          .single();
-
-        if (chapErr || !chapData) {
+        const res = await fetch(`/api/chapter/${chapterId}`);
+        if (!res.ok) {
           setLoading(false);
           return;
         }
 
-        setChapter(chapData);
+        const data = await res.json();
+        setChapter(data);
 
-        const { data: sData } = await supabase
-          .from('series')
-          .select('id, slug, title, reading_mode')
-          .eq('id', chapData.series_id)
-          .single();
-
-        if (sData) {
-          setSeries(sData);
-          setReadingMode(sData.reading_mode === 'webtoon' ? 'webtoon' : 'paged');
+        if (data.series) {
+          setSeries(data.series);
+          setReadingMode(data.series.reading_mode === 'webtoon' ? 'webtoon' : 'paged');
         }
 
-        const { data: chaps } = await supabase
-          .from('chapters')
-          .select('id, chapter_number')
-          .eq('series_id', chapData.series_id)
-          .order('chapter_number', { ascending: true });
-
-        if (chaps?.length) {
-          setAllChapters(chaps);
-          const currentIndex = chaps.findIndex((c) => c.id === chapData.id);
-          setPrevChapter(currentIndex > 0 ? chaps[currentIndex - 1] : null);
-          setNextChapter(currentIndex < chaps.length - 1 ? chaps[currentIndex + 1] : null);
+        if (data.allChapters) {
+          setAllChapters(data.allChapters);
         }
+        setPrevChapter(data.prevChapter);
+        setNextChapter(data.nextChapter);
 
         const {
           data: { session },
         } = await supabase.auth.getSession();
-        if (session?.user?.id) {
+        if (session?.user?.id && data.series_id) {
           await supabase.from('reading_history').upsert(
             {
               user_id: session.user.id,
-              series_id: chapData.series_id,
-              chapter_id: chapData.id,
-              chapter_number: chapData.chapter_number,
+              series_id: data.series_id,
+              chapter_id: data.id,
+              chapter_number: data.chapter_number,
               updated_at: new Date().toISOString(),
             },
             { onConflict: 'user_id,series_id' }
@@ -173,7 +154,6 @@ export default function ReaderPage() {
 
   const totalPages = chapter?.pages?.length || 0;
 
-  // Instant Page Turns: Invisible preloader for next image in paged mode
   useEffect(() => {
     if (readingMode === 'paged' && chapter?.pages && currentPage < totalPages - 1) {
       const nextImg = new Image();
@@ -199,7 +179,6 @@ export default function ReaderPage() {
     }
   }, [currentPage, prevChapter, router]);
 
-  // Keyboard navigation
   useEffect(() => {
     if (readingMode !== 'paged') return;
 
@@ -215,7 +194,6 @@ export default function ReaderPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [readingMode, readingDirection, handleNextPage, handlePrevPage]);
 
-  // Touch swipe support for mobile
   const onTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
   };
@@ -517,12 +495,12 @@ export default function ReaderPage() {
           {nextChapter ? (
             <Link
               href={`/read/${nextChapter.id}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition shadow-md shadow-indigo-600/30"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition shadow-md shadow-indigo-600/20"
             >
               Next Ch. {nextChapter.chapter_number} →
             </Link>
           ) : (
-            <span className="text-xs text-neutral-500 px-3.5 py-1.5 font-medium">Latest Release</span>
+            <span className="text-xs text-neutral-600 px-3.5 py-1.5">Latest Chapter</span>
           )}
         </div>
       </footer>
