@@ -1,105 +1,28 @@
-name: MangaFlow Unified Scout & Ingestion Engine
+name: Catalog & Gaps Sync
 
 on:
   schedule:
-    # Runs automatically every 30 minutes
-    - cron: '*/30 * * * *'
+    - cron: '0 */3 * * *' # Runs every 3 hours
   workflow_dispatch:
-    inputs:
-      mode:
-        description: 'Sync Mode'
-        required: true
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - scout-only
-          - workers-only
-
-concurrency:
-  group: mangaflow-unified-pipeline
-  cancel-in-progress: false
 
 jobs:
-  # ==========================================================
-  # STAGE 1: CONCURRENT INTEL SCOUT (With Gemini Ground-Truth)
-  # ==========================================================
-  scout-intel:
-    name: 🛰️ Intel Scout (Recon)
-    if: ${{ github.event.inputs.mode == 'all' || github.event.inputs.mode == 'scout-only' || github.event_name == 'schedule' }}
+  sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
     steps:
-      - name: Checkout Code Repository
+      - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Setup Node.js Runtime
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
+          cache: 'npm'
 
-      - name: Cache Node Modules
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Install Dependencies
-        run: |
-          npm install --no-audit --no-fund
-
-      - name: Run Recon Intel Scout
+      - name: Run Smart Sync
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          NODE_NO_WARNINGS: 1
-        run: node scripts/scout-intel.js
-
-  # ==========================================================
-  # STAGE 2: 8-WORKER FAST INGESTION MATRIX
-  # ==========================================================
-  token-relay:
-    name: 📥 Ingestion Worker ${{ matrix.worker_id }}
-    if: ${{ github.event.inputs.mode == 'all' || github.event.inputs.mode == 'workers-only' || github.event_name == 'schedule' }}
-    needs: [scout-intel]
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        # Scaled to 8 parallel workers for maximum backlog clearing
-        worker_id: [1, 2, 3, 4, 5, 6, 7, 8]
-    timeout-minutes: 35
-
-    steps:
-      - name: Checkout Code Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js Runtime
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Cache Node Modules
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-
-
-      - name: Install Dependencies
-        run: npm install --no-audit --no-fund
-
-      - name: Run Multi-Source Ingestion Engine
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          WORKER_ID: ${{ matrix.worker_id }}
-          TOTAL_WORKERS: 8
-          NODE_NO_WARNINGS: 1
-        run: node scripts/sync-multi-source.js
+        run: node scripts/smart-sync.js
