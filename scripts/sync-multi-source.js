@@ -51,6 +51,22 @@ async function fetchWithRetry(url, isJson = false, retries = 3) {
   }
 }
 
+function isSlugMatch(targetUrl, seriesSlug, seriesTitle) {
+  if (!targetUrl) return true;
+  const cleanUrl = targetUrl.toLowerCase();
+  const baseSlug = seriesSlug ? seriesSlug.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+  const firstWord = (seriesTitle || '').toLowerCase().split(/[\s:_-]+/)[0].replace(/[^a-z0-9]/g, '');
+
+  const knownCollisions = ['one-piece', 'naruto', 'bleach', 'martial-peak', 'detective-conan'];
+  for (const known of knownCollisions) {
+    const rawKnown = known.replace('-', '');
+    if (cleanUrl.includes(known) && !baseSlug.includes(rawKnown) && !firstWord.includes(rawKnown)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // 1. MangaDex Ingestion
 async function fetchMangaDex(dexId) {
   const chapters = [];
@@ -82,33 +98,62 @@ async function fetchMangaDex(dexId) {
   return chapters;
 }
 
-// 2. MangaPill Ingestion
-async function fetchMangaPill(url) {
+// 2. MangaPill Ingestion (with Page H1 Validation and Cross-Franchise Defense)
+async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   const html = await fetchWithRetry(url, false);
   const $ = cheerio.load(html);
-  const chapters = [];
 
-  $('div[id*="chapters"] a, .chapters-list a, a[href*="/chapters/"]').each((_, el) => {
+  // Validate that the remote page title matches the expected series
+  const pageTitle = $('h1').first().text().trim().toLowerCase();
+  const targetFirstWord = (seriesTitle || '').toLowerCase().split(/[\s:_-]+/)[0].replace(/[^a-z0-9]/g, '');
+
+  if (pageTitle && targetFirstWord && targetFirstWord.length > 2) {
+    const cleanPageTitle = pageTitle.replace(/[^a-z0-9]/g, '');
+    if (!cleanPageTitle.includes(targetFirstWord)) {
+      console.warn(`[Safety Block] MangaPill title mismatch! Target: "${seriesTitle}", Page H1: "${pageTitle}". Skipping.`);
+      return [];
+    }
+  }
+
+  const chaptersMap = new Map();
+
+  $('div[id*="chapters"] a[href*="/chapters/"], #chapters a, .chapters-list a').each((_, el) => {
     const href = $(el).attr('href');
     const text = $(el).text().trim();
     if (!href) return;
 
     const fullUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
-    const match = text.match(/chapter\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i);
-    const num = match ? parseFloat(match[1]) : null;
 
-    if (num !== null && !isNaN(num)) {
-      chapters.push({
-        chapter_number: num,
-        title: text || `Chapter ${num}`,
-        external_id: fullUrl,
-        source: 'mangapill',
-        pages: [fullUrl]
-      });
+    // Verify individual chapter URLs do not point to a known conflicting franchise
+    if (!isSlugMatch(fullUrl, seriesSlug, seriesTitle)) {
+      return;
+    }
+
+    let num = null;
+    const textMatch = text.match(/(?:chapter|ch\.?)\s*([\d.]+)/i);
+    if (textMatch) {
+      num = parseFloat(textMatch[1]);
+    } else {
+      const slugMatch = href.match(/chapter-([\d.]+)(?:[^\d]|$)/i);
+      if (slugMatch) {
+        num = parseFloat(slugMatch[1]);
+      }
+    }
+
+    if (num !== null && !isNaN(num) && num >= 0) {
+      if (!chaptersMap.has(num)) {
+        chaptersMap.set(num, {
+          chapter_number: num,
+          title: text.replace(/\s+/g, ' ').trim() || `Chapter ${num}`,
+          external_id: fullUrl,
+          source: 'mangapill',
+          pages: [fullUrl]
+        });
+      }
     }
   });
 
-  return chapters;
+  return Array.from(chaptersMap.values()).sort((a, b) => a.chapter_number - b.chapter_number);
 }
 
 // 3. ComicK Ingestion (Fallback)
@@ -171,7 +216,7 @@ async function runSynchronizer() {
   let totalAdded = 0;
 
   for (const item of queue) {
-    const { series_id, title, source_platform, target_url, target_identifier, comick_hid } = item;
+    const { series_id, title, slug, source_platform, target_url, target_identifier, comick_hid } = item;
 
     const { data: existing } = await supabase
       .from('chapters')
@@ -187,13 +232,13 @@ async function runSynchronizer() {
         const dexId = target_identifier || target_url.split('/').pop();
         remoteChapters = await fetchMangaDex(dexId);
       } else if (source_platform === 'mangapill' && target_url) {
-        remoteChapters = await fetchMangaPill(target_url);
+        remoteChapters = await fetchMangaPill(target_url, slug, title);
       }
     } catch (err) {
       console.warn(`[Tier 1/2 Failed] ${title}: ${err.message}`);
     }
 
-    // Tier 3: ComicK Fallback (activates if 0 chapters were returned)
+    // Tier 3: ComicK Fallback
     if (remoteChapters.length === 0 && (comick_hid || title)) {
       const fallbackSlug = comick_hid || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       console.log(`[Tier 3 Fallback] Activating ComicK for: ${title} (${fallbackSlug})`);
