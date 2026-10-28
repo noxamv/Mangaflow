@@ -53,23 +53,45 @@ async function fetchWithRetry(url, isJson = false, extraHeaders = {}, retries = 
   }
 }
 
-function isSlugMatch(targetUrl, seriesSlug, seriesTitle) {
-  if (!targetUrl) return true;
-  const cleanUrl = targetUrl.toLowerCase();
-  const baseSlug = seriesSlug ? seriesSlug.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
-  const firstWord = (seriesTitle || '').toLowerCase().split(/[\s:_-]+/)[0].replace(/[^a-z0-9]/g, '');
+// 1. Dynamic MangaPill URL Resolver via Live Search
+async function resolveMangaPillUrl(seriesTitle) {
+  try {
+    const cleanQuery = encodeURIComponent(
+      seriesTitle.replace(/[^a-zA-Z0-9\s]/g, '').trim()
+    );
+    const searchUrl = `https://mangapill.com/search?q=${cleanQuery}`;
+    const html = await fetchWithRetry(searchUrl, false);
+    if (!html) return null;
 
-  const knownCollisions = ['one-piece', 'naruto', 'bleach', 'martial-peak', 'detective-conan'];
-  for (const known of knownCollisions) {
-    const rawKnown = known.replace('-', '');
-    if (cleanUrl.includes(known) && !baseSlug.includes(rawKnown) && !firstWord.includes(rawKnown)) {
-      return false;
+    const $ = cheerio.load(html);
+    let matchedUrl = null;
+    const targetLower = seriesTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    $('a[href^="/manga/"]').each((_, el) => {
+      if (matchedUrl) return;
+      const titleText = $(el).find('div.leading-tight, .font-bold, h5').text().trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      const href = $(el).attr('href');
+      
+      if (href && (titleText.includes(targetLower) || targetLower.includes(titleText))) {
+        matchedUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
+      }
+    });
+
+    // Fallback: take the very first search result link if no exact match
+    if (!matchedUrl) {
+      const firstHref = $('a[href^="/manga/"]').first().attr('href');
+      if (firstHref) {
+        matchedUrl = firstHref.startsWith('http') ? firstHref : `https://mangapill.com${firstHref}`;
+      }
     }
+
+    return matchedUrl;
+  } catch (err) {
+    return null;
   }
-  return true;
 }
 
-// 1. MangaDex Ingestion
+// 2. MangaDex Ingestion
 async function fetchMangaDex(dexId) {
   const chapters = [];
   let offset = 0;
@@ -100,8 +122,8 @@ async function fetchMangaDex(dexId) {
   return chapters;
 }
 
-// 2. MangaPill Ingestion (Hardened Selector + Strict Title Overlap Defense)
-async function fetchMangaPill(url, seriesSlug, seriesTitle) {
+// 3. MangaPill Scraper
+async function fetchMangaPill(url, seriesTitle) {
   const html = await fetchWithRetry(url, false);
   if (!html) return [];
   const $ = cheerio.load(html);
@@ -109,25 +131,13 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   const pageTitle = $('h1').first().text().trim().toLowerCase();
   const targetLower = (seriesTitle || '').toLowerCase();
 
-  // Known hard franchise collision check
+  // Safety: Prevent franchise collisions
   const knownCollisions = ['one piece', 'naruto', 'bleach', 'detective conan'];
   for (const collision of knownCollisions) {
     if (pageTitle.includes(collision) && !targetLower.includes(collision)) {
       console.warn(`[Safety Block] Franchise collision! Target: "${seriesTitle}", Page H1: "${pageTitle}". Skipping.`);
       return [];
     }
-  }
-
-  // Soft title overlap validation: verifies page contains at least 1 significant word
-  const targetWords = targetLower
-    .replace(/[^a-z0-9\s]/g, '')
-    .split(/\s+/)
-    .filter(w => !['the', 'a', 'an', 'of', 'and', 'in', 'is', 'to', 'class', 're'].includes(w) && w.length > 2);
-
-  const hasTitleOverlap = targetWords.some(w => pageTitle.includes(w));
-  if (!hasTitleOverlap && targetWords.length > 0) {
-    console.warn(`[Safety Block] ID Mismatch Detected! Target: "${seriesTitle}", MangaPill Page H1: "${pageTitle}". Skipping.`);
-    return [];
   }
 
   const chaptersMap = new Map();
@@ -138,8 +148,6 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
     if (!href) return;
 
     const fullUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
-
-    if (!isSlugMatch(fullUrl, seriesSlug, seriesTitle)) return;
 
     let num = null;
     const textMatch = text.match(/(?:chapter|ch\.?)\s*([\d.]+)/i);
@@ -168,7 +176,7 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   return Array.from(chaptersMap.values()).sort((a, b) => a.chapter_number - b.chapter_number);
 }
 
-// 3. Manhwatop Fallback (Madara WordPress - Unblocked Runner Safe)
+// 4. Manhwatop Fallback
 async function fetchManhwatop(slug) {
   try {
     const cleanSlug = slug.replace(/^https?:\/\/[^\/]+\/manga\//, '').replace(/\/$/, '');
@@ -224,7 +232,7 @@ async function runSynchronizer() {
   let totalAdded = 0;
 
   for (const item of queue) {
-    const { series_id, title, slug, source_platform, target_url, target_identifier } = item;
+    const { series_id, title, source_platform, target_url, target_identifier } = item;
 
     const { data: existing } = await supabase
       .from('chapters')
@@ -234,24 +242,49 @@ async function runSynchronizer() {
     const existingSet = new Set((existing || []).map((c) => Number(c.chapter_number)));
     let remoteChapters = [];
 
-    // TIER 1 & 2: Primary Scraping (MangaDex or MangaPill)
-    try {
-      if (source_platform === 'mangadex' && (target_identifier || target_url)) {
+    // TIER 1: MangaDex
+    if (source_platform === 'mangadex' && (target_identifier || target_url)) {
+      try {
         const dexId = target_identifier || target_url.split('/').pop();
         remoteChapters = await fetchMangaDex(dexId);
-      } else if (source_platform === 'mangapill' && target_url) {
-        remoteChapters = await fetchMangaPill(target_url, slug, title);
+      } catch (err) {
+        console.warn(`[MangaDex Failed] ${title}: ${err.message}`);
       }
-    } catch (err) {
-      console.warn(`[Primary Failed] ${title}: ${err.message}`);
     }
 
-    // TIER 3: Manhwatop Fallback (Activates if primary only returns <= 15 promo chapters)
+    // TIER 2: MangaPill (Dynamic Search Resolution if target_url fails or is absent)
+    if (remoteChapters.length <= 15) {
+      let resolvedUrl = target_url && source_platform === 'mangapill' ? target_url : null;
+      
+      // Dynamically find authentic MangaPill URL if none provided or if it 404s
+      if (!resolvedUrl || resolvedUrl.includes('placeholder')) {
+        resolvedUrl = await resolveMangaPillUrl(title);
+      }
+
+      if (resolvedUrl) {
+        console.log(`[MangaPill Query] ${title} -> ${resolvedUrl}`);
+        const pillChapters = await fetchMangaPill(resolvedUrl, title);
+        
+        if (pillChapters.length > remoteChapters.length) {
+          remoteChapters = pillChapters;
+          // Persist the verified URL in Supabase so future runs don't have to search again
+          await supabase
+            .from('series_intel')
+            .update({ 
+              target_url: resolvedUrl, 
+              source_platform: 'mangapill' 
+            })
+            .eq('series_id', series_id);
+        }
+      }
+    }
+
+    // TIER 3: Manhwatop Fallback
     if (remoteChapters.length <= 15 && title) {
       const fallbackSlug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const fallbackChapters = await fetchManhwatop(fallbackSlug);
       if (fallbackChapters.length > remoteChapters.length) {
-        console.log(`[Manhwatop Fallback Used] ${title}: Found ${fallbackChapters.length} chapters`);
+        console.log(`[Manhwatop Fallback] ${title}: Found ${fallbackChapters.length} chapters`);
         remoteChapters = fallbackChapters;
       }
     }
