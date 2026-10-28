@@ -34,10 +34,12 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-async function fetchWithRetry(url, isJson = false, retries = 3) {
+async function fetchWithRetry(url, isJson = false, extraHeaders = {}, retries = 3) {
   for (let i = 1; i <= retries; i++) {
     try {
-      const res = await fetch(url, { headers: BROWSER_HEADERS });
+      const res = await fetch(url, { 
+        headers: { ...BROWSER_HEADERS, ...extraHeaders } 
+      });
       if (res.status === 429) {
         await sleep(2500 * i);
         continue;
@@ -98,19 +100,20 @@ async function fetchMangaDex(dexId) {
   return chapters;
 }
 
-// 2. MangaPill Ingestion (with Page H1 Validation and Cross-Franchise Defense)
+// 2. MangaPill Ingestion (Protects against cross-franchise leaks while allowing romaji headers)
 async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   const html = await fetchWithRetry(url, false);
   const $ = cheerio.load(html);
 
-  // Validate that the remote page title matches the expected series
   const pageTitle = $('h1').first().text().trim().toLowerCase();
-  const targetFirstWord = (seriesTitle || '').toLowerCase().split(/[\s:_-]+/)[0].replace(/[^a-z0-9]/g, '');
 
-  if (pageTitle && targetFirstWord && targetFirstWord.length > 2) {
-    const cleanPageTitle = pageTitle.replace(/[^a-z0-9]/g, '');
-    if (!cleanPageTitle.includes(targetFirstWord)) {
-      console.warn(`[Safety Block] MangaPill title mismatch! Target: "${seriesTitle}", Page H1: "${pageTitle}". Skipping.`);
+  // Hard blocker: only reject if the page explicitly belongs to a known unrelated franchise
+  const knownCollisions = ['one piece', 'naruto', 'bleach', 'detective conan'];
+  const targetLower = (seriesTitle || '').toLowerCase();
+  
+  for (const collision of knownCollisions) {
+    if (pageTitle.includes(collision) && !targetLower.includes(collision)) {
+      console.warn(`[Safety Block] Cross-franchise collision detected! Target: "${seriesTitle}", Page H1: "${pageTitle}". Skipping.`);
       return [];
     }
   }
@@ -156,10 +159,15 @@ async function fetchMangaPill(url, seriesSlug, seriesTitle) {
   return Array.from(chaptersMap.values()).sort((a, b) => a.chapter_number - b.chapter_number);
 }
 
-// 3. ComicK Ingestion (Fallback)
+// 3. ComicK Ingestion (Fallback with complete headers)
 async function fetchComicK(comicSlug) {
   try {
-    const comicInfo = await fetchWithRetry(`https://api.comick.fun/comic/${comicSlug}`, true);
+    const headers = {
+      'Referer': 'https://comick.io/',
+      'Origin': 'https://comick.io'
+    };
+
+    const comicInfo = await fetchWithRetry(`https://api.comick.fun/comic/${comicSlug}`, true, headers);
     const hid = comicInfo?.comic?.hid;
     if (!hid) return [];
 
@@ -169,7 +177,7 @@ async function fetchComicK(comicSlug) {
 
     while (hasMore && page <= 10) {
       const url = `https://api.comick.fun/comic/${hid}/chapters?lang=en&page=${page}&limit=100`;
-      const data = await fetchWithRetry(url, true);
+      const data = await fetchWithRetry(url, true, headers);
       const list = data?.chapters || [];
 
       if (!list.length) break;
@@ -238,7 +246,7 @@ async function runSynchronizer() {
       console.warn(`[Tier 1/2 Failed] ${title}: ${err.message}`);
     }
 
-    // Tier 3: ComicK Fallback
+    // Tier 3: ComicK Fallback (activates if 0 chapters returned)
     if (remoteChapters.length === 0 && (comick_hid || title)) {
       const fallbackSlug = comick_hid || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       console.log(`[Tier 3 Fallback] Activating ComicK for: ${title} (${fallbackSlug})`);
