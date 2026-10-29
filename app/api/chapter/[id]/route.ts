@@ -12,7 +12,32 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-// 1. Comick Hub Parser (Asura, Reaper, Flame, HiveToon mirrors)
+// 1. MangaPill Chapter Parser
+async function fetchMangaPillPages(targetUrl: string): Promise<string[]> {
+  try {
+    const res = await fetch(targetUrl, {
+      headers: { ...BROWSER_HEADERS, 'Referer': 'https://mangapill.com/' },
+      cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const pages: string[] = [];
+
+    $('picture img, img.lazy, .container-reader img').each((_, el) => {
+      const src = $(el).attr('data-src') || $(el).attr('src');
+      if (src && !pages.includes(src.trim())) {
+        pages.push(src.trim());
+      }
+    });
+
+    return pages;
+  } catch {
+    return [];
+  }
+}
+
+// 2. Comick Hub Parser
 async function fetchComickPages(hid: string): Promise<string[]> {
   try {
     const res = await fetch(`https://api.comick.fun/chapter/${hid}`, {
@@ -28,7 +53,7 @@ async function fetchComickPages(hid: string): Promise<string[]> {
   }
 }
 
-// 2. MangaDex API Parser
+// 3. MangaDex API Parser
 async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   try {
     const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterDexId}`, {
@@ -46,7 +71,7 @@ async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   }
 }
 
-// 3. Universal Webtoon / Scanlator Parser (HiveToon, Asura, Arena, MangaPill, Madara)
+// 4. Universal Webtoon / Scanlator Parser (HiveToon, Asura, Madara)
 async function fetchUniversalScanPages(targetUrl: string): Promise<string[]> {
   try {
     const urlObj = new URL(targetUrl);
@@ -128,17 +153,22 @@ export async function GET(
 
     let finalPages: string[] = chapter.pages || [];
 
-    const isNeedsResolution =
+    // Check if the current pages array is just a placeholder link or empty
+    const isPlaceholder =
       finalPages.length <= 1 &&
       (!finalPages[0] ||
         finalPages[0] === chapter.external_id ||
-        (finalPages[0].startsWith('http') && !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i)));
+        finalPages[0].includes('mangapill.com/chapters') ||
+        finalPages[0].includes('hivetoons.org') ||
+        !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i));
 
-    if (isNeedsResolution || finalPages.length === 0) {
+    if (isPlaceholder || finalPages.length === 0) {
       const targetUrl = chapter.external_id || finalPages[0] || '';
       const source = chapter.source || '';
 
-      if (source === 'comick' || targetUrl.includes('comick.')) {
+      if (targetUrl.includes('mangapill.com')) {
+        finalPages = await fetchMangaPillPages(targetUrl);
+      } else if (source === 'comick' || targetUrl.includes('comick.')) {
         const hid = targetUrl.split('/').filter(Boolean).pop() || '';
         finalPages = await fetchComickPages(hid);
       } else if (source === 'mangadex' || /^[a-f0-9-]{36}$/.test(targetUrl)) {
@@ -155,16 +185,11 @@ export async function GET(
       }
     }
 
-    const defaultBaseUrl = 'https://uploads.mangadex.org';
-    const baseUrl = chapter.base_url
-      ? chapter.base_url.replace(/\/$/, '')
-      : defaultBaseUrl;
-
+    const baseUrl = chapter.base_url ? chapter.base_url.replace(/\/$/, '') : '';
     const resolvedPages = finalPages
       .map((page: string) => {
         if (!page) return '';
         if (page.startsWith('http://') || page.startsWith('https://')) return page;
-        if (page.startsWith('data/')) return `${baseUrl}/${page}`;
         return baseUrl ? `${baseUrl}/${page.replace(/^\//, '')}` : page;
       })
       .filter(Boolean);
