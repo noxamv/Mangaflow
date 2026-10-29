@@ -6,16 +6,21 @@ if (typeof globalThis.WebSocket === 'undefined') {
 import { createClient } from '@supabase/supabase-js';
 import * as cheerio from 'cheerio';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+const SUPABASE_URL = 
+  process.env.SUPABASE_URL || 
+  process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+const SUPABASE_KEY = 
+  process.env.SUPABASE_SERVICE_ROLE_KEY || 
+  process.env.SUPABASE_SERVICE_KEY || 
+  process.env.SUPABASE_KEY || 
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('Missing Supabase credentials in environment.');
+  console.error('Available env keys:', Object.keys(process.env).filter(k => k.includes('SUPA')));
   process.exit(1);
 }
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
