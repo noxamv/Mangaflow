@@ -12,7 +12,35 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-// 1. MangaPill Chapter Parser
+// 1. Manganato / Chapmanganato Parser
+async function fetchManganatoPages(targetUrl: string): Promise<string[]> {
+  try {
+    const res = await fetch(targetUrl, {
+      headers: {
+        ...BROWSER_HEADERS,
+        'Referer': 'https://chapmanganato.to/',
+      },
+      cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const pages: string[] = [];
+
+    $('.container-chapter-reader img, .panel-read-story img').each((_, el) => {
+      const src = $(el).attr('src') || $(el).attr('data-src');
+      if (src && !pages.includes(src.trim())) {
+        pages.push(src.trim());
+      }
+    });
+
+    return pages;
+  } catch {
+    return [];
+  }
+}
+
+// 2. MangaPill Chapter Parser
 async function fetchMangaPillPages(targetUrl: string): Promise<string[]> {
   try {
     const res = await fetch(targetUrl, {
@@ -37,7 +65,7 @@ async function fetchMangaPillPages(targetUrl: string): Promise<string[]> {
   }
 }
 
-// 2. Comick Hub Parser
+// 3. Comick Hub Parser
 async function fetchComickPages(hid: string): Promise<string[]> {
   try {
     const res = await fetch(`https://api.comick.fun/chapter/${hid}`, {
@@ -53,7 +81,7 @@ async function fetchComickPages(hid: string): Promise<string[]> {
   }
 }
 
-// 3. MangaDex API Parser
+// 4. MangaDex API Parser
 async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   try {
     const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterDexId}`, {
@@ -71,7 +99,7 @@ async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   }
 }
 
-// 4. Universal Webtoon / Scanlator Parser (HiveToon, Asura, Madara)
+// 5. Universal Webtoon / Madara Parser (MangaClash, Toonily, HiveToon)
 async function fetchUniversalScanPages(targetUrl: string): Promise<string[]> {
   try {
     const urlObj = new URL(targetUrl);
@@ -153,12 +181,14 @@ export async function GET(
 
     let finalPages: string[] = chapter.pages || [];
 
-    // Check if the current pages array is just a placeholder link or empty
     const isPlaceholder =
       finalPages.length <= 1 &&
       (!finalPages[0] ||
         finalPages[0] === chapter.external_id ||
         finalPages[0].includes('mangapill.com/chapters') ||
+        finalPages[0].includes('manganato.com') ||
+        finalPages[0].includes('chapmanganato') ||
+        finalPages[0].includes('mangaclash.com') ||
         finalPages[0].includes('hivetoons.org') ||
         !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i));
 
@@ -166,7 +196,9 @@ export async function GET(
       const targetUrl = chapter.external_id || finalPages[0] || '';
       const source = chapter.source || '';
 
-      if (targetUrl.includes('mangapill.com')) {
+      if (targetUrl.includes('manganato.com') || targetUrl.includes('chapmanganato')) {
+        finalPages = await fetchManganatoPages(targetUrl);
+      } else if (targetUrl.includes('mangapill.com')) {
         finalPages = await fetchMangaPillPages(targetUrl);
       } else if (source === 'comick' || targetUrl.includes('comick.')) {
         const hid = targetUrl.split('/').filter(Boolean).pop() || '';
