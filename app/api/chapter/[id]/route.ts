@@ -12,11 +12,28 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
+// 1. COMICK MULTI-SCAN HUB (Asura, Reaper, Flame, HiveToon, Void mirrored in one API)
+async function fetchComickPages(hid: string): Promise<string[]> {
+  try {
+    const res = await fetch(`https://api.comick.fun/chapter/${hid}`, {
+      headers: BROWSER_HEADERS,
+      cache: 'no-store'
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const images = data.chapter?.images || [];
+    return images.map((img: { url: string }) => img.url).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// 2. MANGADEX OFFICIAL API
 async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   try {
     const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterDexId}`, {
       headers: BROWSER_HEADERS,
-      next: { revalidate: 3600 },
+      cache: 'no-store',
     });
     if (!res.ok) return [];
     const json = await res.json();
@@ -29,48 +46,41 @@ async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   }
 }
 
-async function fetchMangaPillPages(targetUrl: string): Promise<string[]> {
+// 3. UNIVERSAL WEBTOON / SCANLATOR PARSER (HiveToon, Asura, Arena, Toonily, MangaStream/Madara)
+async function fetchUniversalScanPages(targetUrl: string): Promise<string[]> {
   try {
+    const urlObj = new URL(targetUrl);
     const res = await fetch(targetUrl, {
-      headers: BROWSER_HEADERS,
-      next: { revalidate: 3600 },
-    });
-    if (!res.ok) return [];
-    const html = await res.text();
-    const $ = cheerio.load(html);
-    const pages: string[] = [];
-
-    $('picture img, img.lazy, .container-reader img').each((_, el) => {
-      const src = $(el).attr('data-src') || $(el).attr('src');
-      if (src && !pages.includes(src.trim())) {
-        pages.push(src.trim());
-      }
-    });
-
-    return pages;
-  } catch {
-    return [];
-  }
-}
-
-async function fetchManhwatopPages(chapterUrl: string): Promise<string[]> {
-  try {
-    const res = await fetch(chapterUrl, {
       headers: {
         ...BROWSER_HEADERS,
-        'Referer': 'https://manhwatop.com/',
+        'Referer': `${urlObj.protocol}//${urlObj.host}/`
       },
-      next: { revalidate: 3600 },
+      cache: 'no-store',
     });
     if (!res.ok) return [];
     const html = await res.text();
     const $ = cheerio.load(html);
     const pages: string[] = [];
 
-    $('.reading-content img, .page-break img').each((_, el) => {
-      const src = $(el).attr('data-src') || $(el).attr('src');
-      if (src && !pages.includes(src.trim())) {
-        pages.push(src.trim());
+    // Common selectors used across 95% of manga/manhwa reader themes
+    const selectors = [
+      '.reading-content img',
+      '#readerarea img',
+      '.page-break img',
+      'picture img',
+      'img.manga-image',
+      '.container-reader img',
+      'div#chapter-images img'
+    ];
+
+    $(selectors.join(', ')).each((_, el) => {
+      const src = $(el).attr('data-src') || $(el).attr('data-lazy-src') || $(el).attr('src');
+      if (src) {
+        const cleanSrc = src.trim();
+        // Ignore decorative ads, tracking pixels, or tiny logos
+        if (!cleanSrc.includes('logo') && !cleanSrc.includes('banner') && !pages.includes(cleanSrc)) {
+          pages.push(cleanSrc.startsWith('//') ? `https:${cleanSrc}` : cleanSrc);
+        }
       }
     });
 
@@ -120,28 +130,28 @@ export async function GET(
 
     let finalPages: string[] = chapter.pages || [];
 
-    // Detect if pages array only stores an external link or placeholder
-    const isPlaceholder =
+    // Check if the stored pages array needs live on-demand parsing
+    const isNeedsResolution =
       finalPages.length <= 1 &&
-      finalPages[0] &&
-      (finalPages[0] === chapter.external_id ||
-        finalPages[0].includes('mangapill.com') ||
-        finalPages[0].includes('manhwatop.com') ||
-        !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i));
+      (!finalPages[0] ||
+        finalPages[0] === chapter.external_id ||
+        finalPages[0].startsWith('http') && !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i));
 
-    if (isPlaceholder) {
+    if (isNeedsResolution || finalPages.length === 0) {
+      const targetUrl = chapter.external_id || finalPages[0] || '';
       const source = chapter.source || '';
-      const identifier = chapter.external_id || finalPages[0];
 
-      if (source === 'manhwatop') {
-        finalPages = await fetchManhwatopPages(identifier);
-      } else if (source === 'mangadex' || identifier.length === 36) {
-        finalPages = await fetchMangaDexPages(identifier);
-      } else {
-        finalPages = await fetchMangaPillPages(identifier);
+      // Route to appropriate multi-source resolver
+      if (source === 'comick' || targetUrl.includes('comick.')) {
+        const hid = targetUrl.split('/').filter(Boolean).pop() || '';
+        finalPages = await fetchComickPages(hid);
+      } else if (source === 'mangadex' || /^[a-f0-9-]{36}$/.test(targetUrl)) {
+        finalPages = await fetchMangaDexPages(targetUrl);
+      } else if (targetUrl.startsWith('http')) {
+        finalPages = await fetchUniversalScanPages(targetUrl);
       }
 
-      // Persist resolved pages in Supabase so subsequent reads load instantly
+      // Automatically cache in database so the next reader gets instant loading
       if (finalPages.length > 0) {
         await supabase
           .from('chapters')
@@ -150,13 +160,17 @@ export async function GET(
       }
     }
 
-    const baseUrl = chapter.base_url ? chapter.base_url.replace(/\/$/, '') : '';
+    // Resolve MangaDex relative paths if applicable
+    const defaultBaseUrl = 'https://uploads.mangadex.org';
+    const baseUrl = chapter.base_url
+      ? chapter.base_url.replace(/\/$/, '')
+      : defaultBaseUrl;
+
     const resolvedPages = finalPages
       .map((page: string) => {
         if (!page) return '';
-        if (page.startsWith('http://') || page.startsWith('https://')) {
-          return page;
-        }
+        if (page.startsWith('http://') || page.startsWith('https://')) return page;
+        if (page.startsWith('data/')) return `${baseUrl}/${page}`;
         return baseUrl ? `${baseUrl}/${page.replace(/^\//, '')}` : page;
       })
       .filter(Boolean);
