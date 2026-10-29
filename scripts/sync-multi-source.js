@@ -21,6 +21,9 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('Available env keys:', Object.keys(process.env).filter(k => k.includes('SUPA')));
   process.exit(1);
 }
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -53,7 +56,6 @@ async function scrapeMangaPill(targetUrl) {
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    // Matches standard links, container lists, and sub-selectors
     $('a[href*="/chapters/"], #chapters a, .chapters-list a, div.grid-cols-1 a').each((_, el) => {
       const href = $(el).attr('href');
       const text = $(el).text().trim();
@@ -120,7 +122,7 @@ async function scrapeMangaDex(targetUrl) {
       }
 
       offset += limit;
-      await delay(250); // Rate-limiting guard
+      await delay(250);
     }
 
     return { chapters, resolvedUrl: targetUrl, platform: 'mangadex' };
@@ -184,7 +186,11 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
 // 4. WATERFALL ORCHESTRATION
 // ==========================================
 async function resolveAndIngestSeries(series) {
-  const intel = series.series_intel?.[0] || {};
+  // Support both object and array from Supabase join
+  const intel = Array.isArray(series.series_intel) 
+    ? (series.series_intel[0] || {}) 
+    : (series.series_intel || {});
+
   let targetUrl = intel.target_url;
   let platform = intel.source_platform;
 
@@ -207,8 +213,15 @@ async function resolveAndIngestSeries(series) {
     result = await scrapeManhwatop(targetUrl, series.title);
   }
 
+  // FIX: If failed, update timestamp so it doesn't trap the queue
   if (result.chapters.length === 0) {
-    console.log(`  [FAILED] No chapters resolved for: "${series.title}"`);
+    console.log(`  [FAILED] No chapters resolved for: "${series.title}". Advancing queue.`);
+    await supabase
+      .from('series_intel')
+      .upsert({
+        series_id: series.id,
+        last_scouted_at: new Date().toISOString()
+      }, { onConflict: 'series_id' });
     return;
   }
 
@@ -245,7 +258,7 @@ async function resolveAndIngestSeries(series) {
     }
   }
 
-  // Update Series Intel
+  // Update Series Intel with progress
   await supabase
     .from('series_intel')
     .upsert({
@@ -266,10 +279,10 @@ async function resolveAndIngestSeries(series) {
 async function main() {
   console.log('--- STARTING CATALOG WATERFALL SYNC ---');
 
-  // Priority Queue: Placeholders, zero-stored, and voided titles (nulls first)
+  // Priority Queue: Prioritize null timestamps and oldest scouted first
   const { data: queue, error } = await supabase
     .from('series')
-    .select('id, title, series_intel!inner(source_platform, target_url, latest_known_chapter, last_scouted_at)')
+    .select('id, title, series_intel(source_platform, target_url, latest_known_chapter, last_scouted_at)')
     .order('last_scouted_at', { foreignTable: 'series_intel', ascending: true, nullsFirst: true })
     .limit(50);
 
@@ -282,7 +295,7 @@ async function main() {
 
   for (const series of queue) {
     await resolveAndIngestSeries(series);
-    await delay(1200); // Prevents rate limiting
+    await delay(1200);
   }
 
   console.log('\n--- BATCH COMPLETED SUCCESSFULLY ---');
