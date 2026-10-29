@@ -41,7 +41,7 @@ function slugify(text) {
 }
 
 // ==========================================
-// 1. ADAPTER: MANGAPILL (Deep Link Extraction)
+// 1. ADAPTER: MANGAPILL (Deep Link Extraction with Retry)
 // ==========================================
 async function scrapeMangaPill(targetUrl) {
   if (!targetUrl || targetUrl === 'placeholder' || !targetUrl.includes('mangapill.com')) {
@@ -50,16 +50,28 @@ async function scrapeMangaPill(targetUrl) {
 
   const chapters = [];
   try {
-    const res = await fetch(targetUrl, { headers: HEADERS });
-    if (res.status !== 200) return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
+    let res = await fetch(targetUrl, { headers: HEADERS });
+
+    // If rate-limited or temporarily challenged, wait 2 seconds and retry once
+    if (res.status === 429 || res.status === 503) {
+      await delay(2000);
+      res = await fetch(targetUrl, { headers: HEADERS });
+    }
+
+    if (res.status !== 200) {
+      console.log(`  [HTTP ${res.status}] MangaPill returned non-200 for: ${targetUrl}`);
+      return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
+    }
 
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    $('a[href*="/chapters/"], #chapters a, .chapters-list a, div.grid-cols-1 a').each((_, el) => {
+    $('a[href*="/chapters/"], #chapters a, .chapters-list a, div.grid-cols-1 a, a[href*="-chapter-"]').each((_, el) => {
       const href = $(el).attr('href');
       const text = $(el).text().trim();
-      const match = text.match(/chapter\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i) || href.match(/-([\d.]+)\/?$/);
+      const match = text.match(/chapter\s*([\d.]+)/i) || 
+                    href.match(/chapter-([\d.]+)/i) || 
+                    href.match(/-([\d.]+)\/?$/);
       if (match && href) {
         const fullUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
         const chNum = parseFloat(match[1]);
@@ -76,6 +88,7 @@ async function scrapeMangaPill(targetUrl) {
 
     return { chapters, resolvedUrl: targetUrl, platform: 'mangapill' };
   } catch (err) {
+    console.error(`  [MangaPill Fetch Error]: ${err.message}`);
     return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
   }
 }
@@ -98,7 +111,7 @@ async function scrapeMangaDex(targetUrl, seriesTitle) {
   const chapters = [];
 
   try {
-    // 1. Try English chapters with all content ratings explicitly allowed
+    // 1. Try English chapters with safe/suggestive/erotica ratings allowed
     while (offset < total) {
       const apiUrl = `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=${offset}&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
       const res = await fetch(apiUrl, { headers: { 'User-Agent': HEADERS['User-Agent'] } });
@@ -160,7 +173,7 @@ async function scrapeMangaDex(targetUrl, seriesTitle) {
     // Continue to MangaPill search fallback
   }
 
-  // 3. Fallback: Search MangaPill directly using the series title
+  // 3. Fallback: Search MangaPill directly using series title
   if (seriesTitle) {
     try {
       const searchRes = await fetch(`https://mangapill.com/search?q=${encodeURIComponent(seriesTitle)}`, { headers: HEADERS });
