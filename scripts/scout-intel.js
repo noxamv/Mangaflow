@@ -1,199 +1,166 @@
-// scripts/scout-intel.js
-if (typeof globalThis.WebSocket === 'undefined') {
-  try {
-    const { default: WebSocket } = await import('ws');
-    globalThis.WebSocket = WebSocket;
-  } catch (e) {
-    globalThis.WebSocket = class DummyWebSocket {};
-  }
-}
-
 import { createClient } from '@supabase/supabase-js';
-import * as cheerio from 'cheerio';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = 
-  process.env.SUPABASE_SERVICE_ROLE_KEY || 
-  process.env.SUPABASE_SERVICE_KEY || 
-  process.env.SUPABASE_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('[Fatal] Missing Supabase credentials');
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error('Missing Supabase credentials in environment.');
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false }
-});
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const BROWSER_HEADERS = {
+const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
 };
 
-async function fetchWithRetry(url, isJson = false, extraHeaders = {}, retries = 3) {
-  for (let i = 1; i <= retries; i++) {
-    try {
-      const res = await fetch(url, { 
-        headers: { ...BROWSER_HEADERS, ...extraHeaders } 
-      });
-      if (res.status === 429) {
-        await sleep(2500 * i);
-        continue;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return isJson ? await res.json() : await res.text();
-    } catch (e) {
-      if (i === retries) throw e;
-      await sleep(1000 * i);
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function toCleanSlug(title) {
+  return title
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
+    .trim()
+    .replace(/[\s_-]+/g, '-');
+}
+
+// Check if a URL responds with 200 OK
+async function probeUrl(url) {
+  try {
+    const res = await fetch(url, { method: 'HEAD', headers: HEADERS });
+    if (res.status === 200) return true;
+    if (res.status === 405) {
+      // Some servers block HEAD; try GET
+      const getRes = await fetch(url, { method: 'GET', headers: HEADERS });
+      return getRes.status === 200;
     }
+    return false;
+  } catch {
+    return false;
   }
 }
 
-async function scoutMangaDexLatest(dexId) {
-  try {
-    const url = `https://api.mangadex.org/chapter?manga=${dexId}&translatedLanguage[]=en&limit=1&order[chapter]=desc`;
-    const json = await fetchWithRetry(url, true);
-    if (json?.data?.length > 0) {
-      const num = parseFloat(json.data[0].attributes.chapter);
-      return isNaN(num) ? null : num;
+// 1. Manhwatop Prober
+async function scoutManhwatop(title) {
+  const baseSlug = toCleanSlug(title);
+  const candidates = [
+    `https://manhwatop.com/manga/${baseSlug}-series/`,
+    `https://manhwatop.com/manga/${baseSlug}/`
+  ];
+
+  for (const url of candidates) {
+    const ok = await probeUrl(url);
+    if (ok) {
+      return { platform: 'manhwatop', url, identifier: url.split('/').filter(Boolean).pop() };
     }
-  } catch (err) {
-    // Silent ignore to allow fallbacks
   }
   return null;
 }
 
-async function scoutMangaPillLatest(targetUrl, seriesTitle) {
+// 2. MangaDex API Search (with exact match verification)
+async function scoutMangaDex(title) {
   try {
-    const html = await fetchWithRetry(targetUrl, false);
-    const $ = cheerio.load(html);
+    const query = encodeURIComponent(title.replace(/[^\w\s]/g, ''));
+    const res = await fetch(
+      `https://api.mangadex.org/manga?title=${query}&limit=5&order[relevance]=desc`,
+      { headers: { 'User-Agent': HEADERS['User-Agent'] } }
+    );
+    if (res.status !== 200) return null;
 
-    const pageTitle = $('h1').first().text().trim().toLowerCase();
-    const knownCollisions = ['one piece', 'naruto', 'bleach', 'detective conan'];
-    const targetLower = (seriesTitle || '').toLowerCase();
+    const data = await res.json();
+    const hits = data.data || [];
+
+    for (const manga of hits) {
+      const enTitle = manga.attributes?.title?.en || Object.values(manga.attributes?.title || {})[0] || '';
+      
+      // Enforce strict name similarity to avoid cross-contamination
+      const cleanTarget = title.toLowerCase().replace(/[^\w]/g, '');
+      const cleanFound = enTitle.toLowerCase().replace(/[^\w]/g, '');
+      
+      if (cleanFound.includes(cleanTarget) || cleanTarget.includes(cleanFound)) {
+        return {
+          platform: 'mangadex',
+          url: `https://mangadex.org/title/${manga.id}`,
+          identifier: manga.id
+        };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function main() {
+  console.log('--- RUNNING ENHANCED SCOUT INTEL ---');
+
+  // Select only series that are genuinely unlinked or unresolved
+  // Guard: Never touch healthy series with confirmed stored chapters
+  const { data: queue, error } = await supabase
+    .from('series')
+    .select(`
+      id, 
+      title, 
+      series_intel(source_platform, target_url, latest_known_chapter),
+      chapters(count)
+    `)
+    .or('target_url.is.null,target_url.eq.placeholder,latest_known_chapter.eq.0', { foreignTable: 'series_intel' })
+    .limit(40);
+
+  if (error) {
+    console.error('Error fetching scouting targets:', error.message);
+    process.exit(1);
+  }
+
+  console.log(`Found ${queue.length} unlinked or placeholder titles to scout.`);
+
+  for (const item of queue) {
+    const existingCount = item.chapters?.[0]?.count || 0;
+    const existingUrl = item.series_intel?.[0]?.target_url;
+
+    // Safety guard: if already holding chapters and not a placeholder, skip
+    if (existingCount > 20 && existingUrl && existingUrl !== 'placeholder') {
+      console.log(`[SKIP] "${item.title}" already has ${existingCount} chapters.`);
+      continue;
+    }
+
+    console.log(`Scouting: "${item.title}"...`);
+
+    // Priority 1: Check Manhwatop
+    let match = await scoutManhwatop(item.title);
     
-    for (const collision of knownCollisions) {
-      if (pageTitle.includes(collision) && !targetLower.includes(collision)) {
-        return null;
-      }
+    // Priority 2: Check MangaDex if not on Manhwatop
+    if (!match) {
+      await delay(300);
+      match = await scoutMangaDex(item.title);
     }
 
-    let maxNum = null;
-    $('div[id*="chapters"] a[href*="/chapters/"], #chapters a, .chapters-list a, a[href*="/chapters/"]').slice(0, 20).each((_, el) => {
-      const href = $(el).attr('href') || '';
-      const text = $(el).text().trim();
-
-      const textMatch = text.match(/(?:chapter|ch\.?)\s*([\d.]+)/i);
-      const slugMatch = href.match(/chapter-([\d.]+)(?:[^\d]|$)/i);
-      const num = textMatch ? parseFloat(textMatch[1]) : (slugMatch ? parseFloat(slugMatch[1]) : null);
-
-      if (num !== null && !isNaN(num)) {
-        if (maxNum === null || num > maxNum) {
-          maxNum = num;
-        }
-      }
-    });
-
-    return maxNum;
-  } catch (err) {
-    return null;
-  }
-}
-
-async function scoutComicKLatest(comicSlug) {
-  try {
-    const comicInfo = await fetchWithRetry(`https://api.comick.fun/comic/${comicSlug}`, true);
-    const hid = comicInfo?.comic?.hid;
-    if (!hid) return null;
-
-    const url = `https://api.comick.fun/comic/${hid}/chapters?lang=en&page=1&limit=1`;
-    const data = await fetchWithRetry(url, true);
-    const first = data?.chapters?.[0];
-    if (first && first.chap) {
-      const num = parseFloat(first.chap);
-      return isNaN(num) ? null : num;
-    }
-  } catch (err) {
-    return null;
-  }
-  return null;
-}
-
-async function runScout() {
-  console.log('=== Running Round-Robin Scout Worker ===');
-
-  const { data: targets, error } = await supabase
-    .from('v_automated_sync_queue')
-    .select('series_id, title, slug, source_platform, target_url, target_identifier, comick_hid, upstream_latest')
-    .order('is_release_today', { ascending: false })
-    .order('last_scouted_at', { ascending: true, nullsFirst: true })
-    .limit(80);
-
-  if (error || !targets?.length) {
-    console.log('No targets to scout or error:', error?.message);
-    return;
-  }
-
-  console.log(`Scouting ${targets.length} series...`);
-
-  for (const item of targets) {
-    const { series_id, title, source_platform, target_url, target_identifier, comick_hid, upstream_latest } = item;
-    const currentCeiling = Number(upstream_latest) || 0;
-    let discovered = null;
-
-    if (source_platform === 'mangadex' && (target_identifier || target_url)) {
-      const dexId = target_identifier || target_url.split('/').pop();
-      discovered = await scoutMangaDexLatest(dexId);
-    } else if (source_platform === 'mangapill' && target_url) {
-      discovered = await scoutMangaPillLatest(target_url, title);
-    }
-
-    if (!discovered && (comick_hid || title)) {
-      const fallbackSlug = comick_hid || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      discovered = await scoutComicKLatest(fallbackSlug);
-    }
-
-    if (discovered !== null && !isNaN(discovered)) {
-      // Guard: Block abnormal chapter leaps (>30 above known ceiling for established series)
-      if (currentCeiling > 50 && discovered > currentCeiling + 30) {
-        console.warn(`[Scout Anomaly Blocked] ${title}: Detected Ch. ${discovered} exceeds known ceiling ${currentCeiling} by >30. Skipping.`);
-        await supabase
-          .from('series_intel')
-          .update({ last_scouted_at: new Date().toISOString() })
-          .eq('series_id', series_id);
-        continue;
-      }
-
-      if (discovered > currentCeiling) {
-        console.log(`[New Release/Epilogue Detected] ${title} -> Ch. ${discovered} (was ${currentCeiling})`);
-        await supabase
-          .from('series_intel')
-          .update({
-            latest_known_chapter: discovered,
-            last_scouted_at: new Date().toISOString()
-          })
-          .eq('series_id', series_id);
-      } else {
-        await supabase
-          .from('series_intel')
-          .update({ last_scouted_at: new Date().toISOString() })
-          .eq('series_id', series_id);
-      }
-    } else {
+    if (match) {
+      console.log(`  -> RESOLVED: ${match.platform} => ${match.url}`);
       await supabase
         .from('series_intel')
-        .update({ last_scouted_at: new Date().toISOString() })
-        .eq('series_id', series_id);
+        .upsert({
+          series_id: item.id,
+          source_platform: match.platform,
+          target_url: match.url,
+          target_identifier: match.identifier,
+          last_scouted_at: new Date().toISOString()
+        }, { onConflict: 'series_id' });
+    } else {
+      console.log(`  -> [NOT FOUND] Marked for manual review.`);
+      await supabase
+        .from('series_intel')
+        .upsert({
+          series_id: item.id,
+          last_scouted_at: new Date().toISOString()
+        }, { onConflict: 'series_id' });
     }
 
-    await sleep(200);
+    await delay(500);
   }
 
-  console.log('=== Round-Robin Scout Finished ===');
+  console.log('--- SCOUTING COMPLETE ---');
 }
 
-runScout();
+main().catch(console.error);
