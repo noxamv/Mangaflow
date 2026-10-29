@@ -1,3 +1,8 @@
+// Shim to bypass Node 20 WebSocket check for Supabase Realtime in GitHub Actions
+if (typeof globalThis.WebSocket === 'undefined') {
+  globalThis.WebSocket = class WebSocket {};
+}
+
 import { createClient } from '@supabase/supabase-js';
 import * as cheerio from 'cheerio';
 
@@ -58,7 +63,7 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
               chapter_number: chNum,
               title: text || `Chapter ${chNum}`,
               external_id: href,
-              pages: [href] // Stored as reference page array until crawler downloads
+              pages: [href]
             });
           }
         });
@@ -68,8 +73,8 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
           break;
         }
       }
-    } catch (err) {
-      // try next slug
+    } catch {
+      // try next candidate
     }
   }
 
@@ -77,7 +82,7 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
 }
 
 // ==========================================
-// 2. ADAPTER: MANGAPILL (Full Pagination)
+// 2. ADAPTER: MANGAPILL (Full Extraction)
 // ==========================================
 async function scrapeMangaPill(targetUrl) {
   if (!targetUrl || targetUrl === 'placeholder' || !targetUrl.includes('mangapill.com')) {
@@ -108,7 +113,7 @@ async function scrapeMangaPill(targetUrl) {
     });
 
     return { chapters, resolvedUrl: targetUrl, platform: 'mangapill' };
-  } catch (err) {
+  } catch {
     return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
   }
 }
@@ -155,11 +160,11 @@ async function scrapeMangaDex(targetUrl) {
       }
 
       offset += limit;
-      await delay(250); // respect rate limits
+      await delay(250);
     }
 
     return { chapters, resolvedUrl: targetUrl, platform: 'mangadex' };
-  } catch (err) {
+  } catch {
     return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
   }
 }
@@ -176,22 +181,18 @@ async function resolveAndIngestSeries(series) {
 
   let result = { chapters: [], resolvedUrl: targetUrl, platform };
 
-  // Route 1: Explicit Manhwatop or placeholder
   if (platform === 'manhwatop' || targetUrl === 'placeholder' || !targetUrl) {
     result = await scrapeManhwatop(targetUrl, series.title);
   }
 
-  // Route 2: MangaPill
   if (result.chapters.length === 0 && (platform === 'mangapill' || targetUrl?.includes('mangapill'))) {
     result = await scrapeMangaPill(targetUrl);
   }
 
-  // Route 3: MangaDex
   if (result.chapters.length === 0 && (platform === 'mangadex' || targetUrl?.includes('mangadex'))) {
     result = await scrapeMangaDex(targetUrl);
   }
 
-  // Route 4: Fallback discovery (if still empty, try Manhwatop slug matching)
   if (result.chapters.length === 0) {
     console.log(`  -> Trying fallback search on Manhwatop for: "${series.title}"`);
     result = await scrapeManhwatop(null, series.title);
@@ -202,7 +203,6 @@ async function resolveAndIngestSeries(series) {
     return;
   }
 
-  // Deduplicate discovered chapters by chapter_number
   const uniqueMap = new Map();
   for (const ch of result.chapters) {
     if (!uniqueMap.has(ch.chapter_number)) {
@@ -222,7 +222,6 @@ async function resolveAndIngestSeries(series) {
 
   console.log(`  -> Found ${payload.length} chapters (Max: Ch. ${maxCh}). Syncing to Supabase...`);
 
-  // Batch Upsert in chunks of 200
   const CHUNK_SIZE = 200;
   for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
     const chunk = payload.slice(i, i + CHUNK_SIZE);
@@ -235,7 +234,6 @@ async function resolveAndIngestSeries(series) {
     }
   }
 
-  // Update Series Intel
   await supabase
     .from('series_intel')
     .upsert({
@@ -256,15 +254,11 @@ async function resolveAndIngestSeries(series) {
 async function main() {
   console.log('--- STARTING CATALOG WATERFALL SYNC ---');
 
-  // Pull series that need priority attention:
-  // 1. Never scouted or scouted older than 7 days
-  // 2. target_url = placeholder
-  // 3. Stored chapters < 25
   const { data: queue, error } = await supabase
     .from('series')
     .select('id, title, series_intel(source_platform, target_url, latest_known_chapter, last_scouted_at)')
     .order('created_at', { ascending: true })
-    .limit(50); // Safe batch ceiling per GitHub Actions execution
+    .limit(50);
 
   if (error) {
     console.error('Failed to fetch queue:', error.message);
@@ -275,7 +269,7 @@ async function main() {
 
   for (const series of queue) {
     await resolveAndIngestSeries(series);
-    await delay(1200); // 1.2s delay to prevent IP bans
+    await delay(1200);
   }
 
   console.log('\n--- BATCH COMPLETED SUCCESSFULLY ---');
