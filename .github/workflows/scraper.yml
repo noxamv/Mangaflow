@@ -3,8 +3,7 @@ name: MangaFlow Ingestion Pipeline
 on:
   workflow_dispatch:
   schedule:
-    # Triggers every 30 minutes automatically
-    - cron: '*/30 * * * *'
+    - cron: '*/15 * * * *'
 
 jobs:
   run-ingestion:
@@ -21,7 +20,16 @@ jobs:
       - name: Install Dependencies
         run: npm ci || npm install
 
-      - name: 2. Run Chapter Synchronizer (Max Limit Boost)
+      - name: 1. Sync Latest Daily Releases (Fast Feed)
+        run: node scripts/sync-recent.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+      - name: 2. Backfill Backlog Catalog
         run: node scripts/sync-multi-source.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
