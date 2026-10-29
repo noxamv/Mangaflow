@@ -143,7 +143,13 @@ export default function ReaderPage() {
         }
       }
 
-      if (fullUrl.includes('readdetectiveconan.com') || fullUrl.includes('mangapill.com')) {
+      // If it belongs to domains known for aggressive hotlink blocking, proxy immediately
+      if (
+        fullUrl.includes('readdetectiveconan.com') ||
+        fullUrl.includes('mangapill.com') ||
+        fullUrl.includes('hivetoons.org') ||
+        fullUrl.includes('asuracomic.net')
+      ) {
         return `/api/proxy-image?url=${encodeURIComponent(fullUrl)}`;
       }
 
@@ -249,18 +255,13 @@ export default function ReaderPage() {
             href={series ? `/series/${series.slug}` : '/'}
             className="p-1.5 rounded-lg hover:bg-neutral-800/80 text-neutral-400 hover:text-white transition"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
+            ←
           </Link>
-
-          <div className="flex flex-col min-w-0">
-            <span className="text-xs sm:text-sm font-bold text-white truncate max-w-[200px] sm:max-w-md">
-              {series?.title || 'MangaFlow Reader'}
-            </span>
-            <span className="text-[11px] text-neutral-400">
-              Chapter {chapter.chapter_number} {chapter.title ? `— ${chapter.title}` : ''}
-            </span>
+          <div className="min-w-0">
+            <h2 className="text-xs font-bold text-white truncate max-w-[200px] sm:max-w-xs">{series?.title}</h2>
+            <p className="text-[10px] text-neutral-400 truncate">
+              {chapter.title || `Chapter ${chapter.chapter_number}`}
+            </p>
           </div>
         </div>
 
@@ -334,7 +335,7 @@ export default function ReaderPage() {
                       readingDirection === 'ltr' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
                     }`}
                   >
-                    Left → Right
+                    Left to Right
                   </button>
                   <button
                     onClick={() => setReadingDirection('rtl')}
@@ -342,13 +343,13 @@ export default function ReaderPage() {
                       readingDirection === 'rtl' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
                     }`}
                   >
-                    Right → Left
+                    Right to Left
                   </button>
                 </div>
               </div>
 
               <div>
-                <span className="font-bold text-neutral-300 block mb-2">Scale / Fit</span>
+                <span className="font-bold text-neutral-300 block mb-2">Page Sizing</span>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => setPageFit('width')}
@@ -441,68 +442,40 @@ export default function ReaderPage() {
                   }
                 }}
               />
-
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  readingDirection === 'ltr' ? handlePrevPage() : handleNextPage();
-                }}
-                className="absolute left-0 top-0 bottom-0 w-1/3 cursor-pointer z-10"
-                aria-label="Previous Page Region"
-              />
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  readingDirection === 'ltr' ? handleNextPage() : handlePrevPage();
-                }}
-                className="absolute right-0 top-0 bottom-0 w-1/3 cursor-pointer z-10"
-                aria-label="Next Page Region"
-              />
             </div>
-
-            <div className="mt-4 flex items-center gap-3 text-xs text-neutral-400">
-              <span>
-                Page {currentPage + 1} of {totalPages}
-              </span>
+            <div className="mt-3 text-[11px] font-bold text-neutral-500">
+              {currentPage + 1} / {totalPages}
             </div>
           </div>
         )}
       </main>
 
-      <footer
-        className={`fixed bottom-0 left-0 right-0 z-40 bg-[#0c0d14]/95 backdrop-blur-md border-t border-neutral-800/80 px-4 py-2.5 transition-transform duration-300 flex items-center justify-between ${
-          headerVisible ? 'translate-y-0' : 'translate-y-full'
-        }`}
-      >
-        <div>
-          {prevChapter ? (
-            <Link
-              href={`/read/${prevChapter.id}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-xl text-xs font-semibold transition"
-            >
-              ← Prev Ch. {prevChapter.chapter_number}
-            </Link>
-          ) : (
-            <span className="text-xs text-neutral-600 px-3.5 py-1.5">First Chapter</span>
-          )}
+      <footer className="fixed bottom-0 left-0 right-0 z-50 bg-[#0c0d14]/95 backdrop-blur-md border-t border-neutral-800/80 px-4 py-2.5 flex items-center justify-between text-xs font-semibold">
+        {prevChapter ? (
+          <Link
+            href={`/read/${prevChapter.id}`}
+            className="px-3 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 transition"
+          >
+            ← Prev Ch. {prevChapter.chapter_number}
+          </Link>
+        ) : (
+          <div className="w-20" />
+        )}
+
+        <div className="text-[11px] text-neutral-400">
+          Chapter {chapter.chapter_number}
         </div>
 
-        <div className="text-[11px] text-neutral-400 font-medium">
-          {readingMode === 'webtoon' ? `${totalPages} Panels` : `Page ${currentPage + 1} / ${totalPages}`}
-        </div>
-
-        <div>
-          {nextChapter ? (
-            <Link
-              href={`/read/${nextChapter.id}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition shadow-md shadow-indigo-600/20"
-            >
-              Next Ch. {nextChapter.chapter_number} →
-            </Link>
-          ) : (
-            <span className="text-xs text-neutral-600 px-3.5 py-1.5">Latest Chapter</span>
-          )}
-        </div>
+        {nextChapter ? (
+          <Link
+            href={`/read/${nextChapter.id}`}
+            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition"
+          >
+            Next Ch. {nextChapter.chapter_number} →
+          </Link>
+        ) : (
+          <div className="w-20 text-right text-[10px] text-neutral-500">Latest</div>
+        )}
       </footer>
     </div>
   );
