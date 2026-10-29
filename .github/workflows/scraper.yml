@@ -1,9 +1,9 @@
 name: MangaFlow Ingestion Pipeline
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows you to manually trigger a full sweep anytime
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/30 * * * *' # Automatically runs every 30 minutes
 
 jobs:
   run-ingestion:
@@ -29,7 +29,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
-      - name: 2. Backfill Backlog Catalog
+      - name: 2. Multi-Source Catalog Synchronizer
         run: node scripts/sync-multi-source.js
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
