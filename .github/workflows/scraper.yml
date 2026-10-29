@@ -3,7 +3,7 @@ name: MangaFlow Ingestion Pipeline
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *' # Runs automatically every 6 hours
+    - cron: '0 */6 * * *'
 
 jobs:
   run-ingestion:
@@ -20,15 +20,8 @@ jobs:
       - name: Install Dependencies
         run: npm ci || npm install
 
-      # Scout Intel is commented out to prevent Cloudflare 403 blocks and collision resets
-      # - name: 1. Run Scout Intel
-      #   run: node scripts/scout-intel.js
-      #   env:
-      #     NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-      #     SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-
       - name: 2. Run Chapter Synchronizer (Max Limit Boost)
-        run: node scripts/sync-multi-source.mjs
+        run: node scripts/sync-multi-source.js
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
