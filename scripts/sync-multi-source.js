@@ -268,12 +268,11 @@ async function resolveAndIngestSeries(series) {
   // If failed, advance timestamp to prevent getting stuck in a queue loop
   if (result.chapters.length === 0) {
     console.log(`  [FAILED] No chapters found for: "${series.title}". Advancing queue.`);
-    await supabase
+    const { error: updErr } = await supabase
       .from('series_intel')
-      .upsert({
-        series_id: series.id,
-        last_scouted_at: new Date().toISOString()
-      }, { onConflict: 'series_id' });
+      .update({ last_scouted_at: new Date().toISOString() })
+      .eq('series_id', series.id);
+    if (updErr) console.error(`  [WARN] Failed to touch timestamp: ${updErr.message}`);
     return;
   }
 
@@ -310,17 +309,21 @@ async function resolveAndIngestSeries(series) {
     }
   }
 
-  // Update Series Intel
-  await supabase
+  // Update Series Intel using explicit UPDATE by series_id
+  const { error: intelErr } = await supabase
     .from('series_intel')
-    .upsert({
-      series_id: series.id,
+    .update({
       source_platform: result.platform,
       target_url: result.resolvedUrl || targetUrl,
       target_identifier: result.resolvedUrl?.split('/').filter(Boolean).pop() || '',
       latest_known_chapter: maxCh,
       last_scouted_at: new Date().toISOString()
-    }, { onConflict: 'series_id' });
+    })
+    .eq('series_id', series.id);
+
+  if (intelErr) {
+    console.error(`  [ERROR] Updating series_intel: ${intelErr.message}`);
+  }
 
   console.log(`  [SUCCESS] Successfully synced ${series.title}`);
 }
