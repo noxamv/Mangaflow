@@ -296,16 +296,19 @@ async function resolveAndIngestSeries(series) {
 async function main() {
   console.log('--- STARTING TRUE MULTI-SOURCE SYNC ---');
 
+  // Fetches up to 500 series so all 462 series are audited in a single run
   const { data: queue, error } = await supabase
     .from('series')
     .select('id, title, series_intel(source_platform, target_url, last_scouted_at)')
     .order('created_at', { ascending: false })
-    .limit(100);
+    .limit(500);
 
   if (error || !queue) {
     console.error('Failed to fetch queue:', error?.message);
     process.exit(1);
   }
+
+  console.log(`Loaded ${queue.length} series into processing queue.`);
 
   for (const series of queue) {
     await resolveAndIngestSeries(series);
