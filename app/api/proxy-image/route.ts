@@ -42,10 +42,20 @@ export async function GET(req: NextRequest) {
       return new NextResponse('Domain not allowed', { status: 403 });
     }
 
+    // Determine correct Referer based on target CDN
+    let referer = `${targetUrl.protocol}//${targetUrl.host}/`;
+    if (hostname.includes('readdetectiveconan.com') || hostname.includes('mangapill.com')) {
+      referer = 'https://mangapill.com/';
+    } else if (hostname.includes('hivetoons.org')) {
+      referer = 'https://hivetoons.org/';
+    } else if (hostname.includes('comick')) {
+      referer = 'https://comick.io/';
+    }
+
     const headers: Record<string, string> = {
       'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Referer': `${targetUrl.protocol}//${targetUrl.host}/`,
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+      'Referer': referer,
       'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
     };
 
