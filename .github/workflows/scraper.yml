@@ -3,7 +3,8 @@ name: MangaFlow Ingestion Pipeline
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'
+    # Triggers every 30 minutes automatically
+    - cron: '*/30 * * * *'
 
 jobs:
   run-ingestion:
