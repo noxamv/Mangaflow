@@ -81,9 +81,9 @@ async function scrapeMangaPill(targetUrl) {
 }
 
 // ==========================================
-// 2. ADAPTER: MANGADEX (API Traverse - English)
+// 2. ADAPTER: MANGADEX (API Traverse with Fallback)
 // ==========================================
-async function scrapeMangaDex(targetUrl) {
+async function scrapeMangaDex(targetUrl, seriesTitle) {
   if (!targetUrl || !targetUrl.includes('mangadex.org/title/')) {
     return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
   }
@@ -98,11 +98,10 @@ async function scrapeMangaDex(targetUrl) {
   const chapters = [];
 
   try {
+    // 1. Try English chapters with all content ratings explicitly allowed
     while (offset < total) {
-      const res = await fetch(
-        `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=${offset}`,
-        { headers: { 'User-Agent': HEADERS['User-Agent'] } }
-      );
+      const apiUrl = `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=${offset}&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
+      const res = await fetch(apiUrl, { headers: { 'User-Agent': HEADERS['User-Agent'] } });
       if (res.status !== 200) break;
 
       const json = await res.json();
@@ -125,10 +124,64 @@ async function scrapeMangaDex(targetUrl) {
       await delay(250);
     }
 
-    return { chapters, resolvedUrl: targetUrl, platform: 'mangadex' };
+    // 2. If English feed is empty (due to official delisting), check all translation feeds
+    if (chapters.length === 0) {
+      offset = 0;
+      total = 100;
+      while (offset < total && offset < 200) {
+        const apiUrl = `https://api.mangadex.org/manga/${mangaId}/feed?order[chapter]=asc&limit=${limit}&offset=${offset}&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`;
+        const res = await fetch(apiUrl, { headers: { 'User-Agent': HEADERS['User-Agent'] } });
+        if (res.status !== 200) break;
+
+        const json = await res.json();
+        total = json.total || 0;
+        const data = json.data || [];
+
+        for (const item of data) {
+          const chNum = parseFloat(item.attributes?.chapter);
+          if (!isNaN(chNum)) {
+            chapters.push({
+              chapter_number: chNum,
+              title: item.attributes?.title || `Chapter ${chNum}`,
+              external_id: `mangadex:${item.id}`,
+              pages: [`https://mangadex.org/chapter/${item.id}`]
+            });
+          }
+        }
+        offset += limit;
+        await delay(250);
+      }
+    }
+
+    if (chapters.length > 0) {
+      return { chapters, resolvedUrl: targetUrl, platform: 'mangadex' };
+    }
   } catch (err) {
-    return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
+    // Continue to MangaPill search fallback
   }
+
+  // 3. Fallback: Search MangaPill directly using the series title
+  if (seriesTitle) {
+    try {
+      const searchRes = await fetch(`https://mangapill.com/search?q=${encodeURIComponent(seriesTitle)}`, { headers: HEADERS });
+      if (searchRes.status === 200) {
+        const searchHtml = await searchRes.text();
+        const $ = cheerio.load(searchHtml);
+        const firstMatchHref = $('a[href*="/manga/"]').first().attr('href');
+        if (firstMatchHref) {
+          const pillUrl = firstMatchHref.startsWith('http') ? firstMatchHref : `https://mangapill.com${firstMatchHref}`;
+          const pillResult = await scrapeMangaPill(pillUrl);
+          if (pillResult.chapters.length > 0) {
+            return { chapters: pillResult.chapters, resolvedUrl: pillUrl, platform: 'mangapill' };
+          }
+        }
+      }
+    } catch {
+      // Fall through to failure response
+    }
+  }
+
+  return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
 }
 
 // ==========================================
@@ -204,7 +257,7 @@ async function resolveAndIngestSeries(series) {
 
   // 2. Try MangaDex
   if (result.chapters.length === 0 && (platform === 'mangadex' || targetUrl?.includes('mangadex'))) {
-    result = await scrapeMangaDex(targetUrl);
+    result = await scrapeMangaDex(targetUrl, series.title);
   }
 
   // 3. Fallback to Manhwatop
