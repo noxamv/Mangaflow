@@ -59,12 +59,14 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
           const match = text.match(/chapter\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i);
           if (match && href) {
             const chNum = parseFloat(match[1]);
-            chapters.push({
-              chapter_number: chNum,
-              title: text || `Chapter ${chNum}`,
-              external_id: href,
-              pages: [href]
-            });
+            if (!isNaN(chNum)) {
+              chapters.push({
+                chapter_number: chNum,
+                title: text || `Chapter ${chNum}`,
+                external_id: href,
+                pages: [href]
+              });
+            }
           }
         });
 
@@ -74,7 +76,7 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
         }
       }
     } catch {
-      // try next candidate
+      // try next candidate slug
     }
   }
 
@@ -82,7 +84,7 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
 }
 
 // ==========================================
-// 2. ADAPTER: MANGAPILL (Full Extraction)
+// 2. ADAPTER: MANGAPILL (Full Deep Extraction)
 // ==========================================
 async function scrapeMangaPill(targetUrl) {
   if (!targetUrl || targetUrl === 'placeholder' || !targetUrl.includes('mangapill.com')) {
@@ -97,18 +99,22 @@ async function scrapeMangaPill(targetUrl) {
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    $('a[href*="/chapters/"]').each((_, el) => {
+    // Extract from all possible chapter link containers
+    $('a[href*="/chapters/"], #chapters a, .chapters-list a').each((_, el) => {
       const href = $(el).attr('href');
       const text = $(el).text().trim();
-      const match = text.match(/chapter\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i);
+      const match = text.match(/chapter\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i) || href.match(/-([\d.]+)\/?$/);
       if (match && href) {
         const fullUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
-        chapters.push({
-          chapter_number: parseFloat(match[1]),
-          title: text || `Chapter ${match[1]}`,
-          external_id: fullUrl,
-          pages: [fullUrl]
-        });
+        const chNum = parseFloat(match[1]);
+        if (!isNaN(chNum)) {
+          chapters.push({
+            chapter_number: chNum,
+            title: text || `Chapter ${chNum}`,
+            external_id: fullUrl,
+            pages: [fullUrl]
+          });
+        }
       }
     });
 
@@ -181,21 +187,19 @@ async function resolveAndIngestSeries(series) {
 
   let result = { chapters: [], resolvedUrl: targetUrl, platform };
 
-  if (platform === 'manhwatop' || targetUrl === 'placeholder' || !targetUrl) {
-    result = await scrapeManhwatop(targetUrl, series.title);
-  }
-
-  if (result.chapters.length === 0 && (platform === 'mangapill' || targetUrl?.includes('mangapill'))) {
+  // Route 1: MangaPill
+  if (platform === 'mangapill' || targetUrl?.includes('mangapill')) {
     result = await scrapeMangaPill(targetUrl);
   }
 
+  // Route 2: MangaDex
   if (result.chapters.length === 0 && (platform === 'mangadex' || targetUrl?.includes('mangadex'))) {
     result = await scrapeMangaDex(targetUrl);
   }
 
-  if (result.chapters.length === 0) {
-    console.log(`  -> Trying fallback search on Manhwatop for: "${series.title}"`);
-    result = await scrapeManhwatop(null, series.title);
+  // Route 3: Manhwatop
+  if (result.chapters.length === 0 && (platform === 'manhwatop' || targetUrl === 'placeholder' || !targetUrl)) {
+    result = await scrapeManhwatop(targetUrl, series.title);
   }
 
   if (result.chapters.length === 0) {
@@ -203,6 +207,7 @@ async function resolveAndIngestSeries(series) {
     return;
   }
 
+  // Deduplicate discovered chapters
   const uniqueMap = new Map();
   for (const ch of result.chapters) {
     if (!uniqueMap.has(ch.chapter_number)) {
@@ -222,6 +227,7 @@ async function resolveAndIngestSeries(series) {
 
   console.log(`  -> Found ${payload.length} chapters (Max: Ch. ${maxCh}). Syncing to Supabase...`);
 
+  // Batch Upsert in chunks of 200
   const CHUNK_SIZE = 200;
   for (let i = 0; i < payload.length; i += CHUNK_SIZE) {
     const chunk = payload.slice(i, i + CHUNK_SIZE);
@@ -234,6 +240,7 @@ async function resolveAndIngestSeries(series) {
     }
   }
 
+  // Update Series Intel
   await supabase
     .from('series_intel')
     .upsert({
@@ -254,10 +261,11 @@ async function resolveAndIngestSeries(series) {
 async function main() {
   console.log('--- STARTING CATALOG WATERFALL SYNC ---');
 
+  // Prioritize broken/unresolved and voided titles first
   const { data: queue, error } = await supabase
     .from('series')
-    .select('id, title, series_intel(source_platform, target_url, latest_known_chapter, last_scouted_at)')
-    .order('created_at', { ascending: true })
+    .select('id, title, series_intel!inner(source_platform, target_url, latest_known_chapter, last_scouted_at)')
+    .order('last_scouted_at', { foreignTable: 'series_intel', ascending: true, nullsFirst: true })
     .limit(50);
 
   if (error) {
@@ -265,7 +273,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Processing queue batch of ${queue.length} series...`);
+  console.log(`Processing priority queue batch of ${queue.length} series...`);
 
   for (const series of queue) {
     await resolveAndIngestSeries(series);
