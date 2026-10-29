@@ -1,3 +1,8 @@
+// Shim to bypass Node 20 WebSocket check for Supabase Realtime in GitHub Actions
+if (typeof globalThis.WebSocket === 'undefined') {
+  globalThis.WebSocket = class WebSocket {};
+}
+
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -25,13 +30,11 @@ function toCleanSlug(title) {
     .replace(/[\s_-]+/g, '-');
 }
 
-// Check if a URL responds with 200 OK
 async function probeUrl(url) {
   try {
     const res = await fetch(url, { method: 'HEAD', headers: HEADERS });
     if (res.status === 200) return true;
     if (res.status === 405) {
-      // Some servers block HEAD; try GET
       const getRes = await fetch(url, { method: 'GET', headers: HEADERS });
       return getRes.status === 200;
     }
@@ -41,7 +44,7 @@ async function probeUrl(url) {
   }
 }
 
-// 1. Manhwatop Prober
+// 1. Manhwatop Scout
 async function scoutManhwatop(title) {
   const baseSlug = toCleanSlug(title);
   const candidates = [
@@ -58,7 +61,7 @@ async function scoutManhwatop(title) {
   return null;
 }
 
-// 2. MangaDex API Search (with exact match verification)
+// 2. MangaDex Search
 async function scoutMangaDex(title) {
   try {
     const query = encodeURIComponent(title.replace(/[^\w\s]/g, ''));
@@ -73,8 +76,6 @@ async function scoutMangaDex(title) {
 
     for (const manga of hits) {
       const enTitle = manga.attributes?.title?.en || Object.values(manga.attributes?.title || {})[0] || '';
-      
-      // Enforce strict name similarity to avoid cross-contamination
       const cleanTarget = title.toLowerCase().replace(/[^\w]/g, '');
       const cleanFound = enTitle.toLowerCase().replace(/[^\w]/g, '');
       
@@ -95,8 +96,6 @@ async function scoutMangaDex(title) {
 async function main() {
   console.log('--- RUNNING ENHANCED SCOUT INTEL ---');
 
-  // Select only series that are genuinely unlinked or unresolved
-  // Guard: Never touch healthy series with confirmed stored chapters
   const { data: queue, error } = await supabase
     .from('series')
     .select(`
@@ -119,7 +118,6 @@ async function main() {
     const existingCount = item.chapters?.[0]?.count || 0;
     const existingUrl = item.series_intel?.[0]?.target_url;
 
-    // Safety guard: if already holding chapters and not a placeholder, skip
     if (existingCount > 20 && existingUrl && existingUrl !== 'placeholder') {
       console.log(`[SKIP] "${item.title}" already has ${existingCount} chapters.`);
       continue;
@@ -127,10 +125,7 @@ async function main() {
 
     console.log(`Scouting: "${item.title}"...`);
 
-    // Priority 1: Check Manhwatop
     let match = await scoutManhwatop(item.title);
-    
-    // Priority 2: Check MangaDex if not on Manhwatop
     if (!match) {
       await delay(300);
       match = await scoutMangaDex(item.title);
