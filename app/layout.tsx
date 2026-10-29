@@ -34,7 +34,6 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  // Navigation & UI States
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [menuDropdownOpen, setMenuDropdownOpen] = useState(false);
@@ -47,38 +46,44 @@ export default function RootLayout({
   const [notifTab, setNotifTab] = useState<'all' | 'unread' | 'read'>('all');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
-  // PWA Install Prompt State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
 
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
-  const menuDropdownRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  // 1. PWA Service Worker Registration & Install Event Listener
+  const isReadingPage = pathname?.startsWith('/read/');
+
   useEffect(() => {
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch((err) => {
-        console.error('ServiceWorker registration error:', err);
-      });
-    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user || null);
+    });
 
-    const handleBeforeInstallPrompt = (e: Event) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
       e.preventDefault();
       setDeferredPrompt(e);
-      setShowInstallBanner(true);
+      if (!localStorage.getItem('pwa_dismissed')) {
+        setShowInstallBanner(true);
+      }
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    };
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
   }, []);
 
-  const triggerPwaInstall = async () => {
+  const handleInstallClick = async () => {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
@@ -88,150 +93,106 @@ export default function RootLayout({
     setDeferredPrompt(null);
   };
 
-  // 2. Supabase Auth State & Live Notifications Listener
+  const dismissInstallBanner = () => {
+    setShowInstallBanner(false);
+    localStorage.setItem('pwa_dismissed', 'true');
+  };
+
   useEffect(() => {
-    async function checkAuthAndNotifications() {
-      const { data: { session } } = await supabase.auth.getSession();
-      const currentUser = session?.user ?? null;
-      setUser(currentUser);
-
-      if (currentUser) {
-        // Fetch recent chapters from followed series for the bell dropdown
-        const { data: follows } = await supabase
-          .from('user_follows')
-          .select('series_id')
-          .eq('user_id', currentUser.id);
-
-        if (follows && follows.length > 0) {
-          const sIds = follows.map((f: any) => f.series_id);
-          const { data: chaps } = await supabase
-            .from('chapters')
-            .select('id, series_id, chapter_number, created_at, series:series_id(title, english_title)')
-            .in('series_id', sIds)
-            .order('created_at', { ascending: false })
-            .limit(6);
-
-          if (chaps && chaps.length > 0) {
-            const mapped = chaps.map((c: any) => {
-              const sTitle = Array.isArray(c.series)
-                ? (c.series[0]?.english_title || c.series[0]?.title)
-                : (c.series?.english_title || c.series?.title || 'Series');
-              return {
-                id: c.id,
-                title: sTitle,
-                message: `New Chapter ${c.chapter_number} is out!`,
-                chapter_id: c.id,
-                read: false,
-                created_at: c.created_at || new Date().toISOString(),
-              };
-            });
-            setNotifications(mapped);
-          }
-        }
-      }
+    if (!user) {
+      setNotifications([]);
+      return;
     }
 
-    checkAuthAndNotifications();
+    async function fetchNotifications() {
+      const { data } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', user?.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
+      if (data) setNotifications(data);
+    }
+
+    fetchNotifications();
+
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user?.id}`,
+        },
+        (payload) => {
+          setNotifications((prev) => [payload.new as NotificationItem, ...prev]);
+        }
+      )
+      .subscribe();
 
     return () => {
-      authListener.subscription.unsubscribe();
+      supabase.removeChannel(channel);
     };
-  }, []);
+  }, [user]);
 
-  // 3. Dropdown Outside Click Listener
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
-        setUserMenuOpen(false);
-      }
-      if (menuDropdownRef.current && !menuDropdownRef.current.contains(event.target as Node)) {
-        setMenuDropdownOpen(false);
-      }
-      if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
-        setNotifOpen(false);
-      }
-      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
-        setSearchOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // 4. Live Search logic
   useEffect(() => {
     if (!searchQuery.trim()) {
       setSearchResults([]);
-      setIsSearching(false);
       return;
     }
 
     const timer = setTimeout(async () => {
       setIsSearching(true);
-      const cleanTerm = searchQuery.trim().replace(/['"]/g, '');
       const { data } = await supabase
         .from('series')
-        .select('id, title, english_title, slug, cover_image_url, cover_url, reading_mode')
-        .or(`title.ilike.%${cleanTerm}%,english_title.ilike.%${cleanTerm}%`)
-        .limit(6);
+        .select('id, title, slug, cover_url, reading_mode')
+        .ilike('title', `%${searchQuery.trim()}%`)
+        .limit(8);
 
       setSearchResults(data || []);
       setIsSearching(false);
-    }, 200);
+    }, 250);
 
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
   useEffect(() => {
-    if (searchOpen) {
-      setTimeout(() => searchInputRef.current?.focus(), 50);
-    }
-  }, [searchOpen]);
-
-  // 5. Global Hotkeys
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setSearchOpen((prev) => !prev);
-      }
-      if (e.key === 'Escape') {
+    function handleClickOutside(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
         setSearchOpen(false);
-        setMenuDropdownOpen(false);
-        setNotifOpen(false);
+      }
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
         setUserMenuOpen(false);
-        setAuthModalOpen(false);
+      }
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setNotifOpen(false);
+      }
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuDropdownOpen(false);
       }
     }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
-  const filteredNotifications = notifications.filter((n) => {
-    if (notifTab === 'unread') return !n.read;
-    if (notifTab === 'read') return n.read;
-    return true;
-  });
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  const markAllNotificationsAsRead = () => {
-    setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+  const handleMarkAsRead = async (id: string) => {
+    await supabase.from('notifications').update({ read: true }).eq('id', id);
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+    );
   };
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    setUser(null);
-    setUserMenuOpen(false);
-    router.push('/');
+  const handleMarkAllAsRead = async () => {
+    if (!user) return;
+    await supabase.from('notifications').update({ read: true }).eq('user_id', user.id);
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
-
-  const avatarUrl = user?.user_metadata?.avatar_url;
-  const initialLetter = user?.email ? user.email.charAt(0).toUpperCase() : 'U';
 
   return (
     <html lang="en" className="dark scroll-smooth overflow-x-hidden">
@@ -245,408 +206,248 @@ export default function RootLayout({
         <meta name="theme-color" content="#0e1015" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </head>
-
-      <body className="bg-[#0e1015] text-neutral-200 antialiased min-h-screen w-full max-w-full overflow-x-hidden flex flex-col selection:bg-indigo-500/20 selection:text-indigo-300">
-        
-        {/* PWA INSTALL BANNER */}
-        {showInstallBanner && (
-          <div className="bg-indigo-600/95 text-white px-4 py-2 text-xs flex items-center justify-between z-50 sticky top-0 shadow-md">
-            <div className="flex items-center gap-2">
-              <span className="text-sm">📱</span>
-              <span className="font-semibold">Install MangaFlow App for fullscreen reading</span>
+      <body className="bg-[#0b0c10] text-[#c5c6c7] min-h-screen flex flex-col font-sans antialiased selection:bg-[#45f3ff] selection:text-black">
+        {showInstallBanner && !isReadingPage && (
+          <div className="bg-gradient-to-r from-indigo-900/90 to-purple-900/90 text-white px-4 py-2.5 flex items-center justify-between text-xs backdrop-blur-md border-b border-indigo-500/20 sticky top-0 z-[60]">
+            <div className="flex items-center gap-3">
+              <span className="text-base">📱</span>
+              <span>Install MangaFlow app for offline reading and quick access</span>
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={triggerPwaInstall}
-                className="bg-white text-indigo-600 font-bold px-3 py-1 rounded-md text-[11px] shadow hover:bg-neutral-100 transition"
+                onClick={handleInstallClick}
+                className="bg-white text-neutral-900 font-bold px-3 py-1 rounded-lg text-xs hover:bg-neutral-100 transition shadow-sm"
               >
                 Install
               </button>
-              <button
-                onClick={() => setShowInstallBanner(false)}
-                className="text-white/80 hover:text-white text-sm px-1"
-              >
+              <button onClick={dismissInstallBanner} className="text-neutral-400 hover:text-white p-1">
                 ✕
               </button>
             </div>
           </div>
         )}
 
-        {/* MANGAFIRE HEADER BAR */}
-        <header className="sticky top-0 z-40 bg-[#0e1015]/95 backdrop-blur-md border-b border-neutral-800/80 px-3 sm:px-6 py-2.5 transition-colors">
-          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
-            
-            {/* Left: Compact Hamburger Dropdown (Identical to User Dropdown) & Clean Logo */}
-            <div className="flex items-center gap-3 sm:gap-4">
-              <div className="relative" ref={menuDropdownRef}>
-                <button
-                  onClick={() => setMenuDropdownOpen(!menuDropdownOpen)}
-                  className={`p-1.5 text-neutral-400 hover:text-white transition rounded-lg hover:bg-neutral-800/60 ${
-                    menuDropdownOpen ? 'bg-neutral-800 text-white' : ''
-                  }`}
-                  aria-label="Open Navigation Menu"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                  </svg>
-                </button>
-
-                {/* Compact Floating Dropdown Card (Matches User Bar Dimension) */}
-                {menuDropdownOpen && (
-                  <div className="absolute left-0 top-full mt-2 w-56 p-1.5 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 text-xs">
-                    <div className="px-3 py-2 border-b border-neutral-800/80 mb-1">
-                      <p className="text-[11px] font-bold text-white tracking-wide">Browse Catalog</p>
-                    </div>
-                    <div className="space-y-0.5">
-                      <Link
-                        href="/trending"
-                        onClick={() => setMenuDropdownOpen(false)}
-                        className={`w-full text-left px-3 py-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2.5 transition font-semibold ${
-                          pathname === '/trending' ? 'bg-indigo-600/20 text-indigo-400 font-bold' : ''
-                        }`}
-                      >
-                        <span>🔥</span> Trending Series
-                      </Link>
-                      <Link
-                        href="/popular"
-                        onClick={() => setMenuDropdownOpen(false)}
-                        className={`w-full text-left px-3 py-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2.5 transition font-semibold ${
-                          pathname === '/popular' ? 'bg-indigo-600/20 text-indigo-400 font-bold' : ''
-                        }`}
-                      >
-                        <span>⭐</span> Popular Series
-                      </Link>
-                      <Link
-                        href="/filter"
-                        onClick={() => setMenuDropdownOpen(false)}
-                        className={`w-full text-left px-3 py-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2.5 transition font-semibold ${
-                          pathname.startsWith('/filter') ? 'bg-indigo-600/20 text-indigo-400 font-bold' : ''
-                        }`}
-                      >
-                        <span>🏷️</span> Filter Series (24+)
-                      </Link>
-                      <Link
-                        href="/latest"
-                        onClick={() => setMenuDropdownOpen(false)}
-                        className={`w-full text-left px-3 py-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2.5 transition font-semibold ${
-                          pathname === '/latest' ? 'bg-indigo-600/20 text-indigo-400 font-bold' : ''
-                        }`}
-                      >
-                        <span>⚡</span> Latest Releases
-                      </Link>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <Link href="/" className="flex items-center">
-                <span className="text-xl sm:text-2xl font-black tracking-tight text-white">
-                  Manga<span className="text-indigo-500">Flow</span>
+        {!isReadingPage && (
+          <header className="sticky top-0 z-50 bg-[#0c0d14]/90 backdrop-blur-md border-b border-neutral-800/80 px-4 lg:px-8 py-3 flex items-center justify-between transition-colors">
+            <div className="flex items-center gap-6">
+              <Link href="/" className="flex items-center gap-2 group">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center font-black text-white text-base shadow-lg shadow-indigo-500/20 group-hover:scale-105 transition-transform">
+                  M
+                </div>
+                <span className="font-extrabold text-lg tracking-tight bg-gradient-to-r from-white via-neutral-200 to-neutral-400 bg-clip-text text-transparent">
+                  MangaFlow
                 </span>
               </Link>
+
+              <nav className="hidden md:flex items-center gap-1 text-xs font-semibold text-neutral-400">
+                <Link href="/" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/50 transition">
+                  Home
+                </Link>
+                <Link href="/latest" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/50 transition">
+                  Latest
+                </Link>
+                <Link href="/popular" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/50 transition">
+                  Popular
+                </Link>
+                <Link href="/trending" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/50 transition">
+                  Trending
+                </Link>
+                <Link href="/filter" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/50 transition">
+                  Browse
+                </Link>
+              </nav>
             </div>
 
-            {/* Right: Floating Search Icon, Notifications, Profile / Sign In */}
-            <div className="flex items-center gap-2 sm:gap-3">
-              
-              {/* Floating Search Toggle Button */}
-              <button
-                onClick={() => setSearchOpen(!searchOpen)}
-                className={`p-2 rounded-xl transition ${
-                  searchOpen ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:text-white hover:bg-neutral-800/80'
-                }`}
-                aria-label="Toggle Search"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-              </button>
-
-              {/* Notification Center Popup */}
-              <div className="relative" ref={notifRef}>
+            <div className="flex items-center gap-3">
+              <div ref={searchRef} className="relative">
                 <button
-                  onClick={() => setNotifOpen(!notifOpen)}
-                  className="p-2 rounded-xl text-neutral-300 hover:text-white hover:bg-neutral-800/80 transition relative"
-                  aria-label="Notifications"
+                  onClick={() => setSearchOpen(!searchOpen)}
+                  className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-400 hover:text-white transition flex items-center gap-2 text-xs"
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                   </svg>
-                  {unreadCount > 0 && (
-                    <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-indigo-500 ring-2 ring-[#0e1015]" />
-                  )}
+                  <span className="hidden sm:inline">Search...</span>
                 </button>
 
-                {notifOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-80 max-w-[90vw] bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden flex flex-col">
-                    <div className="p-3 border-b border-neutral-800/80 flex items-center justify-between">
-                      <span className="text-xs font-bold text-white">Notifications</span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={markAllNotificationsAsRead}
-                          className="text-[10px] text-neutral-400 hover:text-neutral-200 transition"
-                        >
-                          Mark all read
-                        </button>
+                {searchOpen && (
+                  <div className="absolute right-0 top-12 w-80 sm:w-96 bg-[#12131a] border border-neutral-800 rounded-2xl p-3 shadow-2xl z-50">
+                    <div className="relative mb-2">
+                      <input
+                        type="text"
+                        placeholder="Search manga, manhwa..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        autoFocus
+                        className="w-full bg-[#181a24] border border-neutral-700/60 rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 transition"
+                      />
+                      {isSearching && (
+                        <div className="absolute right-3 top-2.5 w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                      )}
+                    </div>
+
+                    <div className="max-h-72 overflow-y-auto space-y-1">
+                      {searchResults.map((item) => (
                         <Link
-                          href="/notifications"
-                          onClick={() => setNotifOpen(false)}
-                          className="text-[10px] text-indigo-400 hover:underline font-semibold"
+                          key={item.id}
+                          href={`/series/${item.slug}`}
+                          onClick={() => setSearchOpen(false)}
+                          className="flex items-center gap-3 p-2 rounded-xl hover:bg-neutral-800/60 transition group"
                         >
-                          Full page →
+                          <img
+                            src={item.cover_url || '/placeholder.png'}
+                            alt={item.title}
+                            className="w-8 h-11 object-cover rounded-md flex-shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <h4 className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 truncate">
+                              {item.title}
+                            </h4>
+                            <span className="text-[10px] text-neutral-500 capitalize">{item.reading_mode || 'Comic'}</span>
+                          </div>
                         </Link>
-                      </div>
-                    </div>
-
-                    <div className="flex border-b border-neutral-800 text-[11px] font-semibold bg-neutral-950/60">
-                      {(['all', 'unread', 'read'] as const).map((tab) => (
-                        <button
-                          key={tab}
-                          onClick={() => setNotifTab(tab)}
-                          className={`flex-1 py-1.5 capitalize transition ${
-                            notifTab === tab
-                              ? 'text-indigo-400 border-b-2 border-indigo-400 bg-neutral-900/60'
-                              : 'text-neutral-400 hover:text-neutral-200'
-                          }`}
-                        >
-                          {tab}
-                        </button>
                       ))}
-                    </div>
-
-                    <div className="max-h-72 overflow-y-auto divide-y divide-neutral-800/60">
-                      {filteredNotifications.length === 0 ? (
-                        <div className="py-8 text-center text-xs text-neutral-500">
-                          {notifications.length === 0
-                            ? 'No new chapters from followed titles yet.'
-                            : `No ${notifTab !== 'all' ? notifTab : ''} notifications.`}
-                        </div>
-                      ) : (
-                        filteredNotifications.map((n) => (
-                          <Link
-                            key={n.id}
-                            href={n.chapter_id ? `/read/${n.chapter_id}` : '/notifications'}
-                            onClick={() => setNotifOpen(false)}
-                            className={`p-3 flex items-start gap-3 transition block ${
-                              !n.read ? 'bg-indigo-500/10' : 'hover:bg-neutral-900/40'
-                            }`}
-                          >
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-semibold text-white truncate">{n.title}</p>
-                              <p className="text-[11px] text-neutral-400 line-clamp-2 mt-0.5">{n.message}</p>
-                            </div>
-                          </Link>
-                        ))
+                      {!isSearching && searchQuery && searchResults.length === 0 && (
+                        <div className="p-4 text-center text-xs text-neutral-500">No results found</div>
                       )}
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* User Avatar Menu with Working Profile Image */}
               {user ? (
-                <div className="relative" ref={userMenuRef}>
-                  <button
-                    onClick={() => setUserMenuOpen(!userMenuOpen)}
-                    className="w-8 h-8 rounded-full bg-indigo-600 border border-indigo-400 text-white font-black text-xs flex items-center justify-center hover:opacity-90 transition shadow-sm overflow-hidden"
-                    aria-label="User Menu"
-                  >
-                    {avatarUrl ? (
-                      <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                      initialLetter
-                    )}
-                  </button>
+                <div className="flex items-center gap-2">
+                  <div ref={notifRef} className="relative">
+                    <button
+                      onClick={() => setNotifOpen(!notifOpen)}
+                      className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-400 hover:text-white transition relative"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
+                        />
+                      </svg>
+                      {unreadCount > 0 && (
+                        <span className="absolute -top-1 -right-1 w-4 h-4 bg-indigo-600 text-white rounded-full text-[9px] font-bold flex items-center justify-center">
+                          {unreadCount > 9 ? '9+' : unreadCount}
+                        </span>
+                      )}
+                    </button>
 
-                  {userMenuOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-56 p-1.5 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 text-xs divide-y divide-neutral-800/80">
-                      <div className="px-3 py-2 flex items-center gap-2.5">
-                        <div className="w-7 h-7 rounded-full bg-indigo-600 text-white font-bold text-xs flex items-center justify-center overflow-hidden shrink-0">
-                          {avatarUrl ? (
-                            <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            initialLetter
+                    {notifOpen && (
+                      <div className="absolute right-0 top-12 w-80 bg-[#12131a] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden">
+                        <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
+                          <span className="font-bold text-xs text-white">Notifications</span>
+                          {unreadCount > 0 && (
+                            <button
+                              onClick={handleMarkAllAsRead}
+                              className="text-[10px] text-indigo-400 hover:underline font-medium"
+                            >
+                              Mark all as read
+                            </button>
                           )}
                         </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[10px] text-neutral-400">Signed in as</p>
-                          <p className="font-bold text-white truncate">{user.email}</p>
+
+                        <div className="max-h-80 overflow-y-auto divide-y divide-neutral-800/40">
+                          {notifications.length === 0 ? (
+                            <div className="p-6 text-center text-xs text-neutral-500">No notifications yet</div>
+                          ) : (
+                            notifications.map((n) => (
+                              <div
+                                key={n.id}
+                                onClick={() => handleMarkAsRead(n.id)}
+                                className={`p-3 hover:bg-neutral-800/50 transition cursor-pointer text-xs ${
+                                  !n.read ? 'bg-indigo-950/20' : ''
+                                }`}
+                              >
+                                <div className="font-semibold text-neutral-200">{n.title}</div>
+                                <div className="text-[11px] text-neutral-400 mt-0.5">{n.message}</div>
+                                <div className="text-[9px] text-neutral-600 mt-1">
+                                  {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </div>
+                              </div>
+                            ))
+                          )}
                         </div>
                       </div>
+                    )}
+                  </div>
 
-                      <div className="py-1">
+                  <div ref={userMenuRef} className="relative">
+                    <button
+                      onClick={() => setUserMenuOpen(!userMenuOpen)}
+                      className="w-8 h-8 rounded-xl bg-neutral-800 border border-neutral-700/80 flex items-center justify-center font-bold text-xs text-white overflow-hidden"
+                    >
+                      {user.user_metadata?.avatar_url ? (
+                        <img src={user.user_metadata.avatar_url} alt="User" className="w-full h-full object-cover" />
+                      ) : (
+                        user.email?.[0]?.toUpperCase() || 'U'
+                      )}
+                    </button>
+
+                    {userMenuOpen && (
+                      <div className="absolute right-0 top-12 w-48 bg-[#12131a] border border-neutral-800 rounded-2xl p-1.5 shadow-2xl z-50 text-xs font-medium">
                         <Link
                           href="/profile/edit"
                           onClick={() => setUserMenuOpen(false)}
-                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
+                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          <span>👤</span> Profile Edit
+                          Profile
                         </Link>
                         <Link
                           href="/profile/following"
                           onClick={() => setUserMenuOpen(false)}
-                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
+                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          <span>📚</span> Library Tracker
+                          Bookmarks
                         </Link>
                         <Link
-                          href="/notifications"
+                          href="/profile/sync"
                           onClick={() => setUserMenuOpen(false)}
-                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
+                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          <span>🔔</span> Notifications
-                        </Link>
-                        <Link
-                          href="/profile/import-export"
-                          onClick={() => setUserMenuOpen(false)}
-                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
-                        >
-                          <span>🔄</span> Import / Export
+                          Cloud Sync
                         </Link>
                         <Link
                           href="/settings"
                           onClick={() => setUserMenuOpen(false)}
-                          className="w-full text-left px-3 py-2 rounded-lg text-neutral-300 hover:text-white hover:bg-neutral-800/80 flex items-center gap-2 transition"
+                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          <span>⚙️</span> Settings
+                          Settings
                         </Link>
-                      </div>
-
-                      <div className="pt-1">
+                        <div className="h-px bg-neutral-800 my-1" />
                         <button
-                          onClick={handleSignOut}
-                          className="w-full text-left px-3 py-2 rounded-lg text-red-400 hover:bg-red-500/10 flex items-center gap-2 transition font-semibold"
+                          onClick={async () => {
+                            await supabase.auth.signOut();
+                            setUserMenuOpen(false);
+                            router.push('/');
+                          }}
+                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-500/10 text-red-400 transition"
                         >
-                          <span>🚪</span> Sign Out
+                          Sign Out
                         </button>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               ) : (
                 <button
                   onClick={() => setAuthModalOpen(true)}
-                  className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition shadow-md"
+                  className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md shadow-indigo-600/20 transition"
                 >
                   Sign In
                 </button>
               )}
-
             </div>
-          </div>
+          </header>
+        )}
 
-          {/* MANGAFIRE FLOATING SEARCH PILL */}
-          {searchOpen && (
-            <div
-              ref={searchContainerRef}
-              className="max-w-2xl mx-auto mt-2 pt-1 transition-all duration-200"
-            >
-              <div className="relative flex items-center bg-[#13151f] border border-neutral-700/80 rounded-2xl px-3 py-2 shadow-2xl">
-                <span className="text-neutral-400 text-sm mr-2">🔍</span>
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  placeholder="Search manga, manhwa, titles..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-transparent text-xs sm:text-sm text-white placeholder-neutral-500 focus:outline-none"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="text-neutral-400 hover:text-white text-xs mr-2"
-                  >
-                    ✕
-                  </button>
-                )}
-                <button
-                  onClick={() => setSearchOpen(false)}
-                  className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 hover:text-white bg-neutral-800 px-2 py-1 rounded-md"
-                >
-                  Esc
-                </button>
-              </div>
+        <div className="flex-1 flex flex-col">{children}</div>
 
-              {/* Floating Live Search Dropdown */}
-              {(isSearching || searchResults.length > 0 || searchQuery.trim()) && (
-                <div className="mt-1 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden divide-y divide-neutral-800/60 z-50">
-                  {isSearching ? (
-                    <div className="py-4 text-center text-xs text-neutral-400">Searching...</div>
-                  ) : searchResults.length === 0 ? (
-                    <div className="py-4 text-center text-xs text-neutral-400">No results found</div>
-                  ) : (
-                    searchResults.map((s) => {
-                      const cover = s.cover_image_url || s.cover_url || '';
-                      return (
-                        <Link
-                          key={s.id}
-                          href={`/series/${s.slug}`}
-                          onClick={() => setSearchOpen(false)}
-                          className="p-2.5 hover:bg-neutral-800/60 flex items-center gap-3 transition"
-                        >
-                          {cover ? (
-                            <img
-                              src={cover}
-                              alt=""
-                              className="w-9 h-12 object-cover rounded bg-neutral-900 shrink-0"
-                            />
-                          ) : (
-                            <div className="w-9 h-12 rounded bg-neutral-900 flex items-center justify-center text-xs text-neutral-600 shrink-0">
-                              📖
-                            </div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-bold text-white truncate hover:text-indigo-400">
-                              {s.english_title || s.title}
-                            </p>
-                            <span className="text-[10px] uppercase font-bold text-neutral-500 mt-0.5 inline-block">
-                              {s.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
-                            </span>
-                          </div>
-                        </Link>
-                      );
-                    })
-                  )}
-
-                  {searchResults.length > 0 && (
-                    <Link
-                      href={`/filter?q=${encodeURIComponent(searchQuery)}`}
-                      onClick={() => setSearchOpen(false)}
-                      className="block text-center py-2 text-xs font-bold text-indigo-400 hover:bg-neutral-800/80 transition"
-                    >
-                      View all results →
-                    </Link>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </header>
-
-        {/* AUTHENTICATION MODAL */}
         <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
-
-        {/* MAIN APPLICATION VIEWPORT */}
-        <div className="flex-1 flex flex-col w-full max-w-full overflow-x-hidden min-w-0">
-          {children}
-        </div>
-
-        {/* GLOBAL FOOTER */}
-        <footer className="border-t border-neutral-900 bg-[#07070a] py-8 px-4 text-xs text-neutral-500">
-          <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-neutral-400">MangaFlow</span>
-              <span>— Graphic Comic Platform Engine</span>
-            </div>
-            <div className="flex items-center gap-6">
-              <Link href="/filter" className="hover:text-neutral-300 transition">Filter Directory</Link>
-              <Link href="/trending" className="hover:text-neutral-300 transition">Trending</Link>
-              <Link href="/popular" className="hover:text-neutral-300 transition">Popular</Link>
-              <Link href="/latest" className="hover:text-neutral-300 transition">Latest</Link>
-            </div>
-          </div>
-        </footer>
-
       </body>
     </html>
   );
