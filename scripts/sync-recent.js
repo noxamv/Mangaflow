@@ -37,8 +37,18 @@ function normalize(str) {
     .trim();
 }
 
+function slugify(text) {
+  return text
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w\-]+/g, '')
+    .replace(/\-\-+/g, '-');
+}
+
 async function syncRecent() {
-  console.log('=== Checking Recent Feed for Newly Released Chapters ===');
+  console.log('=== Checking Feed for Daily Releases & Brand-New Series ===');
 
   let res;
   try {
@@ -59,6 +69,7 @@ async function syncRecent() {
   const html = await res.text();
   const $ = cheerio.load(html);
 
+  // Load known series into an in-memory normalized map
   const { data: allSeries, error: sErr } = await supabase
     .from('series')
     .select('id, title, slug');
@@ -83,6 +94,7 @@ async function syncRecent() {
     const chapterText = $(el).text().trim();
     const parentContainer = $(el).closest('div');
     const mangaTitleLink = parentContainer.find('a[href*="/manga/"]').first();
+    const mangaHref = mangaTitleLink.attr('href') || '';
     const mangaTitle = mangaTitleLink.text().trim();
 
     if (href && chapterText) {
@@ -93,8 +105,11 @@ async function syncRecent() {
 
       if (match) {
         const fullChapterUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
+        const fullMangaUrl = mangaHref ? (mangaHref.startsWith('http') ? mangaHref : `https://mangapill.com${mangaHref}`) : '';
+
         discovered.push({
           mangaTitle: mangaTitle || chapterText.split(/chapter/i)[0].trim(),
+          mangaUrl: fullMangaUrl,
           chapterNumber: parseFloat(match[1]),
           chapterUrl: fullChapterUrl,
           chapterTitle: chapterText,
@@ -103,10 +118,14 @@ async function syncRecent() {
     }
   });
 
-  console.log(`Discovered ${discovered.length} chapter items on recent feed.`);
+  console.log(`Discovered ${discovered.length} release items on feed.`);
 
   let insertedCount = 0;
+  let newSeriesCount = 0;
+
   for (const item of discovered) {
+    if (!item.mangaTitle || item.mangaTitle.length < 2) continue;
+
     const norm = normalize(item.mangaTitle);
     let matchedSeries = seriesMap.get(norm);
 
@@ -119,6 +138,46 @@ async function syncRecent() {
       }
     }
 
+    // Auto-create brand new series if it does not exist in catalog
+    if (!matchedSeries) {
+      const baseSlug = slugify(item.mangaTitle);
+      const uniqueSlug = `${baseSlug}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      console.log(`[NEW SERIES DISCOVERED] Creating: ${item.mangaTitle}`);
+
+      const { data: newSeries, error: createErr } = await supabase
+        .from('series')
+        .insert({
+          title: item.mangaTitle,
+          slug: uniqueSlug,
+          status: 'ongoing',
+          reading_mode: 'paged',
+          source: 'mangapill',
+          source_url: item.mangaUrl,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .select('id, title, slug')
+        .single();
+
+      if (!createErr && newSeries) {
+        matchedSeries = newSeries;
+        seriesMap.set(norm, newSeries);
+        newSeriesCount++;
+
+        // Add corresponding tracking entry into series_intel
+        await supabase.from('series_intel').insert({
+          series_id: newSeries.id,
+          slug: newSeries.slug,
+          source_platform: 'mangapill',
+          target_url: item.mangaUrl || item.chapterUrl,
+          latest_known_chapter: item.chapterNumber,
+          last_scouted_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    // Ingest the chapter
     if (matchedSeries) {
       const { error: upsertErr } = await supabase
         .from('chapters')
@@ -136,7 +195,7 @@ async function syncRecent() {
         );
 
       if (!upsertErr) {
-        console.log(`✓ Synced: [${matchedSeries.title}] Ch. ${item.chapterNumber}`);
+        console.log(`✓ Chapter Synced: [${matchedSeries.title}] Ch. ${item.chapterNumber}`);
         insertedCount++;
 
         await supabase
@@ -150,7 +209,7 @@ async function syncRecent() {
     }
   }
 
-  console.log(`=== Ingested ${insertedCount} new chapters ===`);
+  console.log(`=== Done. Created ${newSeriesCount} new series & ingested ${insertedCount} chapters ===`);
 }
 
 syncRecent().catch(console.error);
