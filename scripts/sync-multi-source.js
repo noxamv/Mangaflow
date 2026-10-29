@@ -33,7 +33,99 @@ function slugify(text) {
 }
 
 // ==========================================
-// 1. ADAPTER: MANHWATOP
+// 1. ADAPTER: MANGAPILL (Deep Link Extraction)
+// ==========================================
+async function scrapeMangaPill(targetUrl) {
+  if (!targetUrl || targetUrl === 'placeholder' || !targetUrl.includes('mangapill.com')) {
+    return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
+  }
+
+  const chapters = [];
+  try {
+    const res = await fetch(targetUrl, { headers: HEADERS });
+    if (res.status !== 200) return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
+
+    const html = await res.text();
+    const $ = cheerio.load(html);
+
+    // Matches standard links, container lists, and sub-selectors
+    $('a[href*="/chapters/"], #chapters a, .chapters-list a, div.grid-cols-1 a').each((_, el) => {
+      const href = $(el).attr('href');
+      const text = $(el).text().trim();
+      const match = text.match(/chapter\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i) || href.match(/-([\d.]+)\/?$/);
+      if (match && href) {
+        const fullUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
+        const chNum = parseFloat(match[1]);
+        if (!isNaN(chNum)) {
+          chapters.push({
+            chapter_number: chNum,
+            title: text || `Chapter ${chNum}`,
+            external_id: fullUrl,
+            pages: [fullUrl]
+          });
+        }
+      }
+    });
+
+    return { chapters, resolvedUrl: targetUrl, platform: 'mangapill' };
+  } catch (err) {
+    return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
+  }
+}
+
+// ==========================================
+// 2. ADAPTER: MANGADEX (API Traverse - English)
+// ==========================================
+async function scrapeMangaDex(targetUrl) {
+  if (!targetUrl || !targetUrl.includes('mangadex.org/title/')) {
+    return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
+  }
+
+  const match = targetUrl.match(/title\/([a-f0-9-]+)/);
+  if (!match) return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
+  const mangaId = match[1];
+
+  let offset = 0;
+  const limit = 100;
+  let total = 100;
+  const chapters = [];
+
+  try {
+    while (offset < total) {
+      const res = await fetch(
+        `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=${offset}`,
+        { headers: { 'User-Agent': HEADERS['User-Agent'] } }
+      );
+      if (res.status !== 200) break;
+
+      const json = await res.json();
+      total = json.total || 0;
+      const data = json.data || [];
+
+      for (const item of data) {
+        const chNum = parseFloat(item.attributes?.chapter);
+        if (!isNaN(chNum)) {
+          chapters.push({
+            chapter_number: chNum,
+            title: item.attributes?.title || `Chapter ${chNum}`,
+            external_id: `mangadex:${item.id}`,
+            pages: [`https://mangadex.org/chapter/${item.id}`]
+          });
+        }
+      }
+
+      offset += limit;
+      await delay(250); // Rate-limiting guard
+    }
+
+    return { chapters, resolvedUrl: targetUrl, platform: 'mangadex' };
+  } catch (err) {
+    return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
+  }
+}
+
+// ==========================================
+// 3. ADAPTER: MANHWATOP (Fallback Only)
 // ==========================================
 async function scrapeManhwatop(targetUrl, seriesTitle) {
   const chapters = [];
@@ -76,103 +168,11 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
         }
       }
     } catch {
-      // try next candidate slug
+      // try next candidate
     }
   }
 
   return { chapters, resolvedUrl, platform: 'manhwatop' };
-}
-
-// ==========================================
-// 2. ADAPTER: MANGAPILL (Full Deep Extraction)
-// ==========================================
-async function scrapeMangaPill(targetUrl) {
-  if (!targetUrl || targetUrl === 'placeholder' || !targetUrl.includes('mangapill.com')) {
-    return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
-  }
-
-  const chapters = [];
-  try {
-    const res = await fetch(targetUrl, { headers: HEADERS });
-    if (res.status !== 200) return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
-
-    const html = await res.text();
-    const $ = cheerio.load(html);
-
-    // Extract from all possible chapter link containers
-    $('a[href*="/chapters/"], #chapters a, .chapters-list a').each((_, el) => {
-      const href = $(el).attr('href');
-      const text = $(el).text().trim();
-      const match = text.match(/chapter\s*([\d.]+)/i) || href.match(/chapter-([\d.]+)/i) || href.match(/-([\d.]+)\/?$/);
-      if (match && href) {
-        const fullUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
-        const chNum = parseFloat(match[1]);
-        if (!isNaN(chNum)) {
-          chapters.push({
-            chapter_number: chNum,
-            title: text || `Chapter ${chNum}`,
-            external_id: fullUrl,
-            pages: [fullUrl]
-          });
-        }
-      }
-    });
-
-    return { chapters, resolvedUrl: targetUrl, platform: 'mangapill' };
-  } catch {
-    return { chapters: [], resolvedUrl: null, platform: 'mangapill' };
-  }
-}
-
-// ==========================================
-// 3. ADAPTER: MANGADEX (API Traverse)
-// ==========================================
-async function scrapeMangaDex(targetUrl) {
-  if (!targetUrl || !targetUrl.includes('mangadex.org/title/')) {
-    return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
-  }
-
-  const match = targetUrl.match(/title\/([a-f0-9-]+)/);
-  if (!match) return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
-  const mangaId = match[1];
-
-  let offset = 0;
-  const limit = 100;
-  let total = 100;
-  const chapters = [];
-
-  try {
-    while (offset < total) {
-      const res = await fetch(
-        `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=${offset}`,
-        { headers: { 'User-Agent': HEADERS['User-Agent'] } }
-      );
-      if (res.status !== 200) break;
-
-      const json = await res.json();
-      total = json.total || 0;
-      const data = json.data || [];
-
-      for (const item of data) {
-        const chNum = parseFloat(item.attributes?.chapter);
-        if (!isNaN(chNum)) {
-          chapters.push({
-            chapter_number: chNum,
-            title: item.attributes?.title || `Chapter ${chNum}`,
-            external_id: `mangadex:${item.id}`,
-            pages: [`https://mangadex.org/chapter/${item.id}`]
-          });
-        }
-      }
-
-      offset += limit;
-      await delay(250);
-    }
-
-    return { chapters, resolvedUrl: targetUrl, platform: 'mangadex' };
-  } catch {
-    return { chapters: [], resolvedUrl: null, platform: 'mangadex' };
-  }
 }
 
 // ==========================================
@@ -181,33 +181,33 @@ async function scrapeMangaDex(targetUrl) {
 async function resolveAndIngestSeries(series) {
   const intel = series.series_intel?.[0] || {};
   let targetUrl = intel.target_url;
-  const platform = intel.source_platform;
+  let platform = intel.source_platform;
 
-  console.log(`\nAuditing: "${series.title}" [Current Platform: ${platform}]`);
+  console.log(`\nAuditing: "${series.title}" [Configured Platform: ${platform}]`);
 
   let result = { chapters: [], resolvedUrl: targetUrl, platform };
 
-  // Route 1: MangaPill
+  // 1. Try MangaPill
   if (platform === 'mangapill' || targetUrl?.includes('mangapill')) {
     result = await scrapeMangaPill(targetUrl);
   }
 
-  // Route 2: MangaDex
+  // 2. Try MangaDex
   if (result.chapters.length === 0 && (platform === 'mangadex' || targetUrl?.includes('mangadex'))) {
     result = await scrapeMangaDex(targetUrl);
   }
 
-  // Route 3: Manhwatop
+  // 3. Fallback to Manhwatop
   if (result.chapters.length === 0 && (platform === 'manhwatop' || targetUrl === 'placeholder' || !targetUrl)) {
     result = await scrapeManhwatop(targetUrl, series.title);
   }
 
   if (result.chapters.length === 0) {
-    console.log(`  [FAILED] Could not find chapters for: "${series.title}"`);
+    console.log(`  [FAILED] No chapters resolved for: "${series.title}"`);
     return;
   }
 
-  // Deduplicate discovered chapters
+  // Deduplicate discovered chapters by chapter_number
   const uniqueMap = new Map();
   for (const ch of result.chapters) {
     if (!uniqueMap.has(ch.chapter_number)) {
@@ -261,7 +261,7 @@ async function resolveAndIngestSeries(series) {
 async function main() {
   console.log('--- STARTING CATALOG WATERFALL SYNC ---');
 
-  // Prioritize broken/unresolved and voided titles first
+  // Priority Queue: Placeholders, zero-stored, and voided titles (nulls first)
   const { data: queue, error } = await supabase
     .from('series')
     .select('id, title, series_intel!inner(source_platform, target_url, latest_known_chapter, last_scouted_at)')
@@ -273,11 +273,11 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Processing priority queue batch of ${queue.length} series...`);
+  console.log(`Processing priority batch of ${queue.length} series...`);
 
   for (const series of queue) {
     await resolveAndIngestSeries(series);
-    await delay(1200);
+    await delay(1200); // Prevents rate limiting
   }
 
   console.log('\n--- BATCH COMPLETED SUCCESSFULLY ---');
