@@ -175,7 +175,7 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
         }
       }
     } catch {
-      // try next candidate
+      // Continue to next URL candidate
     }
   }
 
@@ -186,7 +186,6 @@ async function scrapeManhwatop(targetUrl, seriesTitle) {
 // 4. WATERFALL ORCHESTRATION
 // ==========================================
 async function resolveAndIngestSeries(series) {
-  // Support both object and array from Supabase join
   const intel = Array.isArray(series.series_intel) 
     ? (series.series_intel[0] || {}) 
     : (series.series_intel || {});
@@ -194,7 +193,7 @@ async function resolveAndIngestSeries(series) {
   let targetUrl = intel.target_url;
   let platform = intel.source_platform;
 
-  console.log(`\nAuditing: "${series.title}" [Configured Platform: ${platform}]`);
+  console.log(`\nAuditing: "${series.title}" [Platform: ${platform}]`);
 
   let result = { chapters: [], resolvedUrl: targetUrl, platform };
 
@@ -213,9 +212,9 @@ async function resolveAndIngestSeries(series) {
     result = await scrapeManhwatop(targetUrl, series.title);
   }
 
-  // FIX: If failed, update timestamp so it doesn't trap the queue
+  // If failed, advance timestamp to prevent getting stuck in a queue loop
   if (result.chapters.length === 0) {
-    console.log(`  [FAILED] No chapters resolved for: "${series.title}". Advancing queue.`);
+    console.log(`  [FAILED] No chapters found for: "${series.title}". Advancing queue.`);
     await supabase
       .from('series_intel')
       .upsert({
@@ -225,7 +224,7 @@ async function resolveAndIngestSeries(series) {
     return;
   }
 
-  // Deduplicate discovered chapters by chapter_number
+  // Deduplicate discovered chapters
   const uniqueMap = new Map();
   for (const ch of result.chapters) {
     if (!uniqueMap.has(ch.chapter_number)) {
@@ -258,7 +257,7 @@ async function resolveAndIngestSeries(series) {
     }
   }
 
-  // Update Series Intel with progress
+  // Update Series Intel
   await supabase
     .from('series_intel')
     .upsert({
@@ -279,11 +278,11 @@ async function resolveAndIngestSeries(series) {
 async function main() {
   console.log('--- STARTING CATALOG WATERFALL SYNC ---');
 
-  // Priority Queue: Prioritize null timestamps and oldest scouted first
+  // Query series_intel directly so PostgREST sorts parent rows by last_scouted_at NULLS FIRST
   const { data: queue, error } = await supabase
-    .from('series')
-    .select('id, title, series_intel(source_platform, target_url, latest_known_chapter, last_scouted_at)')
-    .order('last_scouted_at', { foreignTable: 'series_intel', ascending: true, nullsFirst: true })
+    .from('series_intel')
+    .select('series_id, source_platform, target_url, latest_known_chapter, last_scouted_at, series!inner(id, title)')
+    .order('last_scouted_at', { ascending: true, nullsFirst: true })
     .limit(50);
 
   if (error) {
@@ -293,8 +292,19 @@ async function main() {
 
   console.log(`Processing priority batch of ${queue.length} series...`);
 
-  for (const series of queue) {
-    await resolveAndIngestSeries(series);
+  for (const item of queue) {
+    const seriesPayload = {
+      id: item.series?.id || item.series_id,
+      title: item.series?.title || 'Unknown Title',
+      series_intel: [{
+        source_platform: item.source_platform,
+        target_url: item.target_url,
+        latest_known_chapter: item.latest_known_chapter,
+        last_scouted_at: item.last_scouted_at
+      }]
+    };
+
+    await resolveAndIngestSeries(seriesPayload);
     await delay(1200);
   }
 
