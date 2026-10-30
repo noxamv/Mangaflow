@@ -2,11 +2,11 @@ name: MangaFlow Autonomous Catalog Sync
 
 on:
   schedule:
-    # Runs every 90 minutes; offsets prevent scheduling conflicts
-    - cron: '0 */3,30 1-23/3 * * *'
-  workflow_dispatch: # Allows manual click triggers anytime
+    # Valid 5-field GitHub Actions cron: runs at minute 0 and 30 on alternating 3-hour blocks (every 90 minutes)
+    - cron: '0 0,3,6,9,12,15,18,21 * * *'
+    - cron: '30 1,4,7,10,13,16,19,22 * * *'
+  workflow_dispatch: # Allows clicking "Run workflow" manually in GitHub Actions
 
-# Ensures only ONE runner executes at a time. No self-starting overlaps.
 concurrency:
   group: mangaflow-catalog-sync
   cancel-in-progress: false
@@ -14,7 +14,7 @@ concurrency:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 90 # Hard timeout safety guard
+    timeout-minutes: 90
 
     steps:
       - name: Checkout Codebase
@@ -24,10 +24,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci
+        run: npm install
 
       - name: Stage 1 - Fast Trending & Popular Discovery
         env:
