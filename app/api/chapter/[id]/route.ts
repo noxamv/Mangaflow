@@ -1,9 +1,21 @@
 // app/api/chapter/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@supabase/supabase-js';
 import * as cheerio from 'cheerio';
 
 export const dynamic = 'force-dynamic';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  '';
+
+// Server-side admin client to persist resolved chapter pages safely
+const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
+  auth: { persistSession: false },
+});
 
 const BROWSER_HEADERS = {
   'User-Agent':
@@ -56,7 +68,7 @@ async function fetchMangaPillPages(url: string): Promise<string[]> {
 
 async function fetchComickPages(hid: string): Promise<string[]> {
   try {
-    const res = await fetch(`https://api.comick.fun/chapter/${hid}`, {
+    const res = await fetch(`https://api.comick.cc/chapter/${hid}`, {
       headers: BROWSER_HEADERS,
       cache: 'no-store',
     });
@@ -84,33 +96,12 @@ async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   }
 }
 
-async function fetchMangaFirePages(url: string): Promise<string[]> {
-  try {
-    const res = await fetch(url, {
-      headers: { ...BROWSER_HEADERS, Referer: 'https://mangafire.to/' },
-      cache: 'no-store',
-    });
-    if (!res.ok) return [];
-    const html = await res.text();
-    const $ = cheerio.load(html);
-    const pages: string[] = [];
-
-    $('div#reader img, .reader-images img, img.page').each((_, el) => {
-      const src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-url');
-      if (src && !pages.includes(src.trim())) pages.push(src.trim());
-    });
-    return pages;
-  } catch {
-    return [];
-  }
-}
-
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const chapterId = params.id;
     if (!chapterId) return NextResponse.json({ error: 'Missing chapter ID' }, { status: 400 });
 
-    const { data: chapter, error } = await supabase
+    const { data: chapter, error } = await supabaseAdmin
       .from('chapters')
       .select(
         'id, series_id, chapter_number, title, source, external_id, base_url, pages, series:series_id(id, title, slug, cover_url, reading_mode)'
@@ -138,8 +129,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         finalPages = await fetchWeebCentralPages(targetUrl);
       } else if (targetUrl.includes('mangapill.com')) {
         finalPages = await fetchMangaPillPages(targetUrl);
-      } else if (targetUrl.includes('mangafire.to')) {
-        finalPages = await fetchMangaFirePages(targetUrl);
       } else if (source === 'comick' || targetUrl.includes('comick.')) {
         const hid = targetUrl.split('/').filter(Boolean).pop() || '';
         finalPages = await fetchComickPages(hid);
@@ -148,12 +137,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       }
 
       if (finalPages.length > 0) {
-        await supabase.from('chapters').update({ pages: finalPages }).eq('id', chapterId);
+        // Persist pages to Supabase to prevent repeated fetches
+        await supabaseAdmin.from('chapters').update({ pages: finalPages }).eq('id', chapterId);
       }
     }
 
     const [prevRes, nextRes, allChapsRes] = await Promise.all([
-      supabase
+      supabaseAdmin
         .from('chapters')
         .select('id, chapter_number')
         .eq('series_id', chapter.series_id)
@@ -161,7 +151,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .order('chapter_number', { ascending: false })
         .limit(1)
         .maybeSingle(),
-      supabase
+      supabaseAdmin
         .from('chapters')
         .select('id, chapter_number')
         .eq('series_id', chapter.series_id)
@@ -169,7 +159,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .order('chapter_number', { ascending: true })
         .limit(1)
         .maybeSingle(),
-      supabase
+      supabaseAdmin
         .from('chapters')
         .select('id, chapter_number')
         .eq('series_id', chapter.series_id)
