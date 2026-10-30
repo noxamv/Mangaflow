@@ -39,15 +39,17 @@ function resolveCoverUrl(item: any): string {
     return FALLBACK_POSTER;
   }
   url = url.trim();
-  // Automatically route third-party CDN images through proxy to bypass 403 hotlinking blocks
+
+  // Route third-party CDNs through proxy to bypass 403 hotlinking restrictions
   if (
     url.startsWith('http') &&
     !url.includes('/api/proxy-image') &&
     (url.includes('mangadex.org') ||
       url.includes('mangapill.com') ||
+      url.includes('mpcdn.top') ||
       url.includes('comick') ||
       url.includes('weebcentral.com') ||
-      url.includes('mpcdn.top'))
+      url.includes('anilist.co'))
   ) {
     return `/api/proxy-image?url=${encodeURIComponent(url)}`;
   }
@@ -83,7 +85,7 @@ function SafeImage({ src, alt, className }: { src: string; alt: string; classNam
   );
 }
 
-// SPOTLIGHT BAR: Prominent info scaling filling the available card height
+// 1. SPOTLIGHT BAR: Information scaled up to fill available vertical and horizontal space
 function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const [index, setIndex] = useState(0);
 
@@ -91,7 +93,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
     if (items.length <= 1) return;
     const interval = setInterval(() => {
       setIndex((prev) => (prev + 1) % items.length);
-    }, 4500);
+    }, 5000);
     return () => clearInterval(interval);
   }, [items.length]);
 
@@ -101,20 +103,21 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const displayTitle = current.english_title || current.title;
 
   return (
-    <div className="relative w-full h-[240px] sm:h-[280px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-xl group">
-      {/* Blurred dynamic backdrop */}
+    <div className="relative w-full min-h-[220px] sm:min-h-[260px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-2xl group flex flex-col justify-between">
+      {/* Blurred background backdrop */}
       <div
-        className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700"
+        className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-30 transition-all duration-700"
         style={{ backgroundImage: `url(${coverUrl})` }}
       />
-      <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-black via-black/85 to-black/30 z-10" />
+      <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-[#0a0b0e] via-[#0a0b0e]/90 to-transparent z-10" />
 
       {/* Main Content Area */}
-      <div className="relative z-20 w-full h-full p-4 sm:p-6 flex justify-between items-center gap-4">
-        {/* Left Info: Badges Up-Left, Expanded Info Filling Middle, Button Down-Left */}
-        <div className="flex flex-col justify-between h-full flex-1 min-w-0 pr-2">
+      <div className="relative z-20 w-full p-4 sm:p-6 flex justify-between items-center gap-4 flex-1">
+        
+        {/* Left Side: Badges Up-Left, Information Filling Middle, Button Down-Left */}
+        <div className="flex flex-col justify-between self-stretch flex-1 min-w-0 pr-2">
           {/* UP LEFT: Badges */}
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
             <span className="text-[10px] uppercase font-black px-2.5 py-0.5 rounded-md bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 shadow-sm">
               Spotlight #{index + 1}
             </span>
@@ -123,13 +126,13 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
             </span>
           </div>
 
-          {/* MIDDLE: Enlarged, robust title & synopsis filling the space */}
-          <div className="my-auto py-1 space-y-1 sm:space-y-2">
-            <h2 className="text-base sm:text-xl md:text-2xl font-black text-white line-clamp-1 tracking-tight drop-shadow-md">
+          {/* MIDDLE: Bold Title and Multi-line Synopsis Filling Empty Space */}
+          <div className="my-auto py-2 space-y-1.5 sm:space-y-2">
+            <h2 className="text-base sm:text-2xl font-black text-white line-clamp-2 tracking-tight drop-shadow-md leading-snug">
               {displayTitle}
             </h2>
-            <p className="text-xs sm:text-sm text-neutral-300/90 line-clamp-3 leading-relaxed drop-shadow-sm max-w-xl">
-              {current.synopsis || 'Read online for free in high definition on MangaFlow.'}
+            <p className="text-xs sm:text-sm text-neutral-300 line-clamp-3 sm:line-clamp-4 leading-relaxed max-w-2xl drop-shadow-sm font-normal">
+              {current.synopsis || 'Read online for free in high definition with fast chapter loading on MangaFlow.'}
             </p>
           </div>
 
@@ -137,21 +140,21 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
           <div className="shrink-0 pt-1">
             <Link
               href={`/series/${current.slug}`}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs sm:text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition transform hover:-translate-y-0.5 active:translate-y-0"
+              className="inline-flex items-center gap-1.5 px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs sm:text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition transform hover:-translate-y-0.5 active:translate-y-0"
             >
               Read Now →
             </Link>
           </div>
         </div>
 
-        {/* Right: Cover Art Card */}
-        <div className="shrink-0 w-28 sm:w-36 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900">
+        {/* Right: Big Cover Art Poster */}
+        <div className="shrink-0 w-28 sm:w-36 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900 self-center">
           <SafeImage src={coverUrl} alt={displayTitle} className="w-full h-full object-cover" />
         </div>
       </div>
 
-      {/* Slide Dots Indicator */}
-      <div className="absolute bottom-3 right-4 z-30 flex items-center gap-1.5">
+      {/* Slide Navigation Dots */}
+      <div className="relative z-30 pb-3 flex items-center justify-center gap-1.5">
         {items.map((_, i) => (
           <button
             key={i}
@@ -168,7 +171,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   );
 }
 
-// SHARE BAR
+// 2. SHARE BAR
 function ShareBar() {
   const [copied, setCopied] = useState(false);
   const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://mangaflow-psi.vercel.app';
@@ -326,7 +329,7 @@ export default function HomePage() {
     loadData();
   }, []);
 
-  // HORIZONTAL SCROLL ROW
+  // 3. HORIZONTAL SCROLL ROW
   const HorizontalRow = ({ title, items, color }: { title: string; items: SeriesItem[]; color: string }) => {
     if (!items || items.length === 0) return null;
 
