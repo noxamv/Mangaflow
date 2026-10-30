@@ -38,9 +38,9 @@ export default function SettingsPage() {
       setUser(data?.user ?? null);
 
       try {
-        const savedHome = localStorage.getItem('mangaflow_settings_home');
-        if (savedHome) {
-          const parsed = JSON.parse(savedHome);
+        const saved = localStorage.getItem('mangaflow_settings_home');
+        if (saved) {
+          const parsed = JSON.parse(saved);
           if (parsed.showContinueHome !== undefined) setShowContinueHome(parsed.showContinueHome);
           if (parsed.showFollowedHome !== undefined) setShowFollowedHome(parsed.showFollowedHome);
           if (parsed.homeFolders) setHomeFolders(parsed.homeFolders);
@@ -53,7 +53,6 @@ export default function SettingsPage() {
     loadData();
   }, []);
 
-  // Persist settings whenever toggles change
   const saveSettings = (updates: any) => {
     try {
       const current = {
@@ -145,7 +144,7 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* 2. Following Titles on Home (Folder Shelves) */}
+      {/* 2. Following Titles on Home */}
       <section className="bg-[#13151f] border border-neutral-800/80 rounded-2xl p-5 space-y-3 shadow-lg">
         <h2 className="text-xs font-bold text-white">Following titles on home</h2>
         <p className="text-[11px] text-neutral-500">Choose which folders show their followed titles on the home page.</p>
