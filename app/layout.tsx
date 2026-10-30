@@ -206,9 +206,9 @@ export default function RootLayout({
           <header className="sticky top-0 z-50 bg-[#0e1015]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 lg:px-8 py-3 transition-colors">
             <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
               
-              {/* Left: Hamburger Menu on FAR LEFT, followed by MangaFlow */}
+              {/* Left: Mobile Menu Trigger on FAR LEFT, followed by MangaFlow Logo */}
               <div className="flex items-center gap-2 sm:gap-3">
-                {/* Mobile / Quick Dropdown Menu Trigger */}
+                {/* Mobile Hamburger Menu on the FAR LEFT */}
                 <div ref={menuDropdownRef} className="relative md:hidden">
                   <button
                     onClick={() => setMenuDropdownOpen(!menuDropdownOpen)}
@@ -261,14 +261,14 @@ export default function RootLayout({
                   )}
                 </div>
 
-                {/* Brand Name (Without the [ M ] box) */}
+                {/* Brand Name (Without the purple [ M ] box) */}
                 <Link href="/" className="flex items-center gap-1.5 group">
                   <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-white via-neutral-100 to-neutral-400 bg-clip-text text-transparent group-hover:text-white transition-colors">
                     MangaFlow
                   </span>
                 </Link>
 
-                {/* Desktop Global Links */}
+                {/* Desktop Navigation Links */}
                 <nav className="hidden md:flex items-center gap-1 ml-4 text-xs font-semibold text-neutral-400">
                   <Link href="/" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
                     Home
@@ -328,14 +328,12 @@ export default function RootLayout({
                     <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden text-xs">
                       <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
                         <span className="font-bold text-white">Notifications</span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={handleMarkAllAsRead}
-                            className="text-[10px] text-indigo-400 hover:underline font-semibold"
-                          >
-                            Mark all read
-                          </button>
-                        </div>
+                        <button
+                          onClick={handleMarkAllAsRead}
+                          className="text-[10px] text-indigo-400 hover:underline font-semibold"
+                        >
+                          Mark all read
+                        </button>
                       </div>
 
                       <div className="flex border-b border-neutral-800 bg-neutral-900/40 text-[11px]">
@@ -559,12 +557,29 @@ export default function RootLayout({
         {/* Main Content Area */}
         <main className="flex-1">{children}</main>
 
-        {/* Global Footer */}
+        {/* Global Footer with DMCA & Policy Link */}
         {!isReaderPage && (
           <footer className="border-t border-neutral-800/80 bg-[#090a0d] py-8 px-4 text-center text-xs text-neutral-500">
             <div className="max-w-7xl mx-auto space-y-2">
-              <p className="font-semibold text-neutral-400">MangaFlow &copy; {new Date().getFullYear()} — Free Online Manga & Manhwa Reader</p>
-              <p className="text-[11px] text-neutral-600">Disclaimer: MangaFlow does not store any files on its servers. All contents are scraped from third-party sources.</p>
+              <p className="font-semibold text-neutral-400">
+                MangaFlow &copy; {new Date().getFullYear()} — Free Online Manga & Manhwa Reader
+              </p>
+              <div className="flex items-center justify-center gap-4 text-[11px] text-neutral-400 py-1">
+                <Link href="/" className="hover:text-white transition">
+                  Home
+                </Link>
+                <span>•</span>
+                <Link href="/filter" className="hover:text-white transition">
+                  Browse
+                </Link>
+                <span>•</span>
+                <Link href="/dmca" className="hover:text-indigo-400 transition font-medium">
+                  DMCA & Copyright Policy
+                </Link>
+              </div>
+              <p className="text-[11px] text-neutral-600">
+                Disclaimer: MangaFlow does not store any files on its servers. All contents are scraped dynamically from third-party sources.
+              </p>
             </div>
           </footer>
         )}
