@@ -24,192 +24,274 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9'
 };
 
-function normalize(str) {
-  return (str || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '')
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function cleanTitle(title) {
+  return title
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
 function slugify(text) {
   return text
-    .toString()
     .toLowerCase()
+    .replace(/[^\w\s-]/g, '')
     .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w\-]+/g, '')
-    .replace(/\-\-+/g, '-');
+    .replace(/[\s_-]+/g, '-');
 }
 
-async function syncRecent() {
-  console.log('=== Checking Feed for Daily Releases & Brand-New Series ===');
-
-  let res;
+// 1. DISCOVER TOP READ SERIES FROM MANGADEX (Ordered by most followed/read)
+async function fetchTopMangaDexSeries() {
+  const candidates = [];
   try {
-    res = await fetch('https://mangapill.com/chapters', { headers: HEADERS });
-    if (!res.ok) {
-      res = await fetch('https://mangapill.com/recent', { headers: HEADERS });
+    const res = await fetch(
+      'https://api.mangadex.org/manga?order[followedCount]=desc&limit=50&contentRating[]=safe&contentRating[]=suggestive&includes[]=cover_art',
+      { headers: HEADERS }
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    const list = json.data || [];
+
+    for (const item of list) {
+      const titles = item.attributes?.title || {};
+      const title = titles.en || Object.values(titles)[0];
+      if (!title) continue;
+
+      let coverUrl = null;
+      const coverRel = item.relationships?.find((r) => r.type === 'cover_art');
+      if (coverRel?.attributes?.fileName) {
+        coverUrl = `https://uploads.mangadex.org/covers/${item.id}/${coverRel.attributes.fileName}.512.jpg`;
+      }
+
+      candidates.push({
+        title: cleanTitle(title),
+        cover_url: coverUrl,
+        reading_mode: item.attributes?.originalLanguage === 'ko' || item.attributes?.originalLanguage === 'zh' ? 'webtoon' : 'paged',
+        source: 'mangadex',
+        target_url: `https://mangadex.org/title/${item.id}`,
+        mangaId: item.id
+      });
     }
   } catch (err) {
-    console.error('Failed to fetch recent feed:', err.message);
-    return;
+    console.log(`[Top MangaDex Error]: ${err.message}`);
+  }
+  return candidates;
+}
+
+// 2. DISCOVER TOP READ MANHWA/MANGA FROM MANGANATO TOP VIEWS
+async function fetchTopManganatoSeries() {
+  const candidates = [];
+  const urls = [
+    'https://natomanga.com/manga-list/topview',
+    'https://manganato.com/genre-all?type=topview'
+  ];
+
+  for (const listUrl of urls) {
+    try {
+      const res = await fetch(listUrl, { headers: HEADERS, redirect: 'follow' });
+      if (!res.ok) continue;
+
+      const html = await res.text();
+      const $ = cheerio.load(html);
+
+      $('.content-genres-item, .list-truyen-item-wrap, .search-story-item').each((_, el) => {
+        const titleEl = $(el).find('h3 a, a.item-title, a.genres-item-name').first();
+        const title = titleEl.text().trim();
+        const href = titleEl.attr('href');
+        const img = $(el).find('img').first().attr('src');
+
+        if (title && href) {
+          candidates.push({
+            title: cleanTitle(title),
+            cover_url: img || null,
+            reading_mode: href.includes('manhwa') || title.toLowerCase().includes('leveling') ? 'webtoon' : 'paged',
+            source: 'manganato',
+            target_url: href
+          });
+        }
+      });
+
+      if (candidates.length > 0) break;
+    } catch {}
   }
 
-  if (!res.ok) {
-    console.error(`Feed returned status ${res.status}`);
-    return;
+  return candidates;
+}
+
+// 3. CHAPTER INGESTION FOR A DISCOVERED POPULAR SERIES
+async function ingestChaptersForSeries(seriesId, title, targetUrl, source) {
+  const chapters = [];
+
+  if (source === 'mangadex' && targetUrl.includes('/title/')) {
+    const mangaId = targetUrl.match(/title\/([a-f0-9-]+)/)?.[1];
+    if (mangaId) {
+      try {
+        const feedRes = await fetch(
+          `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=50&contentRating[]=safe&contentRating[]=suggestive`,
+          { headers: HEADERS }
+        );
+        if (feedRes.ok) {
+          const json = await feedRes.json();
+          for (const item of (json.data || [])) {
+            const chNum = parseFloat(item.attributes?.chapter);
+            if (!isNaN(chNum)) {
+              chapters.push({
+                series_id: seriesId,
+                chapter_number: chNum,
+                title: item.attributes?.title || `Chapter ${chNum}`,
+                external_id: `mangadex:${item.id}`,
+                pages: [`https://mangadex.org/chapter/${item.id}`],
+                source: 'mangadex',
+                updated_at: new Date().toISOString()
+              });
+            }
+          }
+        }
+      } catch {}
+    }
+  } else if (source === 'manganato' && targetUrl) {
+    try {
+      const res = await fetch(targetUrl, { headers: HEADERS, redirect: 'follow' });
+      if (res.ok) {
+        const html = await res.text();
+        const $ = cheerio.load(html);
+        $('.row-content-chapter li a.chapter-name, ul.row-content-chapter a').each((_, el) => {
+          const href = $(el).attr('href');
+          const text = $(el).text().trim();
+          const match = text.match(/chapter\s*([\d.]+)/i) || href?.match(/chapter-([\d.]+)/i);
+          if (match && href) {
+            const chNum = parseFloat(match[1]);
+            if (!isNaN(chNum)) {
+              chapters.push({
+                series_id: seriesId,
+                chapter_number: chNum,
+                title: text || `Chapter ${chNum}`,
+                external_id: href,
+                pages: [href],
+                source: 'manganato',
+                updated_at: new Date().toISOString()
+              });
+            }
+          }
+        });
+      }
+    } catch {}
   }
 
-  const html = await res.text();
-  const $ = cheerio.load(html);
+  if (chapters.length > 0) {
+    // Upsert chapters so existing ones are refreshed and new ones are inserted without duplication
+    const CHUNK = 100;
+    for (let i = 0; i < chapters.length; i += CHUNK) {
+      await supabase.from('chapters').upsert(chapters.slice(i, i + CHUNK), { onConflict: 'series_id, chapter_number' });
+    }
 
-  // Load known series into an in-memory normalized map
-  const { data: allSeries, error: sErr } = await supabase
+    const maxCh = Math.max(...chapters.map((c) => c.chapter_number));
+    await supabase.from('series_intel').upsert({
+      series_id: seriesId,
+      source_platform: source,
+      target_url: targetUrl,
+      latest_known_chapter: maxCh,
+      last_scouted_at: new Date().toISOString()
+    }, { onConflict: 'series_id' });
+
+    console.log(`  -> Synced ${chapters.length} chapters (Latest: Ch. ${maxCh})`);
+  }
+}
+
+// 4. MAIN DISCOVERY & NO-DUPLICATE CONTROLLER
+async function main() {
+  console.log('--- STARTING POPULAR/TOP SERIES DISCOVERY & RECENT SYNC ---');
+
+  // Pull all existing series from DB to build strict duplicate-prevention index
+  const { data: allExisting, error: exErr } = await supabase
     .from('series')
     .select('id, title, slug');
 
-  if (sErr || !allSeries) {
-    console.error('Failed to load series catalog:', sErr?.message);
-    return;
+  if (exErr) {
+    console.error('Failed to load existing catalog:', exErr.message);
+    process.exit(1);
   }
 
-  const seriesMap = new Map();
-  for (const s of allSeries) {
-    seriesMap.set(normalize(s.title), s);
-    if (s.slug) {
-      seriesMap.set(normalize(s.slug), s);
-    }
+  const existingTitles = new Set();
+  const existingSlugs = new Set();
+  const titleToIdMap = new Map();
+
+  for (const s of (allExisting || [])) {
+    const norm = s.title.toLowerCase().trim();
+    existingTitles.add(norm);
+    existingSlugs.add(s.slug);
+    titleToIdMap.set(norm, s.id);
   }
 
-  const discovered = [];
+  console.log(`Current catalog: ${existingTitles.size} unique titles indexed.`);
 
-  $('a[href*="/chapters/"]').each((_, el) => {
-    const href = $(el).attr('href');
-    const chapterText = $(el).text().trim();
-    const parentContainer = $(el).closest('div');
-    const mangaTitleLink = parentContainer.find('a[href*="/manga/"]').first();
-    const mangaHref = mangaTitleLink.attr('href') || '';
-    const mangaTitle = mangaTitleLink.text().trim();
+  // 1. Fetch Top Series Lists
+  const [mangadexTop, manganatoTop] = await Promise.all([
+    fetchTopMangaDexSeries(),
+    fetchTopManganatoSeries()
+  ]);
 
-    if (href && chapterText) {
-      const match =
-        chapterText.match(/chapter\s*([\d.]+)/i) ||
-        href.match(/chapter-([\d.]+)/i) ||
-        href.match(/-([\d.]+)\/?$/);
+  const candidates = [...mangadexTop, ...manganatoTop];
+  console.log(`Collected ${candidates.length} top-read series candidates.`);
 
-      if (match) {
-        const fullChapterUrl = href.startsWith('http') ? href : `https://mangapill.com${href}`;
-        const fullMangaUrl = mangaHref ? (mangaHref.startsWith('http') ? mangaHref : `https://mangapill.com${mangaHref}`) : '';
+  let newlyCreated = 0;
+  let existingUpdated = 0;
 
-        discovered.push({
-          mangaTitle: mangaTitle || chapterText.split(/chapter/i)[0].trim(),
-          mangaUrl: fullMangaUrl,
-          chapterNumber: parseFloat(match[1]),
-          chapterUrl: fullChapterUrl,
-          chapterTitle: chapterText,
-        });
-      }
-    }
-  });
+  for (const item of candidates) {
+    const normTitle = item.title.toLowerCase().trim();
+    let targetSeriesId = titleToIdMap.get(normTitle);
 
-  console.log(`Discovered ${discovered.length} release items on feed.`);
-
-  let insertedCount = 0;
-  let newSeriesCount = 0;
-
-  for (const item of discovered) {
-    if (!item.mangaTitle || item.mangaTitle.length < 2) continue;
-
-    const norm = normalize(item.mangaTitle);
-    let matchedSeries = seriesMap.get(norm);
-
-    if (!matchedSeries) {
-      for (const [key, seriesObj] of seriesMap.entries()) {
-        if (norm.length > 3 && (key.includes(norm) || norm.includes(key))) {
-          matchedSeries = seriesObj;
-          break;
-        }
-      }
+    // If it already exists, DO NOT CREATE A DOUBLE ENTRY. Just update its latest chapters!
+    if (targetSeriesId) {
+      console.log(`[Already in Catalog] "${item.title}" -> Checking latest chapters...`);
+      await ingestChaptersForSeries(targetSeriesId, item.title, item.target_url, item.source);
+      existingUpdated++;
+      await delay(500);
+      continue;
     }
 
-    // Auto-create brand new series if it does not exist in catalog
-    if (!matchedSeries) {
-      const baseSlug = slugify(item.mangaTitle);
-      const uniqueSlug = `${baseSlug}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-      console.log(`[NEW SERIES DISCOVERED] Creating: ${item.mangaTitle}`);
-
-      const { data: newSeries, error: createErr } = await supabase
-        .from('series')
-        .insert({
-          title: item.mangaTitle,
-          slug: uniqueSlug,
-          status: 'ongoing',
-          reading_mode: 'paged',
-          source: 'mangapill',
-          source_url: item.mangaUrl,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .select('id, title, slug')
-        .single();
-
-      if (!createErr && newSeries) {
-        matchedSeries = newSeries;
-        seriesMap.set(norm, newSeries);
-        newSeriesCount++;
-
-        // Add corresponding tracking entry into series_intel
-        await supabase.from('series_intel').insert({
-          series_id: newSeries.id,
-          slug: newSeries.slug,
-          source_platform: 'mangapill',
-          target_url: item.mangaUrl || item.chapterUrl,
-          latest_known_chapter: item.chapterNumber,
-          last_scouted_at: new Date().toISOString(),
-        });
-      }
+    // Check slug collision
+    let slug = slugify(item.title);
+    if (existingSlugs.has(slug)) {
+      slug = `${slug}-${Date.now().toString().slice(-4)}`;
     }
 
-    // Ingest the chapter
-    if (matchedSeries) {
-      const { error: upsertErr } = await supabase
-        .from('chapters')
-        .upsert(
-          {
-            series_id: matchedSeries.id,
-            chapter_number: item.chapterNumber,
-            title: item.chapterTitle || `Chapter ${item.chapterNumber}`,
-            external_id: item.chapterUrl,
-            pages: [item.chapterUrl],
-            source: 'mangapill',
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'series_id, chapter_number' }
-        );
+    // Insert brand new popular series
+    const { data: newSeries, error: insErr } = await supabase
+      .from('series')
+      .insert({
+        title: item.title,
+        slug: slug,
+        cover_url: item.cover_url,
+        reading_mode: item.reading_mode,
+        status: 'Ongoing'
+      })
+      .select('id')
+      .single();
 
-      if (!upsertErr) {
-        console.log(`✓ Chapter Synced: [${matchedSeries.title}] Ch. ${item.chapterNumber}`);
-        insertedCount++;
-
-        await supabase
-          .from('series_intel')
-          .update({
-            latest_known_chapter: item.chapterNumber,
-            last_scouted_at: new Date().toISOString(),
-          })
-          .eq('series_id', matchedSeries.id);
-      }
+    if (insErr || !newSeries) {
+      console.log(`  [Skipped] Insert failed for "${item.title}": ${insErr?.message}`);
+      continue;
     }
+
+    targetSeriesId = newSeries.id;
+    existingTitles.add(normTitle);
+    existingSlugs.add(slug);
+    titleToIdMap.set(normTitle, targetSeriesId);
+    newlyCreated++;
+
+    console.log(`[NEW TOP SERIES ADDED] "${item.title}" -> Ingesting chapters...`);
+    await ingestChaptersForSeries(targetSeriesId, item.title, item.target_url, item.source);
+    await delay(600);
   }
 
-  console.log(`=== Done. Created ${newSeriesCount} new series & ingested ${insertedCount} chapters ===`);
+  console.log(`\nDiscovery Summary: ${newlyCreated} new top series created, ${existingUpdated} existing series updated with newest releases.`);
+  console.log('--- RECENT SYNC FINISHED ---');
 }
 
-syncRecent().catch(console.error);
+main().catch(console.error);
