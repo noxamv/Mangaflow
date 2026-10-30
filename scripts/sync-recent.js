@@ -32,9 +32,7 @@ const HEADERS = {
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function cleanTitle(title) {
-  return title
-    .replace(/\s+/g, ' ')
-    .trim();
+  return title.replace(/\s+/g, ' ').trim();
 }
 
 function slugify(text) {
@@ -45,12 +43,12 @@ function slugify(text) {
     .replace(/[\s_-]+/g, '-');
 }
 
-// 1. DISCOVER TOP READ SERIES FROM MANGADEX (Ordered by most followed/read)
+// 1. DISCOVER TOP READ SERIES FROM MANGADEX
 async function fetchTopMangaDexSeries() {
   const candidates = [];
   try {
     const res = await fetch(
-      'https://api.mangadex.org/manga?order[followedCount]=desc&limit=50&contentRating[]=safe&contentRating[]=suggestive&includes[]=cover_art',
+      'https://api.mangadex.org/manga?order[followedCount]=desc&limit=40&contentRating[]=safe&contentRating[]=suggestive&includes[]=cover_art',
       { headers: HEADERS }
     );
     if (!res.ok) return [];
@@ -123,7 +121,7 @@ async function fetchTopManganatoSeries() {
   return candidates;
 }
 
-// 3. CHAPTER INGESTION FOR A DISCOVERED POPULAR SERIES
+// 3. INGEST CHAPTERS FOR A DISCOVERED POPULAR SERIES
 async function ingestChaptersForSeries(seriesId, title, targetUrl, source) {
   const chapters = [];
 
@@ -184,7 +182,6 @@ async function ingestChaptersForSeries(seriesId, title, targetUrl, source) {
   }
 
   if (chapters.length > 0) {
-    // Upsert chapters so existing ones are refreshed and new ones are inserted without duplication
     const CHUNK = 100;
     for (let i = 0; i < chapters.length; i += CHUNK) {
       await supabase.from('chapters').upsert(chapters.slice(i, i + CHUNK), { onConflict: 'series_id, chapter_number' });
@@ -203,11 +200,10 @@ async function ingestChaptersForSeries(seriesId, title, targetUrl, source) {
   }
 }
 
-// 4. MAIN DISCOVERY & NO-DUPLICATE CONTROLLER
+// 4. MAIN DISCOVERY CONTROLLER
 async function main() {
   console.log('--- STARTING POPULAR/TOP SERIES DISCOVERY & RECENT SYNC ---');
 
-  // Pull all existing series from DB to build strict duplicate-prevention index
   const { data: allExisting, error: exErr } = await supabase
     .from('series')
     .select('id, title, slug');
@@ -230,7 +226,6 @@ async function main() {
 
   console.log(`Current catalog: ${existingTitles.size} unique titles indexed.`);
 
-  // 1. Fetch Top Series Lists
   const [mangadexTop, manganatoTop] = await Promise.all([
     fetchTopMangaDexSeries(),
     fetchTopManganatoSeries()
@@ -246,7 +241,6 @@ async function main() {
     const normTitle = item.title.toLowerCase().trim();
     let targetSeriesId = titleToIdMap.get(normTitle);
 
-    // If it already exists, DO NOT CREATE A DOUBLE ENTRY. Just update its latest chapters!
     if (targetSeriesId) {
       console.log(`[Already in Catalog] "${item.title}" -> Checking latest chapters...`);
       await ingestChaptersForSeries(targetSeriesId, item.title, item.target_url, item.source);
@@ -255,13 +249,11 @@ async function main() {
       continue;
     }
 
-    // Check slug collision
     let slug = slugify(item.title);
     if (existingSlugs.has(slug)) {
       slug = `${slug}-${Date.now().toString().slice(-4)}`;
     }
 
-    // Insert brand new popular series
     const { data: newSeries, error: insErr } = await supabase
       .from('series')
       .insert({
@@ -290,7 +282,7 @@ async function main() {
     await delay(600);
   }
 
-  console.log(`\nDiscovery Summary: ${newlyCreated} new top series created, ${existingUpdated} existing series updated with newest releases.`);
+  console.log(`\nDiscovery Summary: ${newlyCreated} new top series created, ${existingUpdated} existing series updated.`);
   console.log('--- RECENT SYNC FINISHED ---');
 }
 
