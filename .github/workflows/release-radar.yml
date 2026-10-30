@@ -1,0 +1,34 @@
+name: MangaFlow Fast Release Radar (30-Min)
+
+on:
+  schedule:
+    # Triggers every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: mangaflow-radar
+  cancel-in-progress: false
+
+jobs:
+  latest-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Execute Fast Release Radar
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
+        run: node scripts/sync-recent.js
