@@ -103,7 +103,7 @@ async function fetchAniListMetadata(title) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. WEEBCENTRAL SCRAPER (Full Manhwa / Webtoon Runs)
+// 2. WEEBCENTRAL SCRAPER
 // ---------------------------------------------------------------------------
 async function scrapeWeebCentral(title) {
   try {
@@ -159,15 +159,15 @@ async function scrapeWeebCentral(title) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. COMICK CLEAN API (api.comick.dev)
+// 3. COMICK SCRAPER
 // ---------------------------------------------------------------------------
 async function scrapeComick(title) {
-  const domains = ['https://api.comick.dev', 'https://api.comick.io', 'https://api.comick.cc'];
+  const domains = ['https://api.comick.dev', 'https://api.comick.io', 'https://comick.io'];
 
   for (const base of domains) {
     try {
       const searchRes = await fetch(`${base}/v1.0/search?q=${encodeURIComponent(cleanTitle(title))}&limit=1`, {
-        headers: { ...BROWSER_HEADERS, Referer: 'https://comick.dev/' }
+        headers: { ...BROWSER_HEADERS, Referer: 'https://comick.io/' }
       });
       if (!searchRes.ok) continue;
 
@@ -180,7 +180,7 @@ async function scrapeComick(title) {
 
       while (page <= 15) {
         const chapRes = await fetch(`${base}/comic/${comic.hid}/chapters?lang=en&limit=100&page=${page}`, {
-          headers: { ...BROWSER_HEADERS, Referer: 'https://comick.dev/' }
+          headers: { ...BROWSER_HEADERS, Referer: 'https://comick.io/' }
         });
         if (!chapRes.ok) break;
 
@@ -195,7 +195,7 @@ async function scrapeComick(title) {
               chapter_number: chNum,
               title: item.title ? `Chapter ${chNum} - ${item.title}` : `Chapter ${chNum}`,
               external_id: `comick:${item.hid}`,
-              pages: [`https://comick.dev/chapter/${item.hid}`],
+              pages: [`https://comick.io/chapter/${item.hid}`],
               platform: 'comick'
             });
           }
@@ -205,7 +205,7 @@ async function scrapeComick(title) {
       }
 
       if (chapters.length > 0) {
-        return { chapters, platform: 'comick', resolvedUrl: `https://comick.dev/comic/${comic.slug || comic.hid}` };
+        return { chapters, platform: 'comick', resolvedUrl: `https://comick.io/comic/${comic.slug || comic.hid}` };
       }
     } catch {}
   }
@@ -213,7 +213,7 @@ async function scrapeComick(title) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. MANGAPILL SCRAPER (Shonen / Manga)
+// 4. MANGAPILL SCRAPER
 // ---------------------------------------------------------------------------
 async function scrapeMangaPill(targetUrl, title) {
   let url = targetUrl && targetUrl.includes('mangapill.com') ? targetUrl : null;
@@ -266,7 +266,7 @@ async function scrapeMangaPill(targetUrl, title) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. MANGADEX SCRAPER (Free API Lane)
+// 5. MANGADEX SCRAPER
 // ---------------------------------------------------------------------------
 async function scrapeMangaDex(targetUrl, title) {
   let mangaId = targetUrl?.match(/title\/([a-f0-9-]{36})/)?.[1];
@@ -334,14 +334,11 @@ async function resolveAndStitchSeries(series) {
 
   console.log(`\nAuditing: "${title}" [${manhwaFlag ? 'Webtoon/Manhwa' : 'Manga'}]`);
 
-  // 1. Sync canonical status with AniList
   const aniMeta = await fetchAniListMetadata(title);
   if (aniMeta?.status && aniMeta.status !== series.status) {
     await supabase.from('series').update({ status: aniMeta.status }).eq('id', series.id);
-    console.log(`  [STATUS SYNC] AniList verified: "${title}" is ${aniMeta.status}`);
   }
 
-  // 2. Query all providers in parallel
   const [wcRes, cmRes, mpRes, mdRes] = await Promise.all([
     scrapeWeebCentral(title),
     scrapeComick(title),
@@ -363,14 +360,12 @@ async function resolveAndStitchSeries(series) {
     return;
   }
 
-  // 3. Fallback priority ordering
   const providerPriority = manhwaFlag
     ? ['weebcentral', 'comick', 'mangapill', 'mangadex']
     : ['mangapill', 'mangadex', 'weebcentral', 'comick'];
 
   candidates.sort((a, b) => providerPriority.indexOf(a.platform) - providerPriority.indexOf(b.platform));
 
-  // 4. Stitch chapters across candidates (fill gaps)
   const stitchedMap = new Map();
   for (const cand of candidates) {
     for (const ch of cand.chapters) {
@@ -393,29 +388,24 @@ async function resolveAndStitchSeries(series) {
   const primaryPlatform = candidates[0].platform;
   const primaryUrl = candidates[0].resolvedUrl || targetUrl || '';
 
-  // 5. Upsert stitched payload in chunks
   const CHUNK = 200;
   for (let i = 0; i < payload.length; i += CHUNK) {
     await supabase.from('chapters').upsert(payload.slice(i, i + CHUNK), { onConflict: 'series_id,chapter_number' });
   }
 
-  // 6. VOLUME SAFEGUARD FOR COMPLETED SERIES
   const now = Date.now();
   const ONE_DAY = 24 * 60 * 60 * 1000;
   const currentStatus = aniMeta?.status || series.status;
 
-  // Only freeze a series if it genuinely holds its complete volume
   const isActuallyComplete =
     currentStatus === 'Completed' &&
     (aniMeta?.officialChapters ? maxCh >= aniMeta.officialChapters - 2 : payload.length >= 25);
 
-  let nextInterval = ONE_DAY * 2; // Default 2 days for ongoing
+  let nextInterval = ONE_DAY * 2;
   if (isActuallyComplete) {
     const isRecent = intel.completed_at && now - new Date(intel.completed_at).getTime() < 90 * ONE_DAY;
-    nextInterval = isRecent ? ONE_DAY * 7 : ONE_DAY * 30; // 7 days for epilogues, 30 days for archived classics
+    nextInterval = isRecent ? ONE_DAY * 7 : ONE_DAY * 30;
   } else if (currentStatus === 'Completed') {
-    // Marked completed, but missing chapter volume! Rescan soon to backfill
-    console.log(`  [GAP DETECTED] "${title}" is Completed but only has ${payload.length} chapters. Keeping in active queue.`);
     nextInterval = ONE_DAY * 1;
   } else if (currentStatus === 'Hiatus') {
     nextInterval = ONE_DAY * 14;
@@ -437,7 +427,7 @@ async function resolveAndStitchSeries(series) {
   console.log(
     `  [STITCHED] Ingested ${payload.length} chapters (Max: Ch. ${maxCh}) merged across ${candidates
       .map((c) => `${c.platform} (${c.chapters.length})`)
-      .join(', ')}. Next scout in ${Math.round(nextInterval / ONE_DAY)} days.`
+      .join(', ')}.`
   );
 }
 
@@ -464,7 +454,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Prioritize unassigned/gap series first, then oldest scouted
   queue.sort((a, b) => {
     const intelA = Array.isArray(a.series_intel) ? a.series_intel[0] : a.series_intel;
     const intelB = Array.isArray(b.series_intel) ? b.series_intel[0] : b.series_intel;
