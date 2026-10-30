@@ -34,9 +34,22 @@ interface ContinueItem {
 function resolveCoverUrl(item: any): string {
   if (!item) return FALLBACK_POSTER;
   const target = Array.isArray(item) ? item[0] : item;
-  const url = target?.cover_image_url || target?.cover_url || '';
+  let url = target?.cover_image_url || target?.cover_url || '';
   if (!url || typeof url !== 'string' || url.trim() === '') {
     return FALLBACK_POSTER;
+  }
+  url = url.trim();
+  // Automatically route third-party CDN images through proxy to bypass 403 hotlinking blocks
+  if (
+    url.startsWith('http') &&
+    !url.includes('/api/proxy-image') &&
+    (url.includes('mangadex.org') ||
+      url.includes('mangapill.com') ||
+      url.includes('comick') ||
+      url.includes('weebcentral.com') ||
+      url.includes('mpcdn.top'))
+  ) {
+    return `/api/proxy-image?url=${encodeURIComponent(url)}`;
   }
   return url;
 }
@@ -70,7 +83,7 @@ function SafeImage({ src, alt, className }: { src: string; alt: string; classNam
   );
 }
 
-// 1. REFINED SPOTLIGHT BAR: Badges Up-Left, Read Button Down-Left, Expanded Info Space
+// SPOTLIGHT BAR: Prominent info scaling filling the available card height
 function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const [index, setIndex] = useState(0);
 
@@ -88,64 +101,64 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const displayTitle = current.english_title || current.title;
 
   return (
-    <div className="relative w-full h-[220px] sm:h-[260px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-xl group">
-      {/* Blurred Background Backdrop */}
+    <div className="relative w-full h-[240px] sm:h-[280px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-xl group">
+      {/* Blurred dynamic backdrop */}
       <div
         className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700"
         style={{ backgroundImage: `url(${coverUrl})` }}
       />
       <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-black via-black/85 to-black/30 z-10" />
 
-      {/* Main Container */}
-      <div className="relative z-20 w-full h-full p-4 sm:p-5 flex justify-between gap-3">
-        {/* Left Side: Badges Up-Left, Expanded Info Middle, Read Button Down-Left */}
-        <div className="flex flex-col justify-between max-w-[65%] sm:max-w-md h-full z-10">
-          {/* UP LEFT: Spotlight # & Manga/Manhwa Badge */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded bg-indigo-500/30 text-indigo-300 border border-indigo-500/40">
+      {/* Main Content Area */}
+      <div className="relative z-20 w-full h-full p-4 sm:p-6 flex justify-between items-center gap-4">
+        {/* Left Info: Badges Up-Left, Expanded Info Filling Middle, Button Down-Left */}
+        <div className="flex flex-col justify-between h-full flex-1 min-w-0 pr-2">
+          {/* UP LEFT: Badges */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[10px] uppercase font-black px-2.5 py-0.5 rounded-md bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 shadow-sm">
               Spotlight #{index + 1}
             </span>
-            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded bg-black/70 text-neutral-300 border border-white/10">
+            <span className="text-[10px] uppercase font-black px-2.5 py-0.5 rounded-md bg-black/75 text-neutral-300 border border-white/10 shadow-sm">
               {current.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
             </span>
           </div>
 
-          {/* MIDDLE: Maximum Space for Title and Synopsis */}
-          <div className="space-y-1 my-auto py-1">
-            <h2 className="text-sm sm:text-lg font-black text-white line-clamp-1 tracking-tight">
+          {/* MIDDLE: Enlarged, robust title & synopsis filling the space */}
+          <div className="my-auto py-1 space-y-1 sm:space-y-2">
+            <h2 className="text-base sm:text-xl md:text-2xl font-black text-white line-clamp-1 tracking-tight drop-shadow-md">
               {displayTitle}
             </h2>
-            <p className="text-[10px] sm:text-xs text-neutral-400 line-clamp-2 leading-relaxed">
+            <p className="text-xs sm:text-sm text-neutral-300/90 line-clamp-3 leading-relaxed drop-shadow-sm max-w-xl">
               {current.synopsis || 'Read online for free in high definition on MangaFlow.'}
             </p>
           </div>
 
           {/* DOWN LEFT: Read Now Button */}
-          <div>
+          <div className="shrink-0 pt-1">
             <Link
               href={`/series/${current.slug}`}
-              className="inline-flex items-center gap-1 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg shadow-md transition"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs sm:text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition transform hover:-translate-y-0.5 active:translate-y-0"
             >
               Read Now →
             </Link>
           </div>
         </div>
 
-        {/* Right Side: Series Poster Cover */}
-        <div className="shrink-0 w-24 sm:w-28 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900 self-center">
+        {/* Right: Cover Art Card */}
+        <div className="shrink-0 w-28 sm:w-36 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900">
           <SafeImage src={coverUrl} alt={displayTitle} className="w-full h-full object-cover" />
         </div>
       </div>
 
-      {/* Slide Navigation Dots */}
-      <div className="absolute bottom-2.5 right-4 z-30 flex items-center gap-1">
+      {/* Slide Dots Indicator */}
+      <div className="absolute bottom-3 right-4 z-30 flex items-center gap-1.5">
         {items.map((_, i) => (
           <button
             key={i}
             type="button"
             onClick={() => setIndex(i)}
             className={`h-1.5 rounded-full transition-all duration-300 ${
-              index === i ? 'w-4 bg-indigo-500' : 'w-1.5 bg-neutral-700/80 hover:bg-neutral-500'
+              index === i ? 'w-5 bg-indigo-500 shadow-md shadow-indigo-500/50' : 'w-1.5 bg-neutral-700/80 hover:bg-neutral-500'
             }`}
             aria-label={`Slide ${i + 1}`}
           />
@@ -155,7 +168,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   );
 }
 
-// 2. SHARE BAR
+// SHARE BAR
 function ShareBar() {
   const [copied, setCopied] = useState(false);
   const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://mangaflow-psi.vercel.app';
@@ -234,7 +247,6 @@ export default function HomePage() {
 
       try {
         const [trendingRes, popRes, latestRes, featuredRes] = await Promise.all([
-          // 7 Slides for Spotlight and Trending
           supabase.from('series').select(baseCols).order('followed_count', { ascending: false, nullsFirst: false }).limit(7),
           supabase.from('series').select(baseCols).order('rating', { ascending: false, nullsFirst: false }).limit(10),
           supabase.from('series').select(baseCols).order('updated_at', { ascending: false }).limit(10),
@@ -314,7 +326,7 @@ export default function HomePage() {
     loadData();
   }, []);
 
-  // 3. HORIZONTAL SCROLL ROW COMPONENT (Matches Continue Reading layout)
+  // HORIZONTAL SCROLL ROW
   const HorizontalRow = ({ title, items, color }: { title: string; items: SeriesItem[]; color: string }) => {
     if (!items || items.length === 0) return null;
 
@@ -330,7 +342,6 @@ export default function HomePage() {
           </Link>
         </div>
 
-        {/* Smooth horizontal scroll row */}
         <div className="flex gap-2.5 sm:gap-3 overflow-x-auto pb-2 scrollbar-none w-full max-w-full">
           {items.map((item) => {
             const cover = resolveCoverUrl(item);
@@ -367,13 +378,13 @@ export default function HomePage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 lg:px-8 py-4 space-y-6">
-      {/* a. Spotlight Bar */}
+      {/* 1. Spotlight Bar */}
       <SpotlightSlider items={trendingList} />
 
-      {/* b. Share Bar */}
+      {/* 2. Share Bar */}
       <ShareBar />
 
-      {/* Continue Reading (Horizontal Scroll) */}
+      {/* 3. Continue Reading */}
       {continueReading.length > 0 && (
         <section className="space-y-2.5">
           <div className="flex items-center gap-2">
@@ -406,7 +417,7 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* c. Horizontal Scroll Rows */}
+      {/* 4. Horizontal Scroll Rows */}
       <HorizontalRow title="Trending Series" items={trendingList} color="bg-indigo-500" />
       <HorizontalRow title="Popular Series" items={popularList} color="bg-amber-500" />
       <HorizontalRow title="Latest Releases" items={latestList} color="bg-cyan-500" />
