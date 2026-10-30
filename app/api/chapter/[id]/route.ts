@@ -25,18 +25,26 @@ const BROWSER_HEADERS = {
 
 async function fetchWeebCentralPages(url: string): Promise<string[]> {
   try {
-    const res = await fetch(url, {
-      headers: { ...BROWSER_HEADERS, Referer: 'https://weebcentral.com/' },
+    const chapterId = url.match(/chapters\/([A-Z0-9]+)/i)?.[1];
+    const imageEndpoint = chapterId
+      ? `https://weebcentral.com/chapters/${chapterId}/images?is_prev=False&current_page=1&reading_style=long_strip`
+      : url;
+
+    const res = await fetch(imageEndpoint, {
+      headers: { ...BROWSER_HEADERS, 'HX-Request': 'true', Referer: url },
       cache: 'no-store',
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return [];
     const html = await res.text();
     const $ = cheerio.load(html);
     const pages: string[] = [];
 
-    $('section img, .chapter-images img, img.manga-image').each((_, el) => {
+    $('img').each((_, el) => {
       const src = $(el).attr('src') || $(el).attr('data-src');
-      if (src && !pages.includes(src.trim())) pages.push(src.trim());
+      if (src && src.startsWith('http') && !src.includes('logo') && !pages.includes(src.trim())) {
+        pages.push(src.trim());
+      }
     });
     return pages;
   } catch {
@@ -49,15 +57,18 @@ async function fetchMangaPillPages(url: string): Promise<string[]> {
     const res = await fetch(url, {
       headers: { ...BROWSER_HEADERS, Referer: 'https://mangapill.com/' },
       cache: 'no-store',
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return [];
     const html = await res.text();
     const $ = cheerio.load(html);
     const pages: string[] = [];
 
-    $('picture img, img.lazy, .container-reader img').each((_, el) => {
+    $('picture img, img.js-page, .container-reader img').each((_, el) => {
       const src = $(el).attr('data-src') || $(el).attr('src');
-      if (src && !pages.includes(src.trim())) pages.push(src.trim());
+      if (src && src.startsWith('http') && !pages.includes(src.trim())) {
+        pages.push(src.trim());
+      }
     });
     return pages;
   } catch {
@@ -73,10 +84,15 @@ async function fetchComickPages(hid: string): Promise<string[]> {
       const res = await fetch(`${base}/chapter/${hid}`, {
         headers: { ...BROWSER_HEADERS, Referer: 'https://comick.io/' },
         cache: 'no-store',
+        signal: AbortSignal.timeout(7000),
       });
       if (!res.ok) continue;
       const json = await res.json();
-      const images = (json.chapter?.images || []).map((img: { url: string }) => img.url).filter(Boolean);
+      const images = (json.chapter?.images || [])
+        .map((img: { url?: string; b2key?: string }) =>
+          img.url ? img.url : img.b2key ? `https://meo.comick.pictures/${img.b2key}` : null
+        )
+        .filter(Boolean) as string[];
       if (images.length > 0) return images;
     } catch {}
   }
@@ -88,12 +104,15 @@ async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
     const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterDexId}`, {
       headers: BROWSER_HEADERS,
       cache: 'no-store',
+      signal: AbortSignal.timeout(7000),
     });
     if (!res.ok) return [];
     const json = await res.json();
     const baseUrl = json.baseUrl;
     const hash = json.chapter?.hash;
-    return (json.chapter?.data || []).map((f: string) => `${baseUrl}/data/${hash}/${f}`);
+    const files = json.chapter?.data || json.chapter?.dataSaver || [];
+    const mode = json.chapter?.data ? 'data' : 'data-saver';
+    return files.map((f: string) => `${baseUrl}/${mode}/${hash}/${f}`);
   } catch {
     return [];
   }
@@ -117,21 +136,23 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     }
 
     let pages: string[] = Array.isArray(chapter.pages) ? chapter.pages : [];
-    const isValidPages = pages.length > 0 && pages.every((p) => typeof p === 'string' && p.startsWith('http'));
+    const hasResolvedImages =
+      pages.length > 1 ||
+      (pages.length === 1 && /\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i.test(pages[0]));
 
-    if (!isValidPages || (pages.length === 1 && !pages[0].match(/\.(jpg|jpeg|png|webp|avif)/i))) {
+    if (!hasResolvedImages) {
       const source = chapter.source;
-      const extId = chapter.external_id;
+      const extId = chapter.external_id || pages[0] || '';
 
-      if (source === 'weebcentral' && extId) {
+      if (source === 'weebcentral' || extId.includes('weebcentral.com')) {
         pages = await fetchWeebCentralPages(extId);
-      } else if (source === 'mangapill' && extId) {
+      } else if (source === 'mangapill' || extId.includes('mangapill.com')) {
         pages = await fetchMangaPillPages(extId);
-      } else if (source === 'comick' && extId) {
-        const hid = extId.startsWith('comick:') ? extId.replace('comick:', '') : extId;
+      } else if (source === 'comick' || extId.startsWith('comick:')) {
+        const hid = extId.replace('comick:', '').split('/').pop() || '';
         pages = await fetchComickPages(hid);
-      } else if (source === 'mangadex' && extId) {
-        const dexId = extId.startsWith('mangadex:') ? extId.replace('mangadex:', '') : extId;
+      } else if (source === 'mangadex' || extId.startsWith('mangadex:') || extId.includes('mangadex.org')) {
+        const dexId = extId.replace('mangadex:', '').split('/').pop() || '';
         pages = await fetchMangaDexPages(dexId);
       }
 
@@ -143,7 +164,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       }
     }
 
-    const [prevRes, nextRes] = await Promise.all([
+    const [prevRes, nextRes, allChapsRes] = await Promise.all([
       supabaseAdmin
         .from('chapters')
         .select('id, chapter_number')
@@ -151,7 +172,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .lt('chapter_number', chapter.chapter_number)
         .order('chapter_number', { ascending: false })
         .limit(1)
-        .single(),
+        .maybeSingle(),
       supabaseAdmin
         .from('chapters')
         .select('id, chapter_number')
@@ -159,20 +180,33 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .gt('chapter_number', chapter.chapter_number)
         .order('chapter_number', { ascending: true })
         .limit(1)
-        .single(),
+        .maybeSingle(),
+      supabaseAdmin
+        .from('chapters')
+        .select('id, chapter_number')
+        .eq('series_id', chapter.series_id)
+        .order('chapter_number', { ascending: false }),
     ]);
 
-    return NextResponse.json({
-      chapter: {
-        id: chapter.id,
-        series_id: chapter.series_id,
-        chapter_number: chapter.chapter_number,
-        title: chapter.title,
-        source: chapter.source,
-        pages,
-        series: chapter.series,
-        prev_chapter: prevRes.data ? prevRes.data.id : null,
-        next_chapter: nextRes.data ? nextRes.data.id : null,
+    const payload = {
+      id: chapter.id,
+      series_id: chapter.series_id,
+      chapter_number: chapter.chapter_number,
+      title: chapter.title,
+      source: chapter.source,
+      base_url: chapter.base_url,
+      pages,
+      series: chapter.series,
+      prevChapter: prevRes.data || null,
+      nextChapter: nextRes.data || null,
+      allChapters: allChapsRes.data || [],
+    };
+
+    return NextResponse.json(payload, {
+      headers: {
+        'Cache-Control': pages.length > 0
+          ? 'public, s-maxage=3600, stale-while-revalidate=86400'
+          : 'no-store',
       },
     });
   } catch (err: any) {
