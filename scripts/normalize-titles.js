@@ -1,5 +1,6 @@
 // scripts/normalize-titles.js
 import { createClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
@@ -9,7 +10,12 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
+// Pass WebSocket transport explicitly for Node.js < 22 compatibility on GitHub runners
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: false },
+  realtime: { transport: WebSocket }
+});
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Advanced title cleaner: handles Romaji separators, alternative titles, and special chars
