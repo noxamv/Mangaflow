@@ -44,19 +44,22 @@ function parseChapterNumber(text, href) {
   return null;
 }
 
-// 1. Fetch Latest Drops from WeebCentral Front Page
+// 1. Fetch Latest Drops from WeebCentral (Direct HTMX Feed)
 async function fetchWeebCentralLatest() {
   const drops = [];
   try {
-    const res = await fetch('https://weebcentral.com/', { headers: HEADERS });
+    const res = await fetch('https://weebcentral.com/latest-updates', {
+      headers: { ...HEADERS, 'HX-Request': 'true', Referer: 'https://weebcentral.com/' }
+    });
     if (!res.ok) return [];
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    $('article, .latest-updates article, div.flex.flex-col').each((_, el) => {
-      const titleLink = $(el).find('a[href*="/series/"]').first();
+    $('article, a[href*="/series/"]').each((_, el) => {
+      const container = $(el).closest('article, div');
+      const titleLink = container.find('a[href*="/series/"]').first();
       const title = titleLink.text().trim();
-      const chLink = $(el).find('a[href*="/chapters/"]').first();
+      const chLink = container.find('a[href*="/chapters/"]').first();
       const chText = chLink.text().trim();
       const chHref = chLink.attr('href');
 
@@ -78,16 +81,18 @@ async function fetchWeebCentralLatest() {
   return drops;
 }
 
-// 2. Fetch Recent Drops from MangaPill Front Page
+// 2. Fetch Recent Drops from MangaPill
 async function fetchMangaPillRecent() {
   const drops = [];
   try {
-    const res = await fetch('https://mangapill.com/recent', { headers: HEADERS });
+    const res = await fetch('https://mangapill.com/recent', {
+      headers: { ...HEADERS, Referer: 'https://mangapill.com/' }
+    });
     if (!res.ok) return [];
     const html = await res.text();
     const $ = cheerio.load(html);
 
-    $('.grid > div, .space-y-3 > div').each((_, el) => {
+    $('div.grid > div, div.space-y-3 > div').each((_, el) => {
       const titleEl = $(el).find('a[href*="/manga/"]').first();
       const title = titleEl.text().trim();
       const chEl = $(el).find('a[href*="/chapters/"]').first();
@@ -97,13 +102,12 @@ async function fetchMangaPillRecent() {
       if (title && chHref) {
         const chNum = parseChapterNumber(chText, chHref);
         if (chNum !== null) {
-          const fullHref = chHref.startsWith('http') ? chHref : `https://mangapill.com${chHref}`;
           drops.push({
             cleanTitle: cleanTitle(title),
             rawTitle: title,
             chapterNumber: chNum,
             chapterTitle: chText || `Chapter ${chNum}`,
-            externalId: fullHref,
+            externalId: chHref.startsWith('http') ? chHref : `https://mangapill.com${chHref}`,
             source: 'mangapill'
           });
         }
