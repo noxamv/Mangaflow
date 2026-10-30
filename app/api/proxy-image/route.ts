@@ -25,15 +25,38 @@ const ALLOWED_HOSTS = [
   'asuratool.com',
   'anilist.co',
   's4.anilist.co',
-  // MangaFire domains
   'mangafire.to',
   'static.mangafire.to',
   's1.mangafire.to',
   's2.mangafire.to'
 ];
 
+// In-memory rate limiting: 120 image panels per 10 seconds per IP
+const ipRateMap = new Map<string, { count: number; resetTime: number }>();
+
 export async function GET(req: NextRequest) {
   try {
+    const ip =
+      req.headers.get('cf-connecting-ip') ||
+      req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+      'unknown-client';
+    const now = Date.now();
+
+    // Check Rate Limit
+    const record = ipRateMap.get(ip);
+    if (record) {
+      if (now < record.resetTime) {
+        if (record.count > 120) {
+          return new NextResponse('Rate limit exceeded. Too many image requests.', { status: 429 });
+        }
+        record.count++;
+      } else {
+        ipRateMap.set(ip, { count: 1, resetTime: now + 10000 });
+      }
+    } else {
+      ipRateMap.set(ip, { count: 1, resetTime: now + 10000 });
+    }
+
     const { searchParams } = new URL(req.url);
     const imageUrl = searchParams.get('url');
 
@@ -49,7 +72,7 @@ export async function GET(req: NextRequest) {
     const hostname = parsedUrl.hostname.toLowerCase();
     const isAllowed = ALLOWED_HOSTS.some((h) => hostname === h || hostname.endsWith(`.${h}`));
     if (!isAllowed) {
-      return new NextResponse(`Host domain (${hostname}) not in image proxy allowlist`, { status: 403 });
+      return new NextResponse(`Host domain (${hostname}) not permitted`, { status: 403 });
     }
 
     let referer = `${parsedUrl.protocol}//${parsedUrl.host}/`;
@@ -76,7 +99,7 @@ export async function GET(req: NextRequest) {
     });
 
     if (!upstreamRes.ok) {
-      return new NextResponse(`Failed to fetch upstream image: ${upstreamRes.statusText}`, { status: upstreamRes.status });
+      return new NextResponse(`Upstream error: ${upstreamRes.statusText}`, { status: upstreamRes.status });
     }
 
     const contentType = upstreamRes.headers.get('content-type') || 'image/jpeg';
@@ -86,7 +109,8 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=604800, immutable'
+        'Cache-Control': 'public, max-age=604800, immutable',
+        'X-Content-Type-Options': 'nosniff'
       }
     });
   } catch (err: any) {
