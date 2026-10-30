@@ -1,4 +1,3 @@
-// scripts/sync-multi-source.js
 if (typeof globalThis.WebSocket === 'undefined') {
   globalThis.WebSocket = class WebSocket {};
 }
@@ -7,7 +6,11 @@ import { createClient } from '@supabase/supabase-js';
 import * as cheerio from 'cheerio';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('[FATAL] Missing Supabase environment credentials.');
@@ -17,8 +20,9 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9'
 };
 
@@ -57,7 +61,9 @@ function sanitizeChapters(rawChapters, isWebtoon) {
 // 1. WEEBCENTRAL ADAPTER
 async function scrapeWeebCentral(title) {
   try {
-    const searchRes = await fetch(`https://weebcentral.com/search/data?author=&text=${encodeURIComponent(title)}`, { headers: HEADERS });
+    const searchRes = await fetch(`https://weebcentral.com/search/data?author=&text=${encodeURIComponent(title)}`, {
+      headers: HEADERS
+    });
     if (!searchRes.ok) return { chapters: [], platform: 'weebcentral' };
 
     const searchHtml = await searchRes.text();
@@ -103,7 +109,9 @@ async function scrapeWeebCentral(title) {
 // 2. COMICK CLEAN API ADAPTER
 async function scrapeComickClean(title) {
   try {
-    const searchRes = await fetch(`https://api.comick.fun/v1.0/search?q=${encodeURIComponent(title)}&limit=1`, { headers: HEADERS });
+    const searchRes = await fetch(`https://api.comick.fun/v1.0/search?q=${encodeURIComponent(title)}&limit=1`, {
+      headers: HEADERS
+    });
     if (!searchRes.ok) return { chapters: [], platform: 'comick' };
 
     const searchJson = await searchRes.json();
@@ -114,7 +122,10 @@ async function scrapeComickClean(title) {
     const chapters = [];
 
     while (page <= 12) {
-      const chapRes = await fetch(`https://api.comick.fun/comic/${comic.hid}/chapters?lang=en&limit=100&page=${page}`, { headers: HEADERS });
+      const chapRes = await fetch(
+        `https://api.comick.fun/comic/${comic.hid}/chapters?lang=en&limit=100&page=${page}`,
+        { headers: HEADERS }
+      );
       if (!chapRes.ok) break;
 
       const chapJson = await chapRes.json();
@@ -206,7 +217,9 @@ async function scrapeMangaDex(targetUrl, title) {
     mangaId = targetUrl.match(/title\/([a-f0-9-]+)/)?.[1];
   } else if (title) {
     try {
-      const search = await fetch(`https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=1`, { headers: HEADERS });
+      const search = await fetch(`https://api.mangadex.org/manga?title=${encodeURIComponent(title)}&limit=1`, {
+        headers: HEADERS
+      });
       if (search.ok) {
         const json = await search.json();
         mangaId = json.data?.[0]?.id;
@@ -254,7 +267,26 @@ async function scrapeMangaDex(targetUrl, title) {
 function isManhwa(series) {
   if (series.reading_mode === 'webtoon' || series.reading_mode === 'vertical') return true;
   const t = (series.title || '').toLowerCase();
-  const kw = ['solo', 'leveling', 'ranker', 'reincarnat', 'villainess', 'player', 'dungeon', 'tower', 'necromancer', 'cultivat', 'martial', 'murim', 'lookism', 'eleceed', 'omniscient', 'tomb raider king', 'taming master', 'priscilla'];
+  const kw = [
+    'solo',
+    'leveling',
+    'ranker',
+    'reincarnat',
+    'villainess',
+    'player',
+    'dungeon',
+    'tower',
+    'necromancer',
+    'cultivat',
+    'martial',
+    'murim',
+    'lookism',
+    'eleceed',
+    'omniscient',
+    'tomb raider king',
+    'taming master',
+    'priscilla'
+  ];
   return kw.some((k) => t.includes(k));
 }
 
@@ -368,7 +400,7 @@ async function main() {
     return timeA - timeB;
   });
 
-  console.log(`Processing all ${queue.length} series in prioritize-gap order...`);
+  console.log(`Processing all ${queue.length} series in backlog order...`);
 
   for (const s of queue) {
     await resolveSeries(s);
