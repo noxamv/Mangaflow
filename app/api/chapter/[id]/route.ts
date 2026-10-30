@@ -1,4 +1,3 @@
-// app/api/chapter/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import * as cheerio from 'cheerio';
@@ -6,14 +5,18 @@ import * as cheerio from 'cheerio';
 export const dynamic = 'force-dynamic';
 
 const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
 async function fetchWeebCentralPages(url: string): Promise<string[]> {
   try {
-    const res = await fetch(url, { headers: { ...BROWSER_HEADERS, Referer: 'https://weebcentral.com/' }, cache: 'no-store' });
+    const res = await fetch(url, {
+      headers: { ...BROWSER_HEADERS, Referer: 'https://weebcentral.com/' },
+      cache: 'no-store',
+    });
     if (!res.ok) return [];
     const html = await res.text();
     const $ = cheerio.load(html);
@@ -31,7 +34,10 @@ async function fetchWeebCentralPages(url: string): Promise<string[]> {
 
 async function fetchMangaPillPages(url: string): Promise<string[]> {
   try {
-    const res = await fetch(url, { headers: { ...BROWSER_HEADERS, Referer: 'https://mangapill.com/' }, cache: 'no-store' });
+    const res = await fetch(url, {
+      headers: { ...BROWSER_HEADERS, Referer: 'https://mangapill.com/' },
+      cache: 'no-store',
+    });
     if (!res.ok) return [];
     const html = await res.text();
     const $ = cheerio.load(html);
@@ -49,7 +55,10 @@ async function fetchMangaPillPages(url: string): Promise<string[]> {
 
 async function fetchComickPages(hid: string): Promise<string[]> {
   try {
-    const res = await fetch(`https://api.comick.fun/chapter/${hid}`, { headers: BROWSER_HEADERS, cache: 'no-store' });
+    const res = await fetch(`https://api.comick.fun/chapter/${hid}`, {
+      headers: BROWSER_HEADERS,
+      cache: 'no-store',
+    });
     if (!res.ok) return [];
     const json = await res.json();
     return (json.chapter?.images || []).map((img: { url: string }) => img.url).filter(Boolean);
@@ -60,7 +69,10 @@ async function fetchComickPages(hid: string): Promise<string[]> {
 
 async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   try {
-    const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterDexId}`, { headers: BROWSER_HEADERS, cache: 'no-store' });
+    const res = await fetch(`https://api.mangadex.org/at-home/server/${chapterDexId}`, {
+      headers: BROWSER_HEADERS,
+      cache: 'no-store',
+    });
     if (!res.ok) return [];
     const json = await res.json();
     const baseUrl = json.baseUrl;
@@ -78,7 +90,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const { data: chapter, error } = await supabase
       .from('chapters')
-      .select('id, series_id, chapter_number, title, source, external_id, base_url, pages, series:series_id(id, title, slug, cover_url, reading_mode)')
+      .select(
+        'id, series_id, chapter_number, title, source, external_id, base_url, pages, series:series_id(id, title, slug, cover_url, reading_mode)'
+      )
       .eq('id', chapterId)
       .single();
 
@@ -114,9 +128,27 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     }
 
     const [prevRes, nextRes, allChapsRes] = await Promise.all([
-      supabase.from('chapters').select('id, chapter_number').eq('series_id', chapter.series_id).lt('chapter_number', chapter.chapter_number).order('chapter_number', { ascending: false }).limit(1).maybeSingle(),
-      supabase.from('chapters').select('id, chapter_number').eq('series_id', chapter.series_id).gt('chapter_number', chapter.chapter_number).order('chapter_number', { ascending: true }).limit(1).maybeSingle(),
-      supabase.from('chapters').select('id, chapter_number').eq('series_id', chapter.series_id).order('chapter_number', { ascending: true }),
+      supabase
+        .from('chapters')
+        .select('id, chapter_number')
+        .eq('series_id', chapter.series_id)
+        .lt('chapter_number', chapter.chapter_number)
+        .order('chapter_number', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('chapters')
+        .select('id, chapter_number')
+        .eq('series_id', chapter.series_id)
+        .gt('chapter_number', chapter.chapter_number)
+        .order('chapter_number', { ascending: true })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('chapters')
+        .select('id, chapter_number')
+        .eq('series_id', chapter.series_id)
+        .order('chapter_number', { ascending: true }),
     ]);
 
     return NextResponse.json({
