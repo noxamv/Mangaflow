@@ -31,7 +31,6 @@ function cleanTitle(str) {
     .trim();
 }
 
-// 1. ANILIST GRAPHQL
 async function fetchAniListCover(title) {
   const query = `
     query ($search: String) {
@@ -54,7 +53,6 @@ async function fetchAniListCover(title) {
   }
 }
 
-// 2. MANGADEX API FALLBACK
 async function fetchMangaDexCover(title) {
   try {
     const res = await fetch(
@@ -67,22 +65,6 @@ async function fetchMangaDexCover(title) {
     const coverArt = manga?.relationships?.find((r) => r.type === 'cover_art');
     if (coverArt?.attributes?.fileName && manga?.id) {
       return `https://uploads.mangadex.org/covers/${manga.id}/${coverArt.attributes.fileName}.512.jpg`;
-    }
-  } catch {}
-  return null;
-}
-
-// 3. MANGAPILL FALLBACK
-async function fetchMangaPillCover(title) {
-  try {
-    const res = await fetch(`https://mangapill.com/search?q=${encodeURIComponent(cleanTitle(title))}`, {
-      headers: HEADERS
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    const match = html.match(/<img[^>]+src=["']([^"']+)["'][^>]*alt=["'][^"']*["']/i);
-    if (match && match[1]) {
-      return match[1].startsWith('http') ? match[1] : `https://mangapill.com${match[1]}`;
     }
   } catch {}
   return null;
@@ -123,9 +105,6 @@ async function repairCovers() {
     let newCover = await fetchAniListCover(title);
     if (!newCover) {
       newCover = await fetchMangaDexCover(title);
-    }
-    if (!newCover) {
-      newCover = await fetchMangaPillCover(title);
     }
 
     if (newCover) {
