@@ -569,7 +569,7 @@ async function main() {
     return timeA - timeB;
   });
 
-  const batch = queue.slice(0, 40);
+  const batch = queue.slice(0,100);
   console.log(`Auditing top ${batch.length} prioritized series in this sweep...`);
 
   for (const s of batch) {
