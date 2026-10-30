@@ -13,6 +13,7 @@ const ALLOWED_HOSTS = [
   'temp.compsci88.com',
   'comick.fun',
   'comick.io',
+  'comick.cc',
   'comick.pictures',
   'meo.comick.pictures',
   'meo3.comick.pictures',
