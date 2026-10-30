@@ -1,57 +1,136 @@
+// scripts/normalize-titles.js
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
 
-function cleanTitle(str) {
-  if (!str) return '';
-  return str
-    .replace(/[【】\[\]\(\)\{\}★☆～~:!?:_]/g, ' ')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error('[FATAL] Missing Supabase credentials.');
+  process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Advanced title cleaner: handles Romaji separators, alternative titles, and special chars
+function cleanTitleForSearch(titleStr) {
+  if (!titleStr) return '';
+  let cleaned = titleStr
+    // Take only the first primary title if multiple are joined by newlines or weird separators
+    .split(/[\n\r]|[\t]|(?:\s*-\s*){2,}|(?:\s*\|\s*)/)[0]
+    // Remove parentheses/bracket content like alternative titles
+    .replace(/\s*[\(\[].*?[\)\]]/g, '')
+    // Remove special symbols
+    .replace(/[^\w\s-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  return cleaned;
 }
 
-async function runMetadataPass() {
-  console.log('Fetching series requiring metadata enhancement...');
-  const { data: allSeries } = await supabase
+function generateSlug(title) {
+  return (title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+async function fetchAniListMetadata(title) {
+  const searchQuery = cleanTitleForSearch(title);
+  const query = `
+    query ($search: String) {
+      Media (search: $search, type: MANGA) {
+        title { romaji english native }
+        description(asHtml: false)
+        coverImage { extraLarge large }
+        status
+      }
+    }
+  `;
+  try {
+    const res = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ query, variables: { search: searchQuery } })
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const media = json?.data?.Media;
+    if (!media) return null;
+
+    return {
+      englishTitle: media.title?.english || media.title?.romaji || title,
+      description: media.description || null,
+      coverUrl: media.coverImage?.extraLarge || media.coverImage?.large || null,
+      status: media.status === 'FINISHED' ? 'Completed' : 'Ongoing'
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function runNormalizationAndRecovery() {
+  console.log('--- STARTING CATALOG NORMALIZATION & RECOVERY ---');
+
+  const { data: seriesList, error } = await supabase
     .from('series')
-    .select('id, title, slug, english_title, native_title, synonyms')
-    .limit(500);
+    .select('id, title, slug, cover_url, description')
+    .order('created_at', { ascending: false });
 
-  if (!allSeries?.length) return;
+  if (error || !seriesList) {
+    console.error('[DB Error]:', error?.message);
+    return;
+  }
 
-  for (const s of allSeries) {
-    const query = cleanTitle(s.english_title || s.title);
-    try {
-      const res = await fetch(`https://api.comick.io/v1.0/search?q=${encodeURIComponent(query)}&limit=1`);
-      if (!res.ok) continue;
-      const results = await res.json();
-      const meta = results?.[0];
+  console.log(`Auditing and normalizing ${seriesList.length} series...`);
+  let updatedCount = 0;
+
+  for (const s of seriesList) {
+    let needsUpdate = false;
+    const updatePayload = {};
+
+    // 1. Normalize Slug & Title formatting
+    const cleanTitle = (s.title || '').trim();
+    const expectedSlug = generateSlug(cleanTitle);
+    if (s.slug !== expectedSlug) {
+      updatePayload.slug = expectedSlug;
+      needsUpdate = true;
+    }
+
+    // 2. Recover Missing Covers or Bios via AniList (handling Romaji/multilingual fallback)
+    const hasMissingCover = !s.cover_url || s.cover_url.includes('MISSING') || s.cover_url.includes('placeholder');
+    const hasMissingBio = !s.description || s.description.trim() === '';
+
+    if (hasMissingCover || hasMissingBio) {
+      console.log(`[RECOVERING] Fetching metadata for: "${cleanTitle}"`);
+      const meta = await fetchAniListMetadata(cleanTitle);
 
       if (meta) {
-        const english = meta.title || s.english_title;
-        const synonymsList = Array.isArray(meta.md_titles) ? meta.md_titles.map(t => t.title) : [];
-
-        await supabase
-          .from('series')
-          .update({
-            english_title: english,
-            synonyms: synonymsList.length > 0 ? synonymsList : s.synonyms,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', s.id);
-
-        console.log(`Updated: "${s.title}" -> English: "${english}"`);
+        if (hasMissingCover && meta.coverUrl) {
+          updatePayload.cover_url = meta.coverUrl;
+          needsUpdate = true;
+        }
+        if (hasMissingBio && meta.description) {
+          updatePayload.description = meta.description;
+          needsUpdate = true;
+        }
       }
-    } catch (err) {
-      console.error(`Failed on "${s.title}":`, err.message);
+      await delay(600); // Respect AniList rate limit
+    }
+
+    if (needsUpdate && Object.keys(updatePayload).length > 0) {
+      const { error: updateErr } = await supabase
+        .from('series')
+        .update(updatePayload)
+        .eq('id', s.id);
+
+      if (!updateErr) {
+        console.log(`   [UPDATED] Series ID ${s.id} normalized & repaired.`);
+        updatedCount++;
+      }
     }
   }
-  console.log('Metadata pass complete.');
+
+  console.log(`--- NORMALIZATION & RECOVERY COMPLETE: Updated ${updatedCount} series ---`);
 }
 
-runMetadataPass();
+runNormalizationAndRecovery().catch(console.error);
