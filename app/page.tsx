@@ -70,7 +70,7 @@ function SafeImage({ src, alt, className }: { src: string; alt: string; classNam
   );
 }
 
-// Repaired Spotlight Slider (7 Slides, Original Compact Dimensions)
+// 1. REFINED SPOTLIGHT BAR: Badges Up-Left, Read Button Down-Left, Expanded Info Space
 function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const [index, setIndex] = useState(0);
 
@@ -88,55 +88,64 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const displayTitle = current.english_title || current.title;
 
   return (
-    <div className="relative w-full h-[230px] sm:h-[280px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-xl group flex flex-col justify-between">
+    <div className="relative w-full h-[220px] sm:h-[260px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-xl group">
+      {/* Blurred Background Backdrop */}
       <div
         className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700"
         style={{ backgroundImage: `url(${coverUrl})` }}
       />
       <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-black via-black/85 to-black/30 z-10" />
 
-      <div className="relative z-20 w-full h-full p-4 sm:p-6 flex items-center justify-between gap-4">
-        <div className="max-w-[62%] sm:max-w-md space-y-1.5">
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded-lg bg-indigo-500/30 text-indigo-300 border border-indigo-500/40">
+      {/* Main Container */}
+      <div className="relative z-20 w-full h-full p-4 sm:p-5 flex justify-between gap-3">
+        {/* Left Side: Badges Up-Left, Expanded Info Middle, Read Button Down-Left */}
+        <div className="flex flex-col justify-between max-w-[65%] sm:max-w-md h-full z-10">
+          {/* UP LEFT: Spotlight # & Manga/Manhwa Badge */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded bg-indigo-500/30 text-indigo-300 border border-indigo-500/40">
               Spotlight #{index + 1}
             </span>
-            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded-lg bg-black/60 text-neutral-300 border border-white/10">
+            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded bg-black/70 text-neutral-300 border border-white/10">
               {current.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
             </span>
           </div>
 
-          <h2 className="text-base sm:text-xl font-black text-white line-clamp-1 tracking-tight">
-            {displayTitle}
-          </h2>
+          {/* MIDDLE: Maximum Space for Title and Synopsis */}
+          <div className="space-y-1 my-auto py-1">
+            <h2 className="text-sm sm:text-lg font-black text-white line-clamp-1 tracking-tight">
+              {displayTitle}
+            </h2>
+            <p className="text-[10px] sm:text-xs text-neutral-400 line-clamp-2 leading-relaxed">
+              {current.synopsis || 'Read online for free in high definition on MangaFlow.'}
+            </p>
+          </div>
 
-          <p className="text-[10px] sm:text-xs text-neutral-400 line-clamp-2 leading-relaxed">
-            {current.synopsis || 'Read online for free in high definition on MangaFlow.'}
-          </p>
-
-          <div className="pt-1">
+          {/* DOWN LEFT: Read Now Button */}
+          <div>
             <Link
               href={`/series/${current.slug}`}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
+              className="inline-flex items-center gap-1 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg shadow-md transition"
             >
               Read Now →
             </Link>
           </div>
         </div>
 
-        <div className="shrink-0 w-24 sm:w-28 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900">
+        {/* Right Side: Series Poster Cover */}
+        <div className="shrink-0 w-24 sm:w-28 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900 self-center">
           <SafeImage src={coverUrl} alt={displayTitle} className="w-full h-full object-cover" />
         </div>
       </div>
 
-      <div className="relative z-30 pb-2.5 flex items-center justify-center gap-1.5">
+      {/* Slide Navigation Dots */}
+      <div className="absolute bottom-2.5 right-4 z-30 flex items-center gap-1">
         {items.map((_, i) => (
           <button
             key={i}
             type="button"
             onClick={() => setIndex(i)}
             className={`h-1.5 rounded-full transition-all duration-300 ${
-              index === i ? 'w-5 bg-indigo-500' : 'w-1.5 bg-neutral-700/80 hover:bg-neutral-500'
+              index === i ? 'w-4 bg-indigo-500' : 'w-1.5 bg-neutral-700/80 hover:bg-neutral-500'
             }`}
             aria-label={`Slide ${i + 1}`}
           />
@@ -146,6 +155,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   );
 }
 
+// 2. SHARE BAR
 function ShareBar() {
   const [copied, setCopied] = useState(false);
   const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://mangaflow-psi.vercel.app';
@@ -160,7 +170,7 @@ function ShareBar() {
   };
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 bg-[#13151f] border border-neutral-800/80 px-4 py-2.5 rounded-2xl text-xs">
+    <div className="flex flex-wrap items-center justify-between gap-2 bg-[#13151f] border border-neutral-800/80 px-4 py-2 rounded-2xl text-xs">
       <span className="text-[11px] font-semibold text-neutral-400">Share MangaFlow:</span>
       <div className="flex items-center gap-2">
         <a
@@ -217,20 +227,18 @@ export default function HomePage() {
   const [trendingList, setTrendingList] = useState<SeriesItem[]>([]);
   const [latestList, setLatestList] = useState<SeriesItem[]>([]);
   const [popularList, setPopularList] = useState<SeriesItem[]>([]);
-  const [randomList, setRandomList] = useState<SeriesItem[]>([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function loadData() {
       const baseCols = 'id, slug, title, english_title, synopsis, cover_image_url, cover_url, reading_mode';
 
       try {
-        const [featuredRes, trendingRes, latestRes, popularRes] = await Promise.all([
-          supabase.from('series').select(baseCols).order('rating', { ascending: false, nullsFirst: false }).limit(10),
-          // Set to 7 so the Spotlight Slider renders exactly 7 slides
+        const [trendingRes, popRes, latestRes, featuredRes] = await Promise.all([
+          // 7 Slides for Spotlight and Trending
           supabase.from('series').select(baseCols).order('followed_count', { ascending: false, nullsFirst: false }).limit(7),
+          supabase.from('series').select(baseCols).order('rating', { ascending: false, nullsFirst: false }).limit(10),
           supabase.from('series').select(baseCols).order('updated_at', { ascending: false }).limit(10),
-          supabase.from('series').select(baseCols).limit(30),
+          supabase.from('series').select(baseCols).limit(10),
         ]);
 
         const sanitize = (list: any[]): SeriesItem[] =>
@@ -241,24 +249,19 @@ export default function HomePage() {
             english_title: s.english_title,
             synopsis: s.synopsis,
             cover_image_url: s.cover_image_url || s.cover_url,
-            cover_url: s.cover_url,
+            cover_url: s.cover_url || s.cover_image_url,
             reading_mode: s.reading_mode,
           }));
 
-        setFeaturedList(sanitize(featuredRes.data || []));
         setTrendingList(sanitize(trendingRes.data || []));
+        setPopularList(sanitize(popRes.data || []));
         setLatestList(sanitize(latestRes.data || []));
-
-        const pop = sanitize(popularRes.data || []);
-        setPopularList(pop.slice(0, 10));
-        setRandomList(pop.slice(10));
+        setFeaturedList(sanitize(featuredRes.data || []));
       } catch (err) {
         console.error('Data loading error:', err);
-      } finally {
-        setLoading(false);
       }
 
-      // Load Continue Reading from Supabase if logged in, otherwise localStorage
+      // Load Continue Reading
       try {
         const {
           data: { session },
@@ -274,7 +277,7 @@ export default function HomePage() {
             `)
             .eq('user_id', session.user.id)
             .order('updated_at', { ascending: false })
-            .limit(6);
+            .limit(10);
 
           if (hist && hist.length > 0) {
             setContinueReading(
@@ -302,7 +305,7 @@ export default function HomePage() {
         if (local) {
           const parsed = JSON.parse(local);
           if (Array.isArray(parsed)) {
-            setContinueReading(parsed.slice(0, 6));
+            setContinueReading(parsed.slice(0, 10));
           }
         }
       } catch {}
@@ -311,37 +314,45 @@ export default function HomePage() {
     loadData();
   }, []);
 
-  const Row = ({ title, items, color }: { title: string; items: SeriesItem[]; color: string }) => {
+  // 3. HORIZONTAL SCROLL ROW COMPONENT (Matches Continue Reading layout)
+  const HorizontalRow = ({ title, items, color }: { title: string; items: SeriesItem[]; color: string }) => {
     if (!items || items.length === 0) return null;
+
     return (
-      <section className="space-y-3">
+      <section className="space-y-2.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className={`w-1.5 h-4 rounded-full ${color}`} />
-            <h2 className="text-sm font-black uppercase tracking-wider text-white">{title}</h2>
+            <h2 className="text-xs sm:text-sm font-black uppercase tracking-wider text-white">{title}</h2>
           </div>
           <Link href="/filter" className="text-[11px] text-neutral-400 hover:text-white font-medium transition">
             View More →
           </Link>
         </div>
 
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2.5 sm:gap-3">
+        {/* Smooth horizontal scroll row */}
+        <div className="flex gap-2.5 sm:gap-3 overflow-x-auto pb-2 scrollbar-none w-full max-w-full">
           {items.map((item) => {
             const cover = resolveCoverUrl(item);
             const titleText = item.english_title || item.title;
+
             return (
-              <Link key={item.id} href={`/series/${item.slug}`} className="group flex flex-col space-y-1.5">
-                <div className="relative aspect-[3/4.2] rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 shadow-md transition">
+              <Link
+                key={item.id}
+                href={`/series/${item.slug}`}
+                className="shrink-0 w-28 sm:w-36 flex flex-col space-y-1.5 group"
+              >
+                <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 shadow-md transition">
                   <SafeImage
                     src={cover}
                     alt={titleText}
                     className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                   />
-                  <div className="absolute top-1.5 left-1.5">
-                    <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-sm text-neutral-200 border border-white/10">
-                      {item.reading_mode === 'webtoon' ? 'WEBTOON' : 'MANGA'}
+                  {item.reading_mode && (
+                    <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-sm text-neutral-200 border border-white/10">
+                      {item.reading_mode === 'webtoon' ? 'MANHWA' : 'MANGA'}
                     </span>
-                  </div>
+                  )}
                 </div>
                 <h3 className="text-xs font-semibold text-neutral-200 group-hover:text-indigo-400 line-clamp-1 transition">
                   {titleText}
@@ -355,37 +366,35 @@ export default function HomePage() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 lg:px-8 py-5 space-y-7">
-      {/* Spotlight Carousel */}
+    <div className="max-w-7xl mx-auto px-4 lg:px-8 py-4 space-y-6">
+      {/* a. Spotlight Bar */}
       <SpotlightSlider items={trendingList} />
 
-      {/* Share Bar */}
+      {/* b. Share Bar */}
       <ShareBar />
 
-      {/* Continue Reading Shelf */}
+      {/* Continue Reading (Horizontal Scroll) */}
       {continueReading.length > 0 && (
-        <section className="space-y-3">
+        <section className="space-y-2.5">
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-4 rounded-full bg-emerald-500" />
-            <h2 className="text-sm font-black uppercase tracking-wider text-white">Continue Reading</h2>
+            <h2 className="text-xs sm:text-sm font-black uppercase tracking-wider text-white">Continue Reading</h2>
           </div>
 
-          <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
+          <div className="flex gap-2.5 sm:gap-3 overflow-x-auto pb-2 scrollbar-none w-full max-w-full">
             {continueReading.map((item, idx) => {
               const cover = resolveCoverUrl(item.series);
               return (
                 <Link
                   key={idx}
                   href={`/read/${item.chapter_id}`}
-                  className="shrink-0 w-32 group flex flex-col space-y-1.5"
+                  className="shrink-0 w-28 sm:w-36 flex flex-col space-y-1.5 group"
                 >
-                  <div className="relative aspect-[3/4.2] rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-emerald-500/50 transition">
+                  <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-emerald-500/50 shadow-md transition">
                     <SafeImage src={cover} alt={item.series?.title || 'Comic'} className="w-full h-full object-cover" />
-                    <div className="absolute bottom-1.5 right-1.5">
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-black/80 text-emerald-400 border border-emerald-500/30">
-                        Ch. {item.chapter_number}
-                      </span>
-                    </div>
+                    <span className="absolute bottom-1.5 right-1.5 text-[8px] font-black px-1.5 py-0.5 rounded bg-black/80 text-emerald-400 border border-emerald-500/30">
+                      Ch. {item.chapter_number}
+                    </span>
                   </div>
                   <h3 className="text-xs font-semibold text-neutral-200 group-hover:text-emerald-400 line-clamp-1 transition">
                     {item.series?.title}
@@ -397,12 +406,11 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* Catalog Rows */}
-      <Row title="Trending Series" items={trendingList} color="bg-indigo-500" />
-      <Row title="Latest Updates" items={latestList} color="bg-amber-500" />
-      <Row title="Popular Comics" items={popularList} color="bg-rose-500" />
-      <Row title="Recommended For You" items={featuredList} color="bg-cyan-500" />
-      <Row title="More Series" items={randomList} color="bg-purple-500" />
+      {/* c. Horizontal Scroll Rows */}
+      <HorizontalRow title="Trending Series" items={trendingList} color="bg-indigo-500" />
+      <HorizontalRow title="Popular Series" items={popularList} color="bg-amber-500" />
+      <HorizontalRow title="Latest Releases" items={latestList} color="bg-cyan-500" />
+      <HorizontalRow title="Recommended For You" items={featuredList} color="bg-rose-500" />
     </div>
   );
 }
