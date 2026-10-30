@@ -103,7 +103,7 @@ async function fetchAniListMetadata(title) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. WEEBCENTRAL SCRAPER (Full Manhwa/Webtoon Runs)
+// 2. WEEBCENTRAL SCRAPER (Full Manhwa / Webtoon Runs)
 // ---------------------------------------------------------------------------
 async function scrapeWeebCentral(title) {
   try {
@@ -159,7 +159,7 @@ async function scrapeWeebCentral(title) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. COMICK CLEAN API (Scanlation Aggregator via api.comick.dev)
+// 3. COMICK CLEAN API (api.comick.dev)
 // ---------------------------------------------------------------------------
 async function scrapeComick(title) {
   const domains = ['https://api.comick.dev', 'https://api.comick.io', 'https://api.comick.cc'];
@@ -178,7 +178,7 @@ async function scrapeComick(title) {
       let page = 1;
       const chapters = [];
 
-      while (page <= 12) {
+      while (page <= 15) {
         const chapRes = await fetch(`${base}/comic/${comic.hid}/chapters?lang=en&limit=100&page=${page}`, {
           headers: { ...BROWSER_HEADERS, Referer: 'https://comick.dev/' }
         });
@@ -213,7 +213,7 @@ async function scrapeComick(title) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. MANGAPILL SCRAPER (Shonen / Manga / Weekly)
+// 4. MANGAPILL SCRAPER (Shonen / Manga)
 // ---------------------------------------------------------------------------
 async function scrapeMangaPill(targetUrl, title) {
   let url = targetUrl && targetUrl.includes('mangapill.com') ? targetUrl : null;
@@ -399,15 +399,24 @@ async function resolveAndStitchSeries(series) {
     await supabase.from('chapters').upsert(payload.slice(i, i + CHUNK), { onConflict: 'series_id,chapter_number' });
   }
 
-  // 6. Calculate adaptive next scout interval
+  // 6. VOLUME SAFEGUARD FOR COMPLETED SERIES
   const now = Date.now();
   const ONE_DAY = 24 * 60 * 60 * 1000;
-  let nextInterval = ONE_DAY * 2; // Default 2 days for ongoing
-
   const currentStatus = aniMeta?.status || series.status;
-  if (currentStatus === 'Completed') {
+
+  // Only freeze a series if it genuinely holds its complete volume
+  const isActuallyComplete =
+    currentStatus === 'Completed' &&
+    (aniMeta?.officialChapters ? maxCh >= aniMeta.officialChapters - 2 : payload.length >= 25);
+
+  let nextInterval = ONE_DAY * 2; // Default 2 days for ongoing
+  if (isActuallyComplete) {
     const isRecent = intel.completed_at && now - new Date(intel.completed_at).getTime() < 90 * ONE_DAY;
-    nextInterval = isRecent ? ONE_DAY * 7 : ONE_DAY * 30; // 7 days for epilogues, 30 days for archives
+    nextInterval = isRecent ? ONE_DAY * 7 : ONE_DAY * 30; // 7 days for epilogues, 30 days for archived classics
+  } else if (currentStatus === 'Completed') {
+    // Marked completed, but missing chapter volume! Rescan soon to backfill
+    console.log(`  [GAP DETECTED] "${title}" is Completed but only has ${payload.length} chapters. Keeping in active queue.`);
+    nextInterval = ONE_DAY * 1;
   } else if (currentStatus === 'Hiatus') {
     nextInterval = ONE_DAY * 14;
   }
@@ -420,7 +429,7 @@ async function resolveAndStitchSeries(series) {
       latest_known_chapter: maxCh,
       last_scouted_at: new Date().toISOString(),
       next_scout_at: new Date(now + nextInterval).toISOString(),
-      is_complete: currentStatus === 'Completed',
+      is_complete: isActuallyComplete,
       total_official_chapters: aniMeta?.officialChapters || intel.total_official_chapters || null
     })
     .eq('series_id', series.id);
