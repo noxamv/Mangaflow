@@ -1,4 +1,3 @@
-// scripts/sync-recent.js
 if (typeof globalThis.WebSocket === 'undefined') {
   globalThis.WebSocket = class WebSocket {};
 }
@@ -7,7 +6,11 @@ import { createClient } from '@supabase/supabase-js';
 import * as cheerio from 'cheerio';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('[FATAL] Missing Supabase environment credentials.');
@@ -17,8 +20,9 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9'
 };
 
@@ -36,7 +40,7 @@ function slugify(text) {
     .replace(/[\s_-]+/g, '-');
 }
 
-const NOVEL_KEYWORDS = ['novel', 'light novel', 'web novel', '(ln)', '(wn)', 'text'];
+const NOVEL_KEYWORDS = ['novel', 'light novel', 'web novel', '(ln)', '(wn)', 'text', 'raw text'];
 function isNovel(text) {
   const lower = (text || '').toLowerCase();
   return NOVEL_KEYWORDS.some((k) => lower.includes(k));
