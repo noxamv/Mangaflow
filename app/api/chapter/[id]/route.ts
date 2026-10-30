@@ -12,7 +12,6 @@ const supabaseKey =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
   '';
 
-// Server-side administrative client to persist resolved chapter pages safely
 const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
   auth: { persistSession: false },
 });
@@ -67,12 +66,12 @@ async function fetchMangaPillPages(url: string): Promise<string[]> {
 }
 
 async function fetchComickPages(hid: string): Promise<string[]> {
-  const domains = ['https://api.comick.dev', 'https://api.comick.io', 'https://api.comick.cc'];
+  const domains = ['https://api.comick.dev', 'https://api.comick.io', 'https://comick.io'];
 
   for (const base of domains) {
     try {
       const res = await fetch(`${base}/chapter/${hid}`, {
-        headers: { ...BROWSER_HEADERS, Referer: 'https://comick.dev/' },
+        headers: { ...BROWSER_HEADERS, Referer: 'https://comick.io/' },
         cache: 'no-store',
       });
       if (!res.ok) continue;
@@ -120,7 +119,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     let pages: string[] = Array.isArray(chapter.pages) ? chapter.pages : [];
     const isValidPages = pages.length > 0 && pages.every((p) => typeof p === 'string' && p.startsWith('http'));
 
-    // If pages are missing or contain external source route links instead of direct image CDN links, resolve them dynamically
     if (!isValidPages || (pages.length === 1 && !pages[0].match(/\.(jpg|jpeg|png|webp|avif)/i))) {
       const source = chapter.source;
       const extId = chapter.external_id;
@@ -137,7 +135,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         pages = await fetchMangaDexPages(dexId);
       }
 
-      // Persist successfully resolved direct image CDN pages back to database for future speed
       if (pages.length > 0) {
         await supabaseAdmin
           .from('chapters')
@@ -146,7 +143,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       }
     }
 
-    // Fetch adjacent chapters for seamless next/prev navigation in the reader
     const [prevRes, nextRes] = await Promise.all([
       supabaseAdmin
         .from('chapters')
