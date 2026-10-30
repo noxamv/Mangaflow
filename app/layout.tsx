@@ -1,3 +1,4 @@
+// app/layout.tsx
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -58,100 +59,38 @@ export default function RootLayout({
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
-  // Identify Reader Route to Conditionally Hide Global Navigation Chrome
-  const isReadingPage = pathname?.startsWith('/read/');
+  // Hide Navbar & Footer in Reader View
+  const isReaderPage = pathname?.startsWith('/read/');
 
-  // 1. Session Auth Observer
+  // Initial Auth Session Check
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user || null);
-    });
+    async function checkUser() {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      setUser(session?.user ?? null);
+    }
+    checkUser();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user || null);
+      setUser(session?.user ?? null);
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
-
-  // 2. PWA Native Install Interception
-  useEffect(() => {
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      const dismissed = localStorage.getItem('mangaflow_pwa_dismissed');
-      if (!dismissed) {
-        setShowInstallBanner(true);
-      }
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-  }, []);
-
-  const handleInstallPwa = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setShowInstallBanner(false);
-    }
-    setDeferredPrompt(null);
-  };
-
-  const dismissInstallBanner = () => {
-    setShowInstallBanner(false);
-    localStorage.setItem('mangaflow_pwa_dismissed', 'true');
-  };
-
-  // 3. User Notifications Listener & Fetcher
-  useEffect(() => {
-    if (!user) {
-      setNotifications([]);
-      return;
-    }
-
-    async function fetchNotifications() {
-      const { data } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', user?.id)
-        .order('created_at', { ascending: false })
-        .limit(25);
-
-      if (data) setNotifications(data);
-    }
-
-    fetchNotifications();
-
-    const channel = supabase
-      .channel(`realtime:notifications:${user.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload) => {
-          setNotifications((prev) => [payload.new as NotificationItem, ...prev]);
-        }
-      )
-      .subscribe();
-
     return () => {
-      supabase.removeChannel(channel);
+      subscription.unsubscribe();
     };
-  }, [user]);
+  }, []);
 
-  // Outside click listener
+  // Click Outside to Dismiss Panels
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (menuDropdownRef.current && !menuDropdownRef.current.contains(event.target as Node)) {
         setMenuDropdownOpen(false);
+      }
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
+        setSearchOpen(false);
       }
       if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
         setUserMenuOpen(false);
@@ -159,52 +98,14 @@ export default function RootLayout({
       if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
         setNotifOpen(false);
       }
-      if (
-        searchOpen &&
-        searchContainerRef.current &&
-        !searchContainerRef.current.contains(event.target as Node)
-      ) {
-        setSearchOpen(false);
-      }
     }
-
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [searchOpen]);
+  }, []);
 
-  // 4. Live Search logic
+  // Global Keyboard Shortcuts (Ctrl/Cmd + K for Search, Esc to Close)
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      setSearchResults([]);
-      setIsSearching(false);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      setIsSearching(true);
-      const { data } = await supabase
-        .from('series')
-        .select('id, title, slug, cover_url, reading_mode')
-        .ilike('title', `%${searchQuery.trim()}%`)
-        .limit(6);
-
-      setSearchResults(data || []);
-      setIsSearching(false);
-    }, 200);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  // Auto focus on search opening
-  useEffect(() => {
-    if (searchOpen) {
-      searchInputRef.current?.focus();
-    }
-  }, [searchOpen]);
-
-  // Global Keyboard Shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    function handleKeyDown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setSearchOpen((prev) => !prev);
@@ -215,26 +116,76 @@ export default function RootLayout({
         setUserMenuOpen(false);
         setNotifOpen(false);
       }
-    };
-
+    }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  // Focus Input Field When Search Opens
+  useEffect(() => {
+    if (searchOpen) {
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    } else {
+      setSearchQuery('');
+      setSearchResults([]);
+    }
+  }, [searchOpen]);
 
-  const handleMarkAsRead = async (id: string) => {
-    await supabase.from('notifications').update({ read: true }).eq('id', id);
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
+  // Live Catalog Search Debounce
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      const cleanTerm = searchQuery.trim().replace(/['"]/g, '');
+      const { data } = await supabase
+        .from('series')
+        .select('id, title, english_title, slug, cover_image_url, cover_url, reading_mode')
+        .or(`title.ilike.%${cleanTerm}%,english_title.ilike.%${cleanTerm}%`)
+        .limit(6);
+
+      setSearchResults(data || []);
+      setIsSearching(false);
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // PWA Install Prompt Handler
+  useEffect(() => {
+    const handleBeforeInstall = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBanner(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowInstallBanner(false);
+      setDeferredPrompt(null);
+    }
   };
 
-  const handleMarkAllAsRead = async () => {
-    if (!user) return;
-    await supabase.from('notifications').update({ read: true }).eq('user_id', user.id);
+  const handleMarkAllAsRead = () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
+
+  const handleMarkAsRead = (id: string) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+  };
+
+  const unreadCount = notifications.filter((n) => !n.read).length;
 
   const filteredNotifications = notifications.filter((n) => {
     if (notifTab === 'unread') return !n.read;
@@ -243,90 +194,28 @@ export default function RootLayout({
   });
 
   return (
-    <html lang="en" className="dark scroll-smooth overflow-x-hidden">
+    <html lang="en" className="dark bg-[#0a0b0e] text-neutral-100 antialiased selection:bg-indigo-600 selection:text-white">
       <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-        <title>MangaFlow - High Performance Comic Reader</title>
-        <meta name="description" content="Read trending and popular manga, manhwa, and manhua with instant high-speed chapters." />
-        <meta name="referrer" content="no-referrer" />
-        <link rel="manifest" href="/manifest.json" />
-        <meta name="theme-color" content="#0e1015" />
-        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <title>MangaFlow - Read Manga & Manhwa Online</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
       </head>
-
-      <body className="bg-[#0e1015] text-neutral-200 antialiased min-h-screen w-full max-w-full overflow-x-hidden flex flex-col selection:bg-indigo-500/20 selection:text-indigo-300">
+      <body className="min-h-screen flex flex-col font-sans bg-[#0a0b0e] text-neutral-100">
         
-        {/* PWA INSTALL BANNER */}
-        {showInstallBanner && !isReadingPage && (
-          <div className="bg-gradient-to-r from-indigo-950 via-purple-950 to-neutral-900 border-b border-indigo-500/20 px-4 py-2.5 flex items-center justify-between text-xs sticky top-0 z-[60] backdrop-blur-md">
-            <div className="flex items-center gap-3">
-              <span className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">📱</span>
-              <p className="font-medium text-neutral-200">
-                Install <strong className="text-white">MangaFlow</strong> app for the fastest full-screen reading experience.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleInstallPwa}
-                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-[11px] transition shadow-md shadow-indigo-600/30"
-              >
-                Install
-              </button>
-              <button
-                onClick={dismissInstallBanner}
-                className="p-1 text-neutral-400 hover:text-white transition rounded-md"
-                aria-label="Dismiss banner"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* TOP NAVIGATION BAR */}
-        {!isReadingPage && (
+        {/* Render Global Navbar only if not in Reader View */}
+        {!isReaderPage && (
           <header className="sticky top-0 z-50 bg-[#0e1015]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 lg:px-8 py-3 transition-colors">
             <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
               
-              {/* Left: Brand & Menu Trigger */}
-              <div className="flex items-center gap-4">
-                <Link href="/" className="flex items-center gap-2 group">
-                  <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 flex items-center justify-center font-black text-white text-lg shadow-lg shadow-indigo-500/20 group-hover:scale-105 transition-transform">
-                    M
-                  </div>
-                  <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-white via-neutral-100 to-neutral-400 bg-clip-text text-transparent">
-                    MangaFlow
-                  </span>
-                </Link>
-
-                {/* Desktop Global Links */}
-                <nav className="hidden md:flex items-center gap-1 ml-4 text-xs font-semibold text-neutral-400">
-                  <Link href="/" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
-                    Home
-                  </Link>
-                  <Link href="/latest" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
-                    Latest
-                  </Link>
-                  <Link href="/popular" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
-                    Popular
-                  </Link>
-                  <Link href="/trending" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
-                    Trending
-                  </Link>
-                  <Link href="/filter" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
-                    Browse
-                  </Link>
-                </nav>
-
+              {/* Left: Hamburger Menu on FAR LEFT, followed by MangaFlow */}
+              <div className="flex items-center gap-2 sm:gap-3">
                 {/* Mobile / Quick Dropdown Menu Trigger */}
                 <div ref={menuDropdownRef} className="relative md:hidden">
                   <button
                     onClick={() => setMenuDropdownOpen(!menuDropdownOpen)}
-                    className="p-1.5 rounded-lg hover:bg-neutral-800/80 text-neutral-400 hover:text-white transition"
+                    className="p-1.5 rounded-lg hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition flex items-center justify-center"
                     aria-label="Navigation Menu"
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                     </svg>
                   </button>
@@ -371,12 +260,36 @@ export default function RootLayout({
                     </div>
                   )}
                 </div>
+
+                {/* Brand Name (Without the [ M ] box) */}
+                <Link href="/" className="flex items-center gap-1.5 group">
+                  <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-white via-neutral-100 to-neutral-400 bg-clip-text text-transparent group-hover:text-white transition-colors">
+                    MangaFlow
+                  </span>
+                </Link>
+
+                {/* Desktop Global Links */}
+                <nav className="hidden md:flex items-center gap-1 ml-4 text-xs font-semibold text-neutral-400">
+                  <Link href="/" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
+                    Home
+                  </Link>
+                  <Link href="/latest" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
+                    Latest
+                  </Link>
+                  <Link href="/popular" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
+                    Popular
+                  </Link>
+                  <Link href="/trending" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
+                    Trending
+                  </Link>
+                  <Link href="/filter" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
+                    Browse
+                  </Link>
+                </nav>
               </div>
 
               {/* Right: Floating Search Icon, Notifications, Profile / Sign In */}
               <div className="flex items-center gap-2">
-                
-                {/* Floating Search Toggle Button */}
                 <button
                   onClick={() => setSearchOpen(!searchOpen)}
                   className={`p-2 rounded-xl border border-neutral-800/80 transition flex items-center justify-center ${
@@ -411,7 +324,6 @@ export default function RootLayout({
                     )}
                   </button>
 
-                  {/* Notifications Overlay Panel */}
                   {notifOpen && (
                     <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden text-xs">
                       <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
@@ -426,7 +338,6 @@ export default function RootLayout({
                         </div>
                       </div>
 
-                      {/* Filter Tabs */}
                       <div className="flex border-b border-neutral-800 bg-neutral-900/40 text-[11px]">
                         <button
                           onClick={() => setNotifTab('all')}
@@ -583,86 +494,80 @@ export default function RootLayout({
           </header>
         )}
 
-        {/* FLOATING EXPANDABLE SEARCH OVERLAY */}
-        {!isReadingPage && (
-          <div ref={searchContainerRef} className="max-w-7xl mx-auto w-full px-4 lg:px-8 relative z-40">
-            {searchOpen && (
-              <div className="mt-2 w-full max-w-xl mx-auto bg-[#13151f]/95 border border-neutral-800 rounded-2xl p-2 shadow-2xl backdrop-blur-md">
-                <div className="relative flex items-center">
-                  <span className="absolute left-3 text-neutral-500">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                  </span>
-                  <input
-                    ref={searchInputRef}
-                    type="text"
-                    value={searchQuery}
-                    placeholder="Search manga, manhwa, titles..."
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-[#181a24] text-white placeholder-neutral-500 text-xs pl-9 pr-8 py-2 rounded-xl border border-neutral-700/60 focus:outline-none focus:border-indigo-500 transition"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="absolute right-8 text-neutral-400 hover:text-white text-xs px-1"
-                    >
-                      ✕
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setSearchOpen(false)}
-                    className="ml-2 px-2.5 py-1 text-xs text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800/80 transition"
-                  >
-                    Close
-                  </button>
-                </div>
+        {/* Global Floating Search Modal Overlay */}
+        {searchOpen && (
+          <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4">
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSearchOpen(false)} />
+            <div
+              ref={searchContainerRef}
+              className="relative w-full max-w-xl bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden z-10 flex flex-col"
+            >
+              <div className="p-3.5 border-b border-neutral-800 flex items-center gap-2.5">
+                <svg className="w-4 h-4 text-neutral-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  placeholder="Search series title, alternative name..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-transparent text-sm text-white placeholder-neutral-500 focus:outline-none"
+                />
+                <button
+                  onClick={() => setSearchOpen(false)}
+                  className="text-neutral-400 hover:text-white text-xs px-2 py-1 rounded bg-neutral-900 border border-neutral-800 transition"
+                >
+                  ESC
+                </button>
+              </div>
 
-                {/* Floating Live Search Dropdown */}
-                {(isSearching || searchResults.length > 0 || searchQuery.trim()) && (
-                  <div className="mt-2 divide-y divide-neutral-800/50 max-h-72 overflow-y-auto no-scrollbar">
-                    {isSearching ? (
-                      <div className="py-4 text-center text-xs text-neutral-400">Searching...</div>
-                    ) : searchResults.length > 0 ? (
-                      searchResults.map((item) => (
-                        <Link
-                          key={item.id}
-                          href={`/series/${item.slug}`}
-                          onClick={() => setSearchOpen(false)}
-                          className="flex items-center gap-3 p-2 rounded-xl hover:bg-neutral-800/60 transition group"
-                        >
-                          <img
-                            src={item.cover_url || '/placeholder.png'}
-                            alt={item.title}
-                            className="w-8 h-11 object-cover rounded-md flex-shrink-0 bg-neutral-900"
-                          />
-                          <div className="min-w-0">
-                            <h4 className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 truncate">
-                              {item.title}
-                            </h4>
-                            <span className="text-[10px] text-neutral-500 capitalize">
-                              {item.reading_mode || 'Comic'}
-                            </span>
-                          </div>
-                        </Link>
-                      ))
-                    ) : (
-                      <div className="py-4 text-center text-xs text-neutral-500">
-                        No series found matching "{searchQuery}"
-                      </div>
-                    )}
+              <div className="max-h-96 overflow-y-auto divide-y divide-neutral-800/40 p-2">
+                {isSearching ? (
+                  <div className="py-8 text-center text-xs text-neutral-500">Searching catalog...</div>
+                ) : searchResults.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-neutral-500">
+                    {searchQuery.trim() ? 'No series found matching query.' : 'Type to search across indexed titles.'}
                   </div>
+                ) : (
+                  searchResults.map((s) => (
+                    <Link
+                      key={s.id}
+                      href={`/series/${s.slug}`}
+                      onClick={() => setSearchOpen(false)}
+                      className="p-2.5 rounded-xl hover:bg-neutral-800/50 flex items-center gap-3 transition group"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-white group-hover:text-indigo-400 transition truncate">
+                          {s.english_title || s.title}
+                        </p>
+                        <p className="text-[10px] text-neutral-400 capitalize">
+                          {s.reading_mode === 'webtoon' ? 'Webtoon' : 'Manga'}
+                        </p>
+                      </div>
+                    </Link>
+                  ))
                 )}
               </div>
-            )}
+            </div>
           </div>
         )}
 
-        {/* MAIN ROUTE CONTENT */}
-        <div className="flex-1 flex flex-col">{children}</div>
-
-        {/* AUTH MODAL POPUP */}
+        {/* Auth Modal Trigger */}
         <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
+
+        {/* Main Content Area */}
+        <main className="flex-1">{children}</main>
+
+        {/* Global Footer */}
+        {!isReaderPage && (
+          <footer className="border-t border-neutral-800/80 bg-[#090a0d] py-8 px-4 text-center text-xs text-neutral-500">
+            <div className="max-w-7xl mx-auto space-y-2">
+              <p className="font-semibold text-neutral-400">MangaFlow &copy; {new Date().getFullYear()} — Free Online Manga & Manhwa Reader</p>
+              <p className="text-[11px] text-neutral-600">Disclaimer: MangaFlow does not store any files on its servers. All contents are scraped from third-party sources.</p>
+            </div>
+          </footer>
+        )}
       </body>
     </html>
   );
