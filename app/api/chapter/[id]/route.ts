@@ -67,17 +67,21 @@ async function fetchMangaPillPages(url: string): Promise<string[]> {
 }
 
 async function fetchComickPages(hid: string): Promise<string[]> {
-  try {
-    const res = await fetch(`https://api.comick.cc/chapter/${hid}`, {
-      headers: BROWSER_HEADERS,
-      cache: 'no-store',
-    });
-    if (!res.ok) return [];
-    const json = await res.json();
-    return (json.chapter?.images || []).map((img: { url: string }) => img.url).filter(Boolean);
-  } catch {
-    return [];
+  const domains = ['https://api.comick.dev', 'https://api.comick.io', 'https://api.comick.cc'];
+
+  for (const base of domains) {
+    try {
+      const res = await fetch(`${base}/chapter/${hid}`, {
+        headers: { ...BROWSER_HEADERS, Referer: 'https://comick.dev/' },
+        cache: 'no-store',
+      });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const images = (json.chapter?.images || []).map((img: { url: string }) => img.url).filter(Boolean);
+      if (images.length > 0) return images;
+    } catch {}
   }
+  return [];
 }
 
 async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
@@ -109,40 +113,41 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       .eq('id', chapterId)
       .single();
 
-    if (error || !chapter) return NextResponse.json({ error: 'Chapter not found' }, { status: 404 });
+    if (error || !chapter) {
+      return NextResponse.json({ error: 'Chapter not found' }, { status: 404 });
+    }
 
-    let finalPages: string[] = chapter.pages || [];
-    const needsResolution =
-      finalPages.length <= 1 &&
-      (!finalPages[0] ||
-        finalPages[0] === chapter.external_id ||
-        finalPages[0].includes('mangapill.com/chapters') ||
-        finalPages[0].includes('weebcentral.com') ||
-        finalPages[0].includes('mangafire.to') ||
-        !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i));
+    let pages: string[] = Array.isArray(chapter.pages) ? chapter.pages : [];
+    const isValidPages = pages.length > 0 && pages.every((p) => typeof p === 'string' && p.startsWith('http'));
 
-    if (needsResolution) {
-      const targetUrl = chapter.external_id || finalPages[0] || '';
-      const source = chapter.source || '';
+    // If pages are missing or contain external source route links instead of direct image CDN links, resolve them dynamically
+    if (!isValidPages || (pages.length === 1 && !pages[0].match(/\.(jpg|jpeg|png|webp|avif)/i))) {
+      const source = chapter.source;
+      const extId = chapter.external_id;
 
-      if (targetUrl.includes('weebcentral.com')) {
-        finalPages = await fetchWeebCentralPages(targetUrl);
-      } else if (targetUrl.includes('mangapill.com')) {
-        finalPages = await fetchMangaPillPages(targetUrl);
-      } else if (source === 'comick' || targetUrl.includes('comick.')) {
-        const hid = targetUrl.split('/').filter(Boolean).pop() || '';
-        finalPages = await fetchComickPages(hid);
-      } else if (source === 'mangadex' || /^[a-f0-9-]{36}$/.test(targetUrl)) {
-        finalPages = await fetchMangaDexPages(targetUrl);
+      if (source === 'weebcentral' && extId) {
+        pages = await fetchWeebCentralPages(extId);
+      } else if (source === 'mangapill' && extId) {
+        pages = await fetchMangaPillPages(extId);
+      } else if (source === 'comick' && extId) {
+        const hid = extId.startsWith('comick:') ? extId.replace('comick:', '') : extId;
+        pages = await fetchComickPages(hid);
+      } else if (source === 'mangadex' && extId) {
+        const dexId = extId.startsWith('mangadex:') ? extId.replace('mangadex:', '') : extId;
+        pages = await fetchMangaDexPages(dexId);
       }
 
-      if (finalPages.length > 0) {
-        // Cached directly to database with admin rights to prevent repeating scrapes
-        await supabaseAdmin.from('chapters').update({ pages: finalPages }).eq('id', chapterId);
+      // Persist successfully resolved direct image CDN pages back to database for future speed
+      if (pages.length > 0) {
+        await supabaseAdmin
+          .from('chapters')
+          .update({ pages, updated_at: new Date().toISOString() })
+          .eq('id', chapterId);
       }
     }
 
-    const [prevRes, nextRes, allChapsRes] = await Promise.all([
+    // Fetch adjacent chapters for seamless next/prev navigation in the reader
+    const [prevRes, nextRes] = await Promise.all([
       supabaseAdmin
         .from('chapters')
         .select('id, chapter_number')
@@ -150,7 +155,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .lt('chapter_number', chapter.chapter_number)
         .order('chapter_number', { ascending: false })
         .limit(1)
-        .maybeSingle(),
+        .single(),
       supabaseAdmin
         .from('chapters')
         .select('id, chapter_number')
@@ -158,22 +163,23 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .gt('chapter_number', chapter.chapter_number)
         .order('chapter_number', { ascending: true })
         .limit(1)
-        .maybeSingle(),
-      supabaseAdmin
-        .from('chapters')
-        .select('id, chapter_number')
-        .eq('series_id', chapter.series_id)
-        .order('chapter_number', { ascending: true }),
+        .single(),
     ]);
 
     return NextResponse.json({
-      ...chapter,
-      pages: finalPages,
-      prevChapter: prevRes.data || null,
-      nextChapter: nextRes.data || null,
-      allChapters: allChapsRes.data || [],
+      chapter: {
+        id: chapter.id,
+        series_id: chapter.series_id,
+        chapter_number: chapter.chapter_number,
+        title: chapter.title,
+        source: chapter.source,
+        pages,
+        series: chapter.series,
+        prev_chapter: prevRes.data ? prevRes.data.id : null,
+        next_chapter: nextRes.data ? nextRes.data.id : null,
+      },
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json({ error: err?.message || 'Internal Server Error' }, { status: 500 });
   }
 }
