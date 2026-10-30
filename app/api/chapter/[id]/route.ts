@@ -1,3 +1,4 @@
+// app/api/chapter/[id]/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import * as cheerio from 'cheerio';
@@ -83,6 +84,27 @@ async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   }
 }
 
+async function fetchMangaFirePages(url: string): Promise<string[]> {
+  try {
+    const res = await fetch(url, {
+      headers: { ...BROWSER_HEADERS, Referer: 'https://mangafire.to/' },
+      cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const $ = cheerio.load(html);
+    const pages: string[] = [];
+
+    $('div#reader img, .reader-images img, img.page').each((_, el) => {
+      const src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('data-url');
+      if (src && !pages.includes(src.trim())) pages.push(src.trim());
+    });
+    return pages;
+  } catch {
+    return [];
+  }
+}
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const chapterId = params.id;
@@ -105,6 +127,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         finalPages[0] === chapter.external_id ||
         finalPages[0].includes('mangapill.com/chapters') ||
         finalPages[0].includes('weebcentral.com') ||
+        finalPages[0].includes('mangafire.to') ||
         !finalPages[0].match(/\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i));
 
     if (needsResolution) {
@@ -115,6 +138,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         finalPages = await fetchWeebCentralPages(targetUrl);
       } else if (targetUrl.includes('mangapill.com')) {
         finalPages = await fetchMangaPillPages(targetUrl);
+      } else if (targetUrl.includes('mangafire.to')) {
+        finalPages = await fetchMangaFirePages(targetUrl);
       } else if (source === 'comick' || targetUrl.includes('comick.')) {
         const hid = targetUrl.split('/').filter(Boolean).pop() || '';
         finalPages = await fetchComickPages(hid);
