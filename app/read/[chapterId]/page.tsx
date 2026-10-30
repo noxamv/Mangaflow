@@ -149,7 +149,7 @@ export default function ReaderPage() {
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [chapterId]);
 
-  const resolveImageUrl = useCallback(
+    const resolveImageUrl = useCallback(
     (page: string): string => {
       if (!page) return '';
       let fullUrl = page;
@@ -168,8 +168,12 @@ export default function ReaderPage() {
         fullUrl.includes('readdetectiveconan.com') ||
         fullUrl.includes('mangapill.com') ||
         fullUrl.includes('mpcdn.top') ||
+        fullUrl.includes('weebcentral.com') ||
+        fullUrl.includes('compsci88.com') ||
+        fullUrl.includes('comick.pictures') ||
         fullUrl.includes('hivetoons.org') ||
-        fullUrl.includes('asuracomic.net')
+        fullUrl.includes('asuracomic.net') ||
+        fullUrl.includes('mangafire.to')
       ) {
         return `/api/proxy-image?url=${encodeURIComponent(fullUrl)}`;
       }
