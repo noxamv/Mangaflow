@@ -1,3 +1,4 @@
+// scripts/sync-recent.js
 if (typeof globalThis.WebSocket === 'undefined') {
   globalThis.WebSocket = class WebSocket {};
 }
@@ -26,241 +27,151 @@ const HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9'
 };
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 function cleanTitle(title) {
-  return title.replace(/\s+/g, ' ').trim();
-}
-
-function slugify(text) {
-  return text
+  return (title || '')
     .toLowerCase()
     .replace(/[^\w\s-]/g, '')
-    .trim()
-    .replace(/[\s_-]+/g, '-');
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-const NOVEL_KEYWORDS = ['novel', 'light novel', 'web novel', '(ln)', '(wn)', 'text', 'raw text'];
-function isNovel(text) {
-  const lower = (text || '').toLowerCase();
-  return NOVEL_KEYWORDS.some((k) => lower.includes(k));
+function parseChapterNumber(text, href) {
+  const match = text?.match(/chapter\s*([\d.]+)/i) || href?.match(/chapter-([\d.]+)/i);
+  if (match) {
+    const num = parseFloat(match[1]);
+    if (!isNaN(num) && num >= 0 && num <= 4000) return num;
+  }
+  return null;
 }
 
-async function fetchTopMangaDex() {
-  const results = [];
+// 1. Fetch Latest Drops from WeebCentral Front Page
+async function fetchWeebCentralLatest() {
+  const drops = [];
   try {
-    const res = await fetch(
-      'https://api.mangadex.org/manga?order[followedCount]=desc&limit=40&contentRating[]=safe&contentRating[]=suggestive&includes[]=cover_art',
-      { headers: HEADERS }
-    );
+    const res = await fetch('https://weebcentral.com/', { headers: HEADERS });
     if (!res.ok) return [];
-    const json = await res.json();
+    const html = await res.text();
+    const $ = cheerio.load(html);
 
-    for (const item of json.data || []) {
-      const titles = item.attributes?.title || {};
-      const title = titles.en || Object.values(titles)[0];
-      if (!title || isNovel(title)) continue;
+    $('article, .latest-updates article, div.flex.flex-col').each((_, el) => {
+      const titleLink = $(el).find('a[href*="/series/"]').first();
+      const title = titleLink.text().trim();
+      const chLink = $(el).find('a[href*="/chapters/"]').first();
+      const chText = chLink.text().trim();
+      const chHref = chLink.attr('href');
 
-      let coverUrl = null;
-      const coverRel = item.relationships?.find((r) => r.type === 'cover_art');
-      if (coverRel?.attributes?.fileName) {
-        coverUrl = `https://uploads.mangadex.org/covers/${item.id}/${coverRel.attributes.fileName}.512.jpg`;
-      }
-
-      const origLang = item.attributes?.originalLanguage;
-      results.push({
-        title: cleanTitle(title),
-        cover_url: coverUrl,
-        reading_mode: origLang === 'ko' || origLang === 'zh' ? 'webtoon' : 'paged',
-        source: 'mangadex',
-        target_url: `https://mangadex.org/title/${item.id}`,
-        mangaId: item.id
-      });
-    }
-  } catch {}
-  return results;
-}
-
-async function fetchTopManganato() {
-  const results = [];
-  const urls = [
-    'https://natomanga.com/manga-list/topview',
-    'https://manganato.com/genre-all?type=topview'
-  ];
-
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, { headers: HEADERS, redirect: 'follow' });
-      if (!res.ok) continue;
-
-      const html = await res.text();
-      const $ = cheerio.load(html);
-
-      $('.content-genres-item, .list-truyen-item-wrap, .search-story-item').each((_, el) => {
-        const titleEl = $(el).find('h3 a, a.item-title, a.genres-item-name').first();
-        const title = titleEl.text().trim();
-        const href = titleEl.attr('href');
-        const img = $(el).find('img').first().attr('src');
-
-        if (title && href && !isNovel(title)) {
-          results.push({
-            title: cleanTitle(title),
-            cover_url: img || null,
-            reading_mode: href.includes('manhwa') || title.toLowerCase().includes('leveling') ? 'webtoon' : 'paged',
-            source: 'manganato',
-            target_url: href
+      if (title && chHref) {
+        const chNum = parseChapterNumber(chText, chHref);
+        if (chNum !== null) {
+          drops.push({
+            cleanTitle: cleanTitle(title),
+            rawTitle: title,
+            chapterNumber: chNum,
+            chapterTitle: chText || `Chapter ${chNum}`,
+            externalId: chHref.startsWith('http') ? chHref : `https://weebcentral.com${chHref}`,
+            source: 'weebcentral'
           });
         }
-      });
-
-      if (results.length > 0) break;
-    } catch {}
-  }
-  return results;
+      }
+    });
+  } catch {}
+  return drops;
 }
 
-async function ingestDiscoveredChapters(seriesId, targetUrl, source) {
-  const chapters = [];
+// 2. Fetch Recent Drops from MangaPill Front Page
+async function fetchMangaPillRecent() {
+  const drops = [];
+  try {
+    const res = await fetch('https://mangapill.com/recent', { headers: HEADERS });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const $ = cheerio.load(html);
 
-  if (source === 'mangadex' && targetUrl.includes('/title/')) {
-    const mangaId = targetUrl.match(/title\/([a-f0-9-]+)/)?.[1];
-    if (mangaId) {
-      try {
-        const res = await fetch(
-          `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=50&contentRating[]=safe&contentRating[]=suggestive`,
-          { headers: HEADERS }
-        );
-        if (res.ok) {
-          const json = await res.json();
-          for (const item of json.data || []) {
-            const chNum = parseFloat(item.attributes?.chapter);
-            if (!isNaN(chNum) && chNum >= 0 && chNum <= 1500) {
-              chapters.push({
-                series_id: seriesId,
-                chapter_number: chNum,
-                title: item.attributes?.title || `Chapter ${chNum}`,
-                external_id: `mangadex:${item.id}`,
-                pages: [`https://mangadex.org/chapter/${item.id}`],
-                source: 'mangadex',
-                updated_at: new Date().toISOString()
-              });
-            }
-          }
+    $('.grid > div, .space-y-3 > div').each((_, el) => {
+      const titleEl = $(el).find('a[href*="/manga/"]').first();
+      const title = titleEl.text().trim();
+      const chEl = $(el).find('a[href*="/chapters/"]').first();
+      const chText = chEl.text().trim();
+      const chHref = chEl.attr('href');
+
+      if (title && chHref) {
+        const chNum = parseChapterNumber(chText, chHref);
+        if (chNum !== null) {
+          const fullHref = chHref.startsWith('http') ? chHref : `https://mangapill.com${chHref}`;
+          drops.push({
+            cleanTitle: cleanTitle(title),
+            rawTitle: title,
+            chapterNumber: chNum,
+            chapterTitle: chText || `Chapter ${chNum}`,
+            externalId: fullHref,
+            source: 'mangapill'
+          });
         }
-      } catch {}
-    }
-  } else if (source === 'manganato' && targetUrl) {
-    try {
-      const res = await fetch(targetUrl, { headers: HEADERS, redirect: 'follow' });
-      if (res.ok) {
-        const html = await res.text();
-        const $ = cheerio.load(html);
-        $('.row-content-chapter li a.chapter-name, ul.row-content-chapter a').each((_, el) => {
-          const href = $(el).attr('href');
-          const text = $(el).text().trim();
-          const match = text.match(/chapter\s*([\d.]+)/i) || href?.match(/chapter-([\d.]+)/i);
-          if (match && href) {
-            const chNum = parseFloat(match[1]);
-            if (!isNaN(chNum) && chNum >= 0 && chNum <= 1500) {
-              chapters.push({
-                series_id: seriesId,
-                chapter_number: chNum,
-                title: text || `Chapter ${chNum}`,
-                external_id: href,
-                pages: [href],
-                source: 'manganato',
-                updated_at: new Date().toISOString()
-              });
-            }
-          }
-        });
       }
-    } catch {}
-  }
-
-  if (chapters.length > 0) {
-    const CHUNK = 100;
-    for (let i = 0; i < chapters.length; i += CHUNK) {
-      await supabase.from('chapters').upsert(chapters.slice(i, i + CHUNK), { onConflict: 'series_id, chapter_number' });
-    }
-
-    const maxCh = Math.max(...chapters.map((c) => c.chapter_number));
-    await supabase.from('series_intel').upsert(
-      {
-        series_id: seriesId,
-        source_platform: source,
-        target_url: targetUrl,
-        latest_known_chapter: maxCh,
-        last_scouted_at: new Date().toISOString()
-      },
-      { onConflict: 'series_id' }
-    );
-  }
+    });
+  } catch {}
+  return drops;
 }
 
 async function main() {
-  console.log('--- STAGE 1: POPULAR & TRENDING DISCOVERY ---');
+  console.log('--- [RADAR] 30-MINUTE LATEST RELEASES SCAN ---');
 
-  const { data: existingSeries, error } = await supabase.from('series').select('id, title, slug');
-  if (error) {
-    console.error('[DB Error]:', error.message);
+  const { data: ongoingSeries, error } = await supabase
+    .from('series')
+    .select('id, title, slug')
+    .neq('status', 'Completed');
+
+  if (error || !ongoingSeries) {
+    console.error('[DB Error]:', error?.message);
     process.exit(1);
   }
 
-  const titleMap = new Map();
-  const slugSet = new Set();
-
-  for (const s of existingSeries || []) {
-    titleMap.set(s.title.toLowerCase().trim(), s.id);
-    slugSet.add(s.slug);
+  const seriesMap = new Map();
+  for (const s of ongoingSeries) {
+    seriesMap.set(cleanTitle(s.title), s.id);
   }
 
-  const [topDex, topNato] = await Promise.all([fetchTopMangaDex(), fetchTopManganato()]);
-  const candidates = [...topDex, ...topNato];
+  const [weebDrops, pillDrops] = await Promise.all([
+    fetchWeebCentralLatest(),
+    fetchMangaPillRecent()
+  ]);
 
-  let added = 0;
-  let refreshed = 0;
+  const allDrops = [...weebDrops, ...pillDrops];
+  console.log(`Discovered ${allDrops.length} raw releases on front pages.`);
 
-  for (const item of candidates) {
-    const norm = item.title.toLowerCase().trim();
-    let seriesId = titleMap.get(norm);
+  let newIngested = 0;
 
-    if (seriesId) {
-      await ingestDiscoveredChapters(seriesId, item.target_url, item.source);
-      refreshed++;
-      await delay(400);
-      continue;
+  for (const drop of allDrops) {
+    const seriesId = seriesMap.get(drop.cleanTitle);
+    if (!seriesId) continue;
+
+    const { error: upsertErr } = await supabase.from('chapters').upsert(
+      {
+        series_id: seriesId,
+        chapter_number: drop.chapterNumber,
+        title: drop.chapterTitle,
+        external_id: drop.externalId,
+        pages: [drop.externalId],
+        source: drop.source,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'series_id,chapter_number' }
+    );
+
+    if (!upsertErr) {
+      newIngested++;
+      await supabase
+        .from('series_intel')
+        .update({
+          latest_known_chapter: drop.chapterNumber,
+          last_scouted_at: new Date().toISOString(),
+          next_scout_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+        })
+        .eq('series_id', seriesId);
     }
-
-    let slug = slugify(item.title);
-    if (slugSet.has(slug)) {
-      slug = `${slug}-${Date.now().toString().slice(-4)}`;
-    }
-
-    const { data: newRow, error: insertError } = await supabase
-      .from('series')
-      .insert({
-        title: item.title,
-        slug: slug,
-        cover_url: item.cover_url,
-        reading_mode: item.reading_mode,
-        status: 'Ongoing'
-      })
-      .select('id')
-      .single();
-
-    if (insertError || !newRow) continue;
-
-    seriesId = newRow.id;
-    titleMap.set(norm, seriesId);
-    slugSet.add(slug);
-    added++;
-
-    await ingestDiscoveredChapters(seriesId, item.target_url, item.source);
-    await delay(500);
   }
 
-  console.log(`[Discovery Complete] Added: ${added} new titles | Refreshed: ${refreshed} existing releases.`);
+  console.log(`[RADAR COMPLETE] Ingested ${newIngested} new chapters for tracked series.`);
 }
 
 main().catch(console.error);
