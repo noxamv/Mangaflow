@@ -7,6 +7,8 @@ const nextConfig = {
     remotePatterns: [
       { protocol: 'https', hostname: '**.comick.pictures' },
       { protocol: 'https', hostname: '**.comick.cc' },
+      { protocol: 'https', hostname: '**.comick.dev' },
+      { protocol: 'https', hostname: '**.comick.io' },
       { protocol: 'https', hostname: '**.mangadex.org' },
       { protocol: 'https', hostname: '**.mangapill.com' },
       { protocol: 'https', hostname: '**.mpcdn.top' },
