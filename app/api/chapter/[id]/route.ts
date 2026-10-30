@@ -118,6 +118,65 @@ async function fetchMangaDexPages(chapterDexId: string): Promise<string[]> {
   }
 }
 
+// Emergency JSON API Failover: Searches Comick & MangaDex by title + chapter_number if primary HTML scraper fails
+async function emergencyFallbackResolve(seriesTitle: string, chapterNum: number): Promise<{ pages: string[]; source: string } | null> {
+  const clean = seriesTitle.toLowerCase().replace(/[^\w\s-]/g, '').trim();
+
+  // 1. Try Comick JSON API
+  try {
+    const sRes = await fetch(`https://api.comick.dev/v1.0/search?q=${encodeURIComponent(clean)}&limit=1`, {
+      headers: BROWSER_HEADERS,
+      signal: AbortSignal.timeout(6000),
+    });
+    if (sRes.ok) {
+      const sJson = await sRes.json();
+      const hid = sJson?.[0]?.hid;
+      if (hid) {
+        const cRes = await fetch(`https://api.comick.dev/comic/${hid}/chapters?lang=en&chap=${chapterNum}&limit=5`, {
+          headers: BROWSER_HEADERS,
+          signal: AbortSignal.timeout(6000),
+        });
+        if (cRes.ok) {
+          const cJson = await cRes.json();
+          const match = (cJson.chapters || []).find((c: any) => parseFloat(c.chap) === Number(chapterNum));
+          if (match?.hid) {
+            const pages = await fetchComickPages(match.hid);
+            if (pages.length > 0) return { pages, source: 'comick' };
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Try MangaDex JSON API
+  try {
+    const mRes = await fetch(`https://api.mangadex.org/manga?title=${encodeURIComponent(clean)}&limit=1`, {
+      headers: BROWSER_HEADERS,
+      signal: AbortSignal.timeout(6000),
+    });
+    if (mRes.ok) {
+      const mJson = await mRes.json();
+      const mangaId = mJson?.data?.[0]?.id;
+      if (mangaId) {
+        const fRes = await fetch(
+          `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&chapter=${chapterNum}&limit=5`,
+          { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(6000) }
+        );
+        if (fRes.ok) {
+          const fJson = await fRes.json();
+          const chId = fJson?.data?.[0]?.id;
+          if (chId) {
+            const pages = await fetchMangaDexPages(chId);
+            if (pages.length > 0) return { pages, source: 'mangadex' };
+          }
+        }
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const chapterId = params.id;
@@ -136,30 +195,41 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     }
 
     let pages: string[] = Array.isArray(chapter.pages) ? chapter.pages : [];
+    let resolvedSource = chapter.source;
+
     const hasResolvedImages =
       pages.length > 1 ||
       (pages.length === 1 && /\.(jpg|jpeg|png|webp|avif)(\?.*)?$/i.test(pages[0]));
 
     if (!hasResolvedImages) {
-      const source = chapter.source;
       const extId = chapter.external_id || pages[0] || '';
 
-      if (source === 'weebcentral' || extId.includes('weebcentral.com')) {
+      if (resolvedSource === 'weebcentral' || extId.includes('weebcentral.com')) {
         pages = await fetchWeebCentralPages(extId);
-      } else if (source === 'mangapill' || extId.includes('mangapill.com')) {
+      } else if (resolvedSource === 'mangapill' || extId.includes('mangapill.com')) {
         pages = await fetchMangaPillPages(extId);
-      } else if (source === 'comick' || extId.startsWith('comick:')) {
+      } else if (resolvedSource === 'comick' || extId.startsWith('comick:')) {
         const hid = extId.replace('comick:', '').split('/').pop() || '';
         pages = await fetchComickPages(hid);
-      } else if (source === 'mangadex' || extId.startsWith('mangadex:') || extId.includes('mangadex.org')) {
+      } else if (resolvedSource === 'mangadex' || extId.startsWith('mangadex:') || extId.includes('mangadex.org')) {
         const dexId = extId.replace('mangadex:', '').split('/').pop() || '';
         pages = await fetchMangaDexPages(dexId);
+      }
+
+      // If primary scraper failed due to upstream DOM change or Cloudflare block, auto-failover to JSON APIs
+      const seriesObj = Array.isArray(chapter.series) ? chapter.series[0] : chapter.series;
+      if (pages.length === 0 && seriesObj?.title) {
+        const fallback = await emergencyFallbackResolve(seriesObj.title, Number(chapter.chapter_number));
+        if (fallback) {
+          pages = fallback.pages;
+          resolvedSource = fallback.source;
+        }
       }
 
       if (pages.length > 0) {
         await supabaseAdmin
           .from('chapters')
-          .update({ pages, updated_at: new Date().toISOString() })
+          .update({ pages, source: resolvedSource, updated_at: new Date().toISOString() })
           .eq('id', chapterId);
       }
     }
@@ -188,27 +258,28 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         .order('chapter_number', { ascending: false }),
     ]);
 
-    const payload = {
-      id: chapter.id,
-      series_id: chapter.series_id,
-      chapter_number: chapter.chapter_number,
-      title: chapter.title,
-      source: chapter.source,
-      base_url: chapter.base_url,
-      pages,
-      series: chapter.series,
-      prevChapter: prevRes.data || null,
-      nextChapter: nextRes.data || null,
-      allChapters: allChapsRes.data || [],
-    };
-
-    return NextResponse.json(payload, {
-      headers: {
-        'Cache-Control': pages.length > 0
-          ? 'public, s-maxage=3600, stale-while-revalidate=86400'
-          : 'no-store',
+    return NextResponse.json(
+      {
+        id: chapter.id,
+        series_id: chapter.series_id,
+        chapter_number: chapter.chapter_number,
+        title: chapter.title,
+        source: resolvedSource,
+        base_url: chapter.base_url,
+        pages,
+        series: chapter.series,
+        prevChapter: prevRes.data || null,
+        nextChapter: nextRes.data || null,
+        allChapters: allChapsRes.data || [],
       },
-    });
+      {
+        headers: {
+          'Cache-Control': pages.length > 0
+            ? 'public, s-maxage=3600, stale-while-revalidate=86400'
+            : 'no-store',
+        },
+      }
+    );
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || 'Internal Server Error' }, { status: 500 });
   }
