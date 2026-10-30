@@ -39,31 +39,40 @@ function slugify(text) {
     .replace(/[\s_-]+/g, '-');
 }
 
-// ============================================================================
-// 1. ADAPTER: MANGANATO / CHAPMANGANATO (Covers Manhwa, Manhua, and Manga)
-// ============================================================================
+// 1. MANGANATO / CHAPMANGANATO / NATOMANGA ADAPTER
 async function scrapeManganato(seriesTitle) {
   try {
     const cleanQuery = seriesTitle.replace(/[^\w\s]/g, '').trim().replace(/\s+/g, '_');
-    const searchUrl = `https://manganato.com/search/story/${encodeURIComponent(cleanQuery)}`;
-    
-    const searchRes = await fetch(searchUrl, { headers: HEADERS });
-    if (!searchRes.ok) return { chapters: [], platform: 'manganato' };
+    const searchUrls = [
+      `https://natomanga.com/search/story/${encodeURIComponent(cleanQuery)}`,
+      `https://manganato.com/search/story/${encodeURIComponent(cleanQuery)}`,
+      `https://chapmanganato.to/search/story/${encodeURIComponent(cleanQuery)}`
+    ];
 
-    const searchHtml = await searchRes.text();
-    const $s = cheerio.load(searchHtml);
-    
-    let storyUrl = $s('.search-story-item a.item-title, .panel-search-story .item-title').first().attr('href');
+    let storyUrl = null;
+
+    for (const sUrl of searchUrls) {
+      try {
+        const searchRes = await fetch(sUrl, { headers: HEADERS, redirect: 'follow' });
+        if (searchRes.ok) {
+          const searchHtml = await searchRes.text();
+          const $s = cheerio.load(searchHtml);
+          storyUrl = $s('.search-story-item a.item-title, .panel-search-story .item-title, a.item-title').first().attr('href');
+          if (storyUrl) break;
+        }
+      } catch {}
+    }
+
     if (!storyUrl) return { chapters: [], platform: 'manganato' };
 
-    const storyRes = await fetch(storyUrl, { headers: HEADERS });
+    const storyRes = await fetch(storyUrl, { headers: HEADERS, redirect: 'follow' });
     if (!storyRes.ok) return { chapters: [], platform: 'manganato' };
 
     const storyHtml = await storyRes.text();
     const $ = cheerio.load(storyHtml);
     const chapters = [];
 
-    $('.row-content-chapter li a.chapter-name, ul.row-content-chapter a').each((_, el) => {
+    $('.row-content-chapter li a.chapter-name, ul.row-content-chapter a, .chapter-name').each((_, el) => {
       const href = $(el).attr('href');
       const text = $(el).text().trim();
       const match = text.match(/chapter\s*([\d.]+)/i) || href?.match(/chapter-([\d.]+)/i);
@@ -90,9 +99,7 @@ async function scrapeManganato(seriesTitle) {
   return { chapters: [], platform: 'manganato' };
 }
 
-// ============================================================================
-// 2. ADAPTER: MANGACLASH / MADARA SCANS (Aggregates Asura/Reaper webtoons)
-// ============================================================================
+// 2. MANGACLASH / TOONILY (MADARA SCANS MIRROR)
 async function scrapeMangaClash(seriesTitle) {
   try {
     const slug = slugify(seriesTitle);
@@ -102,33 +109,35 @@ async function scrapeMangaClash(seriesTitle) {
     ];
 
     for (const url of candidateUrls) {
-      const res = await fetch(url, { headers: HEADERS });
-      if (!res.ok) continue;
+      try {
+        const res = await fetch(url, { headers: HEADERS, redirect: 'follow' });
+        if (!res.ok) continue;
 
-      const html = await res.text();
-      const $ = cheerio.load(html);
-      const chapters = [];
+        const html = await res.text();
+        const $ = cheerio.load(html);
+        const chapters = [];
 
-      $('.wp-manga-chapter a, li.wp-manga-chapter a').each((_, el) => {
-        const href = $(el).attr('href');
-        const text = $(el).text().trim();
-        const match = text.match(/chapter\s*([\d.]+)/i) || href?.match(/chapter-([\d.]+)/i);
-        if (match && href) {
-          const chNum = parseFloat(match[1]);
-          if (!isNaN(chNum)) {
-            chapters.push({
-              chapter_number: chNum,
-              title: text || `Chapter ${chNum}`,
-              external_id: href,
-              pages: [href]
-            });
+        $('.wp-manga-chapter a, li.wp-manga-chapter a').each((_, el) => {
+          const href = $(el).attr('href');
+          const text = $(el).text().trim();
+          const match = text.match(/chapter\s*([\d.]+)/i) || href?.match(/chapter-([\d.]+)/i);
+          if (match && href) {
+            const chNum = parseFloat(match[1]);
+            if (!isNaN(chNum)) {
+              chapters.push({
+                chapter_number: chNum,
+                title: text || `Chapter ${chNum}`,
+                external_id: href,
+                pages: [href]
+              });
+            }
           }
-        }
-      });
+        });
 
-      if (chapters.length > 0) {
-        return { chapters, resolvedUrl: url, platform: url.includes('toonily') ? 'toonily' : 'mangaclash' };
-      }
+        if (chapters.length > 0) {
+          return { chapters, resolvedUrl: url, platform: url.includes('toonily') ? 'toonily' : 'mangaclash' };
+        }
+      } catch {}
     }
   } catch (err) {
     console.log(`  [MangaClash Error]: ${err.message}`);
@@ -136,9 +145,7 @@ async function scrapeMangaClash(seriesTitle) {
   return { chapters: [], platform: 'mangaclash' };
 }
 
-// ============================================================================
-// 3. ADAPTER: MANGADEX API
-// ============================================================================
+// 3. MANGADEX API ADAPTER
 async function scrapeMangaDex(targetUrl, seriesTitle) {
   let mangaId = null;
   if (targetUrl?.includes('mangadex.org/title/')) {
@@ -189,9 +196,7 @@ async function scrapeMangaDex(targetUrl, seriesTitle) {
   return { chapters, resolvedUrl: `https://mangadex.org/title/${mangaId}`, platform: 'mangadex' };
 }
 
-// ============================================================================
-// 4. ADAPTER: MANGAPILL
-// ============================================================================
+// 4. MANGAPILL ADAPTER
 async function scrapeMangaPill(targetUrl, seriesTitle) {
   let url = targetUrl;
   if (!url || !url.includes('mangapill.com')) {
@@ -240,9 +245,7 @@ async function scrapeMangaPill(targetUrl, seriesTitle) {
   }
 }
 
-// ============================================================================
-// 5. WATERFALL ORCHESTRATION WITH PRIORITY
-// ============================================================================
+// 5. ROUTING & INGESTION
 function isManhwaOrManhua(series) {
   if (series.reading_mode === 'webtoon' || series.reading_mode === 'vertical') {
     return true;
@@ -271,37 +274,14 @@ async function resolveAndIngestSeries(series) {
   let result = { chapters: [], resolvedUrl: targetUrl, platform: '' };
 
   if (isWebtoon) {
-    // 1. Manganato (Top hit for full Manhwa chapter runs)
     result = await scrapeManganato(title);
-
-    // 2. MangaClash / Toonily (Madara Scans mirror)
-    if (result.chapters.length === 0) {
-      result = await scrapeMangaClash(title);
-    }
-
-    // 3. MangaDex
-    if (result.chapters.length === 0) {
-      result = await scrapeMangaDex(targetUrl, title);
-    }
-
-    // 4. MangaPill
-    if (result.chapters.length === 0) {
-      result = await scrapeMangaPill(targetUrl, title);
-    }
+    if (result.chapters.length === 0) result = await scrapeMangaClash(title);
+    if (result.chapters.length === 0) result = await scrapeMangaDex(targetUrl, title);
+    if (result.chapters.length === 0) result = await scrapeMangaPill(targetUrl, title);
   } else {
-    // MANGA LANE
-    // 1. MangaPill (Primary manga mirror)
     result = await scrapeMangaPill(targetUrl, title);
-
-    // 2. MangaDex
-    if (result.chapters.length === 0) {
-      result = await scrapeMangaDex(targetUrl, title);
-    }
-
-    // 3. Manganato fallback
-    if (result.chapters.length === 0) {
-      result = await scrapeManganato(title);
-    }
+    if (result.chapters.length === 0) result = await scrapeMangaDex(targetUrl, title);
+    if (result.chapters.length === 0) result = await scrapeManganato(title);
   }
 
   if (result.chapters.length === 0) {
@@ -350,20 +330,29 @@ async function resolveAndIngestSeries(series) {
 }
 
 async function main() {
-  console.log('--- STARTING MULTI-SOURCE SYNC WITH MANGANATO & SCANS ---');
+  console.log('--- STARTING COMPLETE BACKLOG AUDIT & SYNC ---');
 
+  // Pull up to 2,000 series so entire catalog is included
   const { data: queue, error } = await supabase
     .from('series')
     .select('id, title, reading_mode, series_intel(source_platform, target_url, last_scouted_at)')
-    .order('created_at', { ascending: false })
-    .limit(500);
+    .limit(2000);
 
   if (error || !queue) {
     console.error('Failed to fetch queue:', error?.message);
     process.exit(1);
   }
 
-  console.log(`Processing ${queue.length} series...`);
+  // Backlog prioritization: Unscouted / reset series first, then oldest scouted
+  queue.sort((a, b) => {
+    const intelA = Array.isArray(a.series_intel) ? a.series_intel[0] : a.series_intel;
+    const intelB = Array.isArray(b.series_intel) ? b.series_intel[0] : b.series_intel;
+    const timeA = intelA?.last_scouted_at ? new Date(intelA.last_scouted_at).getTime() : 0;
+    const timeB = intelB?.last_scouted_at ? new Date(intelB.last_scouted_at).getTime() : 0;
+    return timeA - timeB;
+  });
+
+  console.log(`Auditing all ${queue.length} series in prioritize-gap order...`);
 
   for (const series of queue) {
     await resolveAndIngestSeries(series);
