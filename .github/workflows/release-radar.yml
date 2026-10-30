@@ -2,7 +2,6 @@ name: MangaFlow Fast Release Radar (30-Min)
 
 on:
   schedule:
-    # Triggers every 30 minutes
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
@@ -23,9 +22,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci || npm install
 
       - name: Execute Fast Release Radar
         env:
