@@ -59,18 +59,18 @@ export default function RootLayout({
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
 
-  // Hide Navbar & Footer in Reader View
-  const isReaderPage = pathname?.startsWith('/read/');
+  // Identify Reader Route to Conditionally Hide Global Navbar
+  const isReadingPage = pathname ? pathname.startsWith('/read/') : false;
 
-  // Initial Auth Session Check
+  // 1. Initial Auth Session Check
   useEffect(() => {
-    async function checkUser() {
+    async function checkAuth() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
       setUser(session?.user ?? null);
     }
-    checkUser();
+    checkAuth();
 
     const {
       data: { subscription },
@@ -83,29 +83,146 @@ export default function RootLayout({
     };
   }, []);
 
+  // 2. Fetch Notifications
+  useEffect(() => {
+    if (!user) {
+      setNotifications([]);
+      return;
+    }
+
+    async function loadNotifications() {
+      const { data } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', user!.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (data) {
+        setNotifications(data);
+      }
+    }
+
+    loadNotifications();
+
+    const channel = supabase
+      .channel('realtime_user_notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          setNotifications((prev) => [payload.new as NotificationItem, ...prev]);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
+  // 3. PWA Install Event Handler
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      const dismissed = localStorage.getItem('mangaflow_pwa_dismissed');
+      if (!dismissed) {
+        setShowInstallBanner(true);
+      }
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
+
+  const handleInstallPwa = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowInstallBanner(false);
+      setDeferredPrompt(null);
+    }
+  };
+
+  const dismissInstallBanner = () => {
+    setShowInstallBanner(false);
+    localStorage.setItem('mangaflow_pwa_dismissed', 'true');
+  };
+
   // Click Outside to Dismiss Panels
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (menuDropdownRef.current && !menuDropdownRef.current.contains(event.target as Node)) {
+      if (
+        menuDropdownRef.current &&
+        !menuDropdownRef.current.contains(event.target as Node)
+      ) {
         setMenuDropdownOpen(false);
       }
-      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
-        setSearchOpen(false);
-      }
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+      if (
+        userMenuRef.current &&
+        !userMenuRef.current.contains(event.target as Node)
+      ) {
         setUserMenuOpen(false);
       }
-      if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
+      if (
+        notifRef.current &&
+        !notifRef.current.contains(event.target as Node)
+      ) {
         setNotifOpen(false);
       }
+      if (
+        searchOpen &&
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(event.target as Node)
+      ) {
+        setSearchOpen(false);
+      }
     }
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [searchOpen]);
 
-  // Global Keyboard Shortcuts (Ctrl/Cmd + K for Search, Esc to Close)
+  // 4. Live Search logic
   useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      const { data } = await supabase
+        .from('series')
+        .select('id, title, slug, cover_url, reading_mode')
+        .ilike('title', `%${searchQuery.trim()}%`)
+        .limit(6);
+
+      setSearchResults(data || []);
+      setIsSearching(false);
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Auto focus on search opening
+  useEffect(() => {
+    if (searchOpen) {
+      searchInputRef.current?.focus();
+    }
+  }, [searchOpen]);
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setSearchOpen((prev) => !prev);
@@ -116,76 +233,26 @@ export default function RootLayout({
         setUserMenuOpen(false);
         setNotifOpen(false);
       }
-    }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Focus Input Field When Search Opens
-  useEffect(() => {
-    if (searchOpen) {
-      setTimeout(() => searchInputRef.current?.focus(), 50);
-    } else {
-      setSearchQuery('');
-      setSearchResults([]);
-    }
-  }, [searchOpen]);
+  const unreadCount = notifications.filter((n) => !n.read).length;
 
-  // Live Catalog Search Debounce
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setSearchResults([]);
-      setIsSearching(false);
-      return;
-    }
-
-    const timer = setTimeout(async () => {
-      setIsSearching(true);
-      const cleanTerm = searchQuery.trim().replace(/['"]/g, '');
-      const { data } = await supabase
-        .from('series')
-        .select('id, title, english_title, slug, cover_image_url, cover_url, reading_mode')
-        .or(`title.ilike.%${cleanTerm}%,english_title.ilike.%${cleanTerm}%`)
-        .limit(6);
-
-      setSearchResults(data || []);
-      setIsSearching(false);
-    }, 250);
-
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  // PWA Install Prompt Handler
-  useEffect(() => {
-    const handleBeforeInstall = (e: any) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setShowInstallBanner(true);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
-  }, []);
-
-  const handleInstallApp = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setShowInstallBanner(false);
-      setDeferredPrompt(null);
-    }
+  const handleMarkAsRead = async (id: string) => {
+    await supabase.from('notifications').update({ read: true }).eq('id', id);
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+    );
   };
 
-  const handleMarkAllAsRead = () => {
+  const handleMarkAllAsRead = async () => {
+    if (!user) return;
+    await supabase.from('notifications').update({ read: true }).eq('user_id', user.id);
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
-
-  const handleMarkAsRead = (id: string) => {
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
-  };
-
-  const unreadCount = notifications.filter((n) => !n.read).length;
 
   const filteredNotifications = notifications.filter((n) => {
     if (notifTab === 'unread') return !n.read;
@@ -194,25 +261,59 @@ export default function RootLayout({
   });
 
   return (
-    <html lang="en" className="dark bg-[#0a0b0e] text-neutral-100 antialiased selection:bg-indigo-600 selection:text-white">
+    <html lang="en" className="dark scroll-smooth overflow-x-hidden">
       <head>
-        <title>MangaFlow - Read Manga & Manhwa Online</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+        <meta charSet="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+        <title>MangaFlow - High Performance Comic Reader</title>
+        <meta name="description" content="Read trending and popular manga, manhwa, and manhua with instant high-speed chapters." />
+        <meta name="referrer" content="no-referrer" />
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#0e1015" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </head>
-      <body className="min-h-screen flex flex-col font-sans bg-[#0a0b0e] text-neutral-100">
+
+      <body className="bg-[#0e1015] text-neutral-200 antialiased min-h-screen w-full max-w-full overflow-x-hidden flex flex-col selection:bg-indigo-500/20 selection:text-indigo-300">
         
-        {/* Render Global Navbar only if not in Reader View */}
-        {!isReaderPage && (
+        {/* PWA INSTALL BANNER */}
+        {showInstallBanner && !isReadingPage && (
+          <div className="bg-gradient-to-r from-indigo-950 via-purple-950 to-neutral-900 border-b border-indigo-500/20 px-4 py-2.5 flex items-center justify-between text-xs sticky top-0 z-[60] backdrop-blur-md">
+            <div className="flex items-center gap-3">
+              <span className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">📱</span>
+              <p className="font-medium text-neutral-200">
+                Install <strong className="text-white">MangaFlow</strong> app for the fastest full-screen reading experience.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleInstallPwa}
+                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-[11px] transition shadow-md shadow-indigo-600/30"
+              >
+                Install
+              </button>
+              <button
+                onClick={dismissInstallBanner}
+                className="p-1 text-neutral-400 hover:text-white transition rounded-md"
+                aria-label="Dismiss banner"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* TOP NAVIGATION BAR */}
+        {!isReadingPage && (
           <header className="sticky top-0 z-50 bg-[#0e1015]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 lg:px-8 py-3 transition-colors">
             <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
               
-              {/* Left: Mobile Menu Trigger on FAR LEFT, followed by MangaFlow Logo */}
-              <div className="flex items-center gap-2 sm:gap-3">
-                {/* Mobile Hamburger Menu on the FAR LEFT */}
+              {/* Left: Mobile Menu on FAR LEFT, followed by MangaFlow */}
+              <div className="flex items-center gap-2 sm:gap-4">
+                {/* Mobile / Quick Dropdown Menu Trigger on the FAR LEFT */}
                 <div ref={menuDropdownRef} className="relative md:hidden">
                   <button
                     onClick={() => setMenuDropdownOpen(!menuDropdownOpen)}
-                    className="p-1.5 rounded-lg hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition flex items-center justify-center"
+                    className="p-1.5 rounded-lg hover:bg-neutral-800/80 text-neutral-400 hover:text-white transition"
                     aria-label="Navigation Menu"
                   >
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -262,13 +363,13 @@ export default function RootLayout({
                 </div>
 
                 {/* Brand Name (Without the purple [ M ] box) */}
-                <Link href="/" className="flex items-center gap-1.5 group">
+                <Link href="/" className="flex items-center gap-2 group">
                   <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-white via-neutral-100 to-neutral-400 bg-clip-text text-transparent group-hover:text-white transition-colors">
                     MangaFlow
                   </span>
                 </Link>
 
-                {/* Desktop Navigation Links */}
+                {/* Desktop Global Links */}
                 <nav className="hidden md:flex items-center gap-1 ml-4 text-xs font-semibold text-neutral-400">
                   <Link href="/" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
                     Home
@@ -290,6 +391,8 @@ export default function RootLayout({
 
               {/* Right: Floating Search Icon, Notifications, Profile / Sign In */}
               <div className="flex items-center gap-2">
+                
+                {/* Floating Search Toggle Button */}
                 <button
                   onClick={() => setSearchOpen(!searchOpen)}
                   className={`p-2 rounded-xl border border-neutral-800/80 transition flex items-center justify-center ${
@@ -324,18 +427,22 @@ export default function RootLayout({
                     )}
                   </button>
 
+                  {/* Notifications Overlay Panel */}
                   {notifOpen && (
                     <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden text-xs">
                       <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
                         <span className="font-bold text-white">Notifications</span>
-                        <button
-                          onClick={handleMarkAllAsRead}
-                          className="text-[10px] text-indigo-400 hover:underline font-semibold"
-                        >
-                          Mark all read
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={handleMarkAllAsRead}
+                            className="text-[10px] text-indigo-400 hover:underline font-semibold"
+                          >
+                            Mark all read
+                          </button>
+                        </div>
                       </div>
 
+                      {/* Filter Tabs */}
                       <div className="flex border-b border-neutral-800 bg-neutral-900/40 text-[11px]">
                         <button
                           onClick={() => setNotifTab('all')}
@@ -492,97 +599,83 @@ export default function RootLayout({
           </header>
         )}
 
-        {/* Global Floating Search Modal Overlay */}
+        {/* FLOATING EXPANDED SEARCH OVERLAY */}
         {searchOpen && (
-          <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4">
-            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setSearchOpen(false)} />
+          <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
             <div
               ref={searchContainerRef}
-              className="relative w-full max-w-xl bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden z-10 flex flex-col"
+              className="w-full max-w-2xl bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
             >
-              <div className="p-3.5 border-b border-neutral-800 flex items-center gap-2.5">
-                <svg className="w-4 h-4 text-neutral-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
+              <div className="flex items-center px-4 py-3 border-b border-neutral-800 gap-3">
+                <span className="text-neutral-400 text-sm">🔍</span>
                 <input
                   ref={searchInputRef}
                   type="text"
-                  placeholder="Search series title, alternative name..."
+                  placeholder="Search series by title or alternate name..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-transparent text-sm text-white placeholder-neutral-500 focus:outline-none"
+                  className="w-full bg-transparent text-sm text-white focus:outline-none placeholder-neutral-500"
                 />
                 <button
                   onClick={() => setSearchOpen(false)}
-                  className="text-neutral-400 hover:text-white text-xs px-2 py-1 rounded bg-neutral-900 border border-neutral-800 transition"
+                  className="text-xs px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white rounded-lg transition"
                 >
                   ESC
                 </button>
               </div>
 
-              <div className="max-h-96 overflow-y-auto divide-y divide-neutral-800/40 p-2">
+              {/* SEARCH RESULTS FEED */}
+              <div className="max-h-96 overflow-y-auto divide-y divide-neutral-800/60 p-2">
                 {isSearching ? (
-                  <div className="py-8 text-center text-xs text-neutral-500">Searching catalog...</div>
-                ) : searchResults.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-neutral-500">
-                    {searchQuery.trim() ? 'No series found matching query.' : 'Type to search across indexed titles.'}
+                  <div className="p-8 text-center text-xs text-neutral-500">
+                    Scanning active series catalog...
                   </div>
-                ) : (
-                  searchResults.map((s) => (
+                ) : searchResults.length > 0 ? (
+                  searchResults.map((item) => (
                     <Link
-                      key={s.id}
-                      href={`/series/${s.slug}`}
+                      key={item.id}
+                      href={`/series/${item.slug}`}
                       onClick={() => setSearchOpen(false)}
-                      className="p-2.5 rounded-xl hover:bg-neutral-800/50 flex items-center gap-3 transition group"
+                      className="flex items-center gap-3 p-2 rounded-xl hover:bg-neutral-800/50 transition group"
                     >
+                      <div className="w-10 h-14 rounded-lg overflow-hidden bg-neutral-800 shrink-0">
+                        {item.cover_url && (
+                          <img
+                            src={item.cover_url}
+                            alt={item.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition"
+                          />
+                        )}
+                      </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-white group-hover:text-indigo-400 transition truncate">
-                          {s.english_title || s.title}
+                        <p className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 truncate transition">
+                          {item.title}
                         </p>
                         <p className="text-[10px] text-neutral-400 capitalize">
-                          {s.reading_mode === 'webtoon' ? 'Webtoon' : 'Manga'}
+                          {item.reading_mode === 'webtoon' ? 'Webtoon' : 'Manga'}
                         </p>
                       </div>
                     </Link>
                   ))
+                ) : searchQuery.trim() ? (
+                  <div className="p-8 text-center text-xs text-neutral-500">
+                    No series found matching &quot;{searchQuery}&quot;
+                  </div>
+                ) : (
+                  <div className="p-8 text-center text-xs text-neutral-500">
+                    Type to search titles across the indexed catalog.
+                  </div>
                 )}
               </div>
             </div>
           </div>
         )}
 
-        {/* Auth Modal Trigger */}
+        {/* AUTH MODAL */}
         <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
 
-        {/* Main Content Area */}
-        <main className="flex-1">{children}</main>
-
-        {/* Global Footer with DMCA & Policy Link */}
-        {!isReaderPage && (
-          <footer className="border-t border-neutral-800/80 bg-[#090a0d] py-8 px-4 text-center text-xs text-neutral-500">
-            <div className="max-w-7xl mx-auto space-y-2">
-              <p className="font-semibold text-neutral-400">
-                MangaFlow &copy; {new Date().getFullYear()} — Free Online Manga & Manhwa Reader
-              </p>
-              <div className="flex items-center justify-center gap-4 text-[11px] text-neutral-400 py-1">
-                <Link href="/" className="hover:text-white transition">
-                  Home
-                </Link>
-                <span>•</span>
-                <Link href="/filter" className="hover:text-white transition">
-                  Browse
-                </Link>
-                <span>•</span>
-                <Link href="/dmca" className="hover:text-indigo-400 transition font-medium">
-                  DMCA & Copyright Policy
-                </Link>
-              </div>
-              <p className="text-[11px] text-neutral-600">
-                Disclaimer: MangaFlow does not store any files on its servers. All contents are scraped dynamically from third-party sources.
-              </p>
-            </div>
-          </footer>
-        )}
+        {/* MAIN BODY CONTENT */}
+        <main className="flex-1 w-full max-w-full">{children}</main>
       </body>
     </html>
   );
