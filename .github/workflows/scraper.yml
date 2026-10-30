@@ -1,10 +1,12 @@
-name: MangaFlow Autonomous Ingestion Engine
+name: MangaFlow Autonomous Catalog Sync
 
 on:
   schedule:
+    # Runs every 90 minutes; offsets prevent scheduling conflicts
     - cron: '0 */3,30 1-23/3 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual click triggers anytime
 
+# Ensures only ONE runner executes at a time. No self-starting overlaps.
 concurrency:
   group: mangaflow-catalog-sync
   cancel-in-progress: false
@@ -12,7 +14,7 @@ concurrency:
 jobs:
   run-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 90 # Hard timeout safety guard
 
     steps:
       - name: Checkout Codebase
@@ -27,13 +29,13 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Stage 1 - Discover Top Releases & Trending Catalog
+      - name: Stage 1 - Fast Trending & Popular Discovery
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
         run: node scripts/sync-recent.js
 
-      - name: Stage 2 - Deep Catalog Backlog Sweeper & Gap Ingestion
+      - name: Stage 2 - Deep Catalog Backlog Sweeper & Gap Auditor
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
