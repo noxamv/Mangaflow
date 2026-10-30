@@ -1,13 +1,21 @@
-name: MangaFlow Ingestion Pipeline
+name: MangaFlow Autonomous Catalog Sync
 
 on:
-  workflow_dispatch: # Allows you to manually trigger a full sweep anytime
   schedule:
-    - cron: '*/30 * * * *' # Automatically runs every 30 minutes
+    # Runs every 90 minutes: at minute 0 and minute 30 every 3 hours (offset: 00:00, 01:30, 03:00, 04:30...)
+    - cron: '0 */3,30 1-23/3 * * *'
+  workflow_dispatch: # Allows clicking "Run workflow" manually at any time
+
+# Concurrency group ensures only ONE scraper runs at a time. No self-starting overlaps!
+concurrency:
+  group: catalog-sync-pipeline
+  cancel-in-progress: false
 
 jobs:
   run-ingestion:
     runs-on: ubuntu-latest
+    timeout-minutes: 90 # Hard timeout safety guard
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -16,24 +24,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci || npm install
+        run: npm ci
 
-      - name: 1. Sync Latest Daily Releases (Fast Feed)
+      - name: 1. Fast Discovery Feed & Trending (Top-Read Series)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
         run: node scripts/sync-recent.js
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
-      - name: 2. Multi-Source Catalog Synchronizer
-        run: node scripts/sync-multi-source.js
+      - name: 2. Multi-Source Catalog Sweeper & Gap Auditor
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL || secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY || secrets.SUPABASE_KEY }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_SERVICE_KEY }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: node scripts/sync-multi-source.js
