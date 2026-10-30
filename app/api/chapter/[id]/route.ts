@@ -12,7 +12,7 @@ const supabaseKey =
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
   '';
 
-// Server-side admin client to persist resolved chapter pages safely
+// Server-side administrative client to persist resolved chapter pages safely
 const supabaseAdmin = createClient(supabaseUrl, supabaseKey, {
   auth: { persistSession: false },
 });
@@ -137,7 +137,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       }
 
       if (finalPages.length > 0) {
-        // Persist pages to Supabase to prevent repeated fetches
+        // Cached directly to database with admin rights to prevent repeating scrapes
         await supabaseAdmin.from('chapters').update({ pages: finalPages }).eq('id', chapterId);
       }
     }
