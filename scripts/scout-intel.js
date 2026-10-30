@@ -1,5 +1,4 @@
 // scripts/scout-intel.js
-// Shim to bypass Node 20 WebSocket check for Supabase Realtime in GitHub Actions
 if (typeof globalThis.WebSocket === 'undefined') {
   globalThis.WebSocket = class WebSocket {};
 }
@@ -37,9 +36,6 @@ function cleanTitle(str) {
     .trim();
 }
 
-// ---------------------------------------------------------------------------
-// 1. SCOUT WEEBCENTRAL (Manhwa / Webtoons)
-// ---------------------------------------------------------------------------
 async function scoutWeebCentral(title) {
   try {
     const searchUrl = `https://weebcentral.com/search/data?limit=12&offset=0&text=${encodeURIComponent(
@@ -66,9 +62,6 @@ async function scoutWeebCentral(title) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 2. SCOUT COMICK (Active api.comick.dev API)
-// ---------------------------------------------------------------------------
 async function scoutComick(title) {
   const domains = ['https://api.comick.dev', 'https://api.comick.io', 'https://api.comick.cc'];
 
@@ -93,9 +86,6 @@ async function scoutComick(title) {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// 3. SCOUT MANGAPILL (Manga / Shonen)
-// ---------------------------------------------------------------------------
 async function scoutMangaPill(title) {
   try {
     const res = await fetch(`https://mangapill.com/search?q=${encodeURIComponent(cleanTitle(title))}`, {
@@ -117,9 +107,6 @@ async function scoutMangaPill(title) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 4. SCOUT MANGADEX
-// ---------------------------------------------------------------------------
 async function scoutMangaDex(title) {
   try {
     const query = encodeURIComponent(cleanTitle(title));
@@ -151,13 +138,9 @@ async function scoutMangaDex(title) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// MAIN SCOUT PIPELINE
-// ---------------------------------------------------------------------------
 async function main() {
   console.log('--- RUNNING ENHANCED MULTI-SOURCE SCOUT INTEL ---');
 
-  // Pull unlinked, placeholder, or gap series that need primary sources mapped
   const { data: queue, error } = await supabase
     .from('series')
     .select(`
@@ -184,7 +167,6 @@ async function main() {
     const existingCount = item.chapters?.[0]?.count || 0;
     const existingUrl = intel?.target_url;
 
-    // Skip series that already have valid urls and high chapter volume
     if (existingCount > 30 && existingUrl && existingUrl !== 'placeholder' && intel?.source_platform !== 'unassigned') {
       console.log(`[SKIP] "${item.title}" already verified with ${existingCount} chapters.`);
       continue;
@@ -199,7 +181,6 @@ async function main() {
 
     let match = null;
 
-    // Route order: Webtoons check WeebCentral & Comick first; Manga checks MangaPill & MangaDex first
     if (isWebtoon) {
       match = await scoutWeebCentral(item.title);
       if (!match) {
