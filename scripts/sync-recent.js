@@ -6,18 +6,11 @@ if (typeof globalThis.WebSocket === 'undefined') {
 import { createClient } from '@supabase/supabase-js';
 import * as cheerio from 'cheerio';
 
-const SUPABASE_URL =
-  process.env.SUPABASE_URL ||
-  process.env.NEXT_PUBLIC_SUPABASE_URL;
-
-const SUPABASE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.SUPABASE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
-  console.error('Missing Supabase credentials in environment.');
+  console.error('[FATAL] Missing Supabase environment credentials.');
   process.exit(1);
 }
 
@@ -43,9 +36,14 @@ function slugify(text) {
     .replace(/[\s_-]+/g, '-');
 }
 
-// 1. DISCOVER TOP READ SERIES FROM MANGADEX
-async function fetchTopMangaDexSeries() {
-  const candidates = [];
+const NOVEL_KEYWORDS = ['novel', 'light novel', 'web novel', '(ln)', '(wn)', 'text'];
+function isNovel(text) {
+  const lower = (text || '').toLowerCase();
+  return NOVEL_KEYWORDS.some((k) => lower.includes(k));
+}
+
+async function fetchTopMangaDex() {
+  const results = [];
   try {
     const res = await fetch(
       'https://api.mangadex.org/manga?order[followedCount]=desc&limit=40&contentRating[]=safe&contentRating[]=suggestive&includes[]=cover_art',
@@ -53,12 +51,11 @@ async function fetchTopMangaDexSeries() {
     );
     if (!res.ok) return [];
     const json = await res.json();
-    const list = json.data || [];
 
-    for (const item of list) {
+    for (const item of json.data || []) {
       const titles = item.attributes?.title || {};
       const title = titles.en || Object.values(titles)[0];
-      if (!title) continue;
+      if (!title || isNovel(title)) continue;
 
       let coverUrl = null;
       const coverRel = item.relationships?.find((r) => r.type === 'cover_art');
@@ -66,32 +63,30 @@ async function fetchTopMangaDexSeries() {
         coverUrl = `https://uploads.mangadex.org/covers/${item.id}/${coverRel.attributes.fileName}.512.jpg`;
       }
 
-      candidates.push({
+      const origLang = item.attributes?.originalLanguage;
+      results.push({
         title: cleanTitle(title),
         cover_url: coverUrl,
-        reading_mode: item.attributes?.originalLanguage === 'ko' || item.attributes?.originalLanguage === 'zh' ? 'webtoon' : 'paged',
+        reading_mode: origLang === 'ko' || origLang === 'zh' ? 'webtoon' : 'paged',
         source: 'mangadex',
         target_url: `https://mangadex.org/title/${item.id}`,
         mangaId: item.id
       });
     }
-  } catch (err) {
-    console.log(`[Top MangaDex Error]: ${err.message}`);
-  }
-  return candidates;
+  } catch {}
+  return results;
 }
 
-// 2. DISCOVER TOP READ MANHWA/MANGA FROM MANGANATO TOP VIEWS
-async function fetchTopManganatoSeries() {
-  const candidates = [];
+async function fetchTopManganato() {
+  const results = [];
   const urls = [
     'https://natomanga.com/manga-list/topview',
     'https://manganato.com/genre-all?type=topview'
   ];
 
-  for (const listUrl of urls) {
+  for (const url of urls) {
     try {
-      const res = await fetch(listUrl, { headers: HEADERS, redirect: 'follow' });
+      const res = await fetch(url, { headers: HEADERS, redirect: 'follow' });
       if (!res.ok) continue;
 
       const html = await res.text();
@@ -103,8 +98,8 @@ async function fetchTopManganatoSeries() {
         const href = titleEl.attr('href');
         const img = $(el).find('img').first().attr('src');
 
-        if (title && href) {
-          candidates.push({
+        if (title && href && !isNovel(title)) {
+          results.push({
             title: cleanTitle(title),
             cover_url: img || null,
             reading_mode: href.includes('manhwa') || title.toLowerCase().includes('leveling') ? 'webtoon' : 'paged',
@@ -114,30 +109,28 @@ async function fetchTopManganatoSeries() {
         }
       });
 
-      if (candidates.length > 0) break;
+      if (results.length > 0) break;
     } catch {}
   }
-
-  return candidates;
+  return results;
 }
 
-// 3. INGEST CHAPTERS FOR A DISCOVERED POPULAR SERIES
-async function ingestChaptersForSeries(seriesId, title, targetUrl, source) {
+async function ingestDiscoveredChapters(seriesId, targetUrl, source) {
   const chapters = [];
 
   if (source === 'mangadex' && targetUrl.includes('/title/')) {
     const mangaId = targetUrl.match(/title\/([a-f0-9-]+)/)?.[1];
     if (mangaId) {
       try {
-        const feedRes = await fetch(
+        const res = await fetch(
           `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=50&contentRating[]=safe&contentRating[]=suggestive`,
           { headers: HEADERS }
         );
-        if (feedRes.ok) {
-          const json = await feedRes.json();
-          for (const item of (json.data || [])) {
+        if (res.ok) {
+          const json = await res.json();
+          for (const item of json.data || []) {
             const chNum = parseFloat(item.attributes?.chapter);
-            if (!isNaN(chNum)) {
+            if (!isNaN(chNum) && chNum >= 0 && chNum <= 1500) {
               chapters.push({
                 series_id: seriesId,
                 chapter_number: chNum,
@@ -164,7 +157,7 @@ async function ingestChaptersForSeries(seriesId, title, targetUrl, source) {
           const match = text.match(/chapter\s*([\d.]+)/i) || href?.match(/chapter-([\d.]+)/i);
           if (match && href) {
             const chNum = parseFloat(match[1]);
-            if (!isNaN(chNum)) {
+            if (!isNaN(chNum) && chNum >= 0 && chNum <= 1500) {
               chapters.push({
                 series_id: seriesId,
                 chapter_number: chNum,
@@ -188,73 +181,59 @@ async function ingestChaptersForSeries(seriesId, title, targetUrl, source) {
     }
 
     const maxCh = Math.max(...chapters.map((c) => c.chapter_number));
-    await supabase.from('series_intel').upsert({
-      series_id: seriesId,
-      source_platform: source,
-      target_url: targetUrl,
-      latest_known_chapter: maxCh,
-      last_scouted_at: new Date().toISOString()
-    }, { onConflict: 'series_id' });
-
-    console.log(`  -> Synced ${chapters.length} chapters (Latest: Ch. ${maxCh})`);
+    await supabase.from('series_intel').upsert(
+      {
+        series_id: seriesId,
+        source_platform: source,
+        target_url: targetUrl,
+        latest_known_chapter: maxCh,
+        last_scouted_at: new Date().toISOString()
+      },
+      { onConflict: 'series_id' }
+    );
   }
 }
 
-// 4. MAIN DISCOVERY CONTROLLER
 async function main() {
-  console.log('--- STARTING POPULAR/TOP SERIES DISCOVERY & RECENT SYNC ---');
+  console.log('--- STAGE 1: POPULAR & TRENDING DISCOVERY ---');
 
-  const { data: allExisting, error: exErr } = await supabase
-    .from('series')
-    .select('id, title, slug');
-
-  if (exErr) {
-    console.error('Failed to load existing catalog:', exErr.message);
+  const { data: existingSeries, error } = await supabase.from('series').select('id, title, slug');
+  if (error) {
+    console.error('[DB Error]:', error.message);
     process.exit(1);
   }
 
-  const existingTitles = new Set();
-  const existingSlugs = new Set();
-  const titleToIdMap = new Map();
+  const titleMap = new Map();
+  const slugSet = new Set();
 
-  for (const s of (allExisting || [])) {
-    const norm = s.title.toLowerCase().trim();
-    existingTitles.add(norm);
-    existingSlugs.add(s.slug);
-    titleToIdMap.set(norm, s.id);
+  for (const s of existingSeries || []) {
+    titleMap.set(s.title.toLowerCase().trim(), s.id);
+    slugSet.add(s.slug);
   }
 
-  console.log(`Current catalog: ${existingTitles.size} unique titles indexed.`);
+  const [topDex, topNato] = await Promise.all([fetchTopMangaDex(), fetchTopManganato()]);
+  const candidates = [...topDex, ...topNato];
 
-  const [mangadexTop, manganatoTop] = await Promise.all([
-    fetchTopMangaDexSeries(),
-    fetchTopManganatoSeries()
-  ]);
-
-  const candidates = [...mangadexTop, ...manganatoTop];
-  console.log(`Collected ${candidates.length} top-read series candidates.`);
-
-  let newlyCreated = 0;
-  let existingUpdated = 0;
+  let added = 0;
+  let refreshed = 0;
 
   for (const item of candidates) {
-    const normTitle = item.title.toLowerCase().trim();
-    let targetSeriesId = titleToIdMap.get(normTitle);
+    const norm = item.title.toLowerCase().trim();
+    let seriesId = titleMap.get(norm);
 
-    if (targetSeriesId) {
-      console.log(`[Already in Catalog] "${item.title}" -> Checking latest chapters...`);
-      await ingestChaptersForSeries(targetSeriesId, item.title, item.target_url, item.source);
-      existingUpdated++;
-      await delay(500);
+    if (seriesId) {
+      await ingestDiscoveredChapters(seriesId, item.target_url, item.source);
+      refreshed++;
+      await delay(400);
       continue;
     }
 
     let slug = slugify(item.title);
-    if (existingSlugs.has(slug)) {
+    if (slugSet.has(slug)) {
       slug = `${slug}-${Date.now().toString().slice(-4)}`;
     }
 
-    const { data: newSeries, error: insErr } = await supabase
+    const { data: newRow, error: insertError } = await supabase
       .from('series')
       .insert({
         title: item.title,
@@ -266,24 +245,18 @@ async function main() {
       .select('id')
       .single();
 
-    if (insErr || !newSeries) {
-      console.log(`  [Skipped] Insert failed for "${item.title}": ${insErr?.message}`);
-      continue;
-    }
+    if (insertError || !newRow) continue;
 
-    targetSeriesId = newSeries.id;
-    existingTitles.add(normTitle);
-    existingSlugs.add(slug);
-    titleToIdMap.set(normTitle, targetSeriesId);
-    newlyCreated++;
+    seriesId = newRow.id;
+    titleMap.set(norm, seriesId);
+    slugSet.add(slug);
+    added++;
 
-    console.log(`[NEW TOP SERIES ADDED] "${item.title}" -> Ingesting chapters...`);
-    await ingestChaptersForSeries(targetSeriesId, item.title, item.target_url, item.source);
-    await delay(600);
+    await ingestDiscoveredChapters(seriesId, item.target_url, item.source);
+    await delay(500);
   }
 
-  console.log(`\nDiscovery Summary: ${newlyCreated} new top series created, ${existingUpdated} existing series updated.`);
-  console.log('--- RECENT SYNC FINISHED ---');
+  console.log(`[Discovery Complete] Added: ${added} new titles | Refreshed: ${refreshed} existing releases.`);
 }
 
 main().catch(console.error);
