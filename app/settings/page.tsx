@@ -1,3 +1,4 @@
+// app/settings/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -30,14 +31,41 @@ export default function SettingsPage() {
     plan_to_read: true,
   });
 
+  // Load user session & saved settings
   useEffect(() => {
-    async function loadUser() {
+    async function loadData() {
       const { data } = await supabase.auth.getUser();
       setUser(data?.user ?? null);
+
+      try {
+        const savedHome = localStorage.getItem('mangaflow_settings_home');
+        if (savedHome) {
+          const parsed = JSON.parse(savedHome);
+          if (parsed.showContinueHome !== undefined) setShowContinueHome(parsed.showContinueHome);
+          if (parsed.showFollowedHome !== undefined) setShowFollowedHome(parsed.showFollowedHome);
+          if (parsed.homeFolders) setHomeFolders(parsed.homeFolders);
+          if (parsed.notifFolders) setNotifFolders(parsed.notifFolders);
+        }
+      } catch {}
+
       setLoading(false);
     }
-    loadUser();
+    loadData();
   }, []);
+
+  // Persist settings whenever toggles change
+  const saveSettings = (updates: any) => {
+    try {
+      const current = {
+        showContinueHome,
+        showFollowedHome,
+        homeFolders,
+        notifFolders,
+        ...updates,
+      };
+      localStorage.setItem('mangaflow_settings_home', JSON.stringify(current));
+    } catch {}
+  };
 
   const Toggle = ({ active, onChange }: { active: boolean; onChange: () => void }) => (
     <button
@@ -93,12 +121,26 @@ export default function SettingsPage() {
         <div className="divide-y divide-neutral-800/60 pt-1">
           <div className="py-3 flex items-center justify-between">
             <span className="text-xs text-neutral-200">Show Continue Reading on home</span>
-            <Toggle active={showContinueHome} onChange={() => setShowContinueHome(!showContinueHome)} />
+            <Toggle
+              active={showContinueHome}
+              onChange={() => {
+                const val = !showContinueHome;
+                setShowContinueHome(val);
+                saveSettings({ showContinueHome: val });
+              }}
+            />
           </div>
 
           <div className="py-3 flex items-center justify-between">
             <span className="text-xs text-neutral-200">Show new chapters from following titles on home</span>
-            <Toggle active={showFollowedHome} onChange={() => setShowFollowedHome(!showFollowedHome)} />
+            <Toggle
+              active={showFollowedHome}
+              onChange={() => {
+                const val = !showFollowedHome;
+                setShowFollowedHome(val);
+                saveSettings({ showFollowedHome: val });
+              }}
+            />
           </div>
         </div>
       </section>
@@ -119,7 +161,11 @@ export default function SettingsPage() {
               <span className="text-xs text-neutral-200">{f.label}</span>
               <Toggle
                 active={(homeFolders as any)[f.id]}
-                onChange={() => setHomeFolders((prev) => ({ ...prev, [f.id]: !(prev as any)[f.id] }))}
+                onChange={() => {
+                  const updated = { ...homeFolders, [f.id]: !(homeFolders as any)[f.id] };
+                  setHomeFolders(updated);
+                  saveSettings({ homeFolders: updated });
+                }}
               />
             </div>
           ))}
@@ -142,7 +188,11 @@ export default function SettingsPage() {
               <span className="text-xs text-neutral-200">{f.label}</span>
               <Toggle
                 active={(notifFolders as any)[f.id]}
-                onChange={() => setNotifFolders((prev) => ({ ...prev, [f.id]: !(prev as any)[f.id] }))}
+                onChange={() => {
+                  const updated = { ...notifFolders, [f.id]: !(notifFolders as any)[f.id] };
+                  setNotifFolders(updated);
+                  saveSettings({ notifFolders: updated });
+                }}
               />
             </div>
           ))}
