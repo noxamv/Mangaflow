@@ -1,3 +1,4 @@
+// app/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -69,6 +70,7 @@ function SafeImage({ src, alt, className }: { src: string; alt: string; classNam
   );
 }
 
+// Repaired Spotlight Slider (7 Slides, Original Compact Dimensions)
 function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const [index, setIndex] = useState(0);
 
@@ -86,15 +88,15 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const displayTitle = current.english_title || current.title;
 
   return (
-    <div className="relative w-full aspect-[16/9] max-h-[290px] sm:max-h-[350px] rounded-3xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-2xl group flex flex-col justify-between">
+    <div className="relative w-full h-[230px] sm:h-[280px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-xl group flex flex-col justify-between">
       <div
         className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700"
         style={{ backgroundImage: `url(${coverUrl})` }}
       />
       <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-black via-black/85 to-black/30 z-10" />
 
-      <div className="relative z-20 w-full h-full p-5 sm:p-7 flex items-center justify-between gap-4">
-        <div className="max-w-[65%] sm:max-w-md space-y-2">
+      <div className="relative z-20 w-full h-full p-4 sm:p-6 flex items-center justify-between gap-4">
+        <div className="max-w-[62%] sm:max-w-md space-y-1.5">
           <div className="flex items-center gap-2">
             <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded-lg bg-indigo-500/30 text-indigo-300 border border-indigo-500/40">
               Spotlight #{index + 1}
@@ -112,29 +114,29 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
             {current.synopsis || 'Read online for free in high definition on MangaFlow.'}
           </p>
 
-          <div className="pt-1.5">
+          <div className="pt-1">
             <Link
               href={`/series/${current.slug}`}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
             >
               Read Now →
             </Link>
           </div>
         </div>
 
-        <div className="shrink-0 w-24 sm:w-32 aspect-[3/4.2] rounded-2xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900">
+        <div className="shrink-0 w-24 sm:w-28 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900">
           <SafeImage src={coverUrl} alt={displayTitle} className="w-full h-full object-cover" />
         </div>
       </div>
 
-      <div className="relative z-30 pb-3 flex items-center justify-center gap-1.5">
+      <div className="relative z-30 pb-2.5 flex items-center justify-center gap-1.5">
         {items.map((_, i) => (
           <button
             key={i}
             type="button"
             onClick={() => setIndex(i)}
             className={`h-1.5 rounded-full transition-all duration-300 ${
-              index === i ? 'w-6 bg-indigo-500' : 'w-1.5 bg-neutral-700/80 hover:bg-neutral-500'
+              index === i ? 'w-5 bg-indigo-500' : 'w-1.5 bg-neutral-700/80 hover:bg-neutral-500'
             }`}
             aria-label={`Slide ${i + 1}`}
           />
@@ -210,10 +212,11 @@ function ShareBar() {
 }
 
 export default function HomePage() {
-  const [continueList, setContinueList] = useState<ContinueItem[]>([]);
+  const [continueReading, setContinueReading] = useState<ContinueItem[]>([]);
+  const [featuredList, setFeaturedList] = useState<SeriesItem[]>([]);
   const [trendingList, setTrendingList] = useState<SeriesItem[]>([]);
-  const [popularList, setPopularList] = useState<SeriesItem[]>([]);
   const [latestList, setLatestList] = useState<SeriesItem[]>([]);
+  const [popularList, setPopularList] = useState<SeriesItem[]>([]);
   const [randomList, setRandomList] = useState<SeriesItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -222,9 +225,10 @@ export default function HomePage() {
       const baseCols = 'id, slug, title, english_title, synopsis, cover_image_url, cover_url, reading_mode';
 
       try {
-        const [trendingRes, popRes, latestRes, randomRes] = await Promise.all([
+        const [featuredRes, trendingRes, latestRes, popularRes] = await Promise.all([
           supabase.from('series').select(baseCols).order('rating', { ascending: false, nullsFirst: false }).limit(10),
-          supabase.from('series').select(baseCols).order('followed_count', { ascending: false, nullsFirst: false }).limit(10),
+          // Set to 7 so the Spotlight Slider renders exactly 7 slides
+          supabase.from('series').select(baseCols).order('followed_count', { ascending: false, nullsFirst: false }).limit(7),
           supabase.from('series').select(baseCols).order('updated_at', { ascending: false }).limit(10),
           supabase.from('series').select(baseCols).limit(30),
         ]);
@@ -237,54 +241,71 @@ export default function HomePage() {
             english_title: s.english_title,
             synopsis: s.synopsis,
             cover_image_url: s.cover_image_url || s.cover_url,
-            cover_url: s.cover_url || s.cover_image_url,
+            cover_url: s.cover_url,
             reading_mode: s.reading_mode,
           }));
 
+        setFeaturedList(sanitize(featuredRes.data || []));
         setTrendingList(sanitize(trendingRes.data || []));
-        setPopularList(sanitize(popRes.data || []));
         setLatestList(sanitize(latestRes.data || []));
 
-        if (randomRes.data) {
-          const shuffled = [...randomRes.data].sort(() => 0.5 - Math.random()).slice(0, 10);
-          setRandomList(sanitize(shuffled));
-        }
+        const pop = sanitize(popularRes.data || []);
+        setPopularList(pop.slice(0, 10));
+        setRandomList(pop.slice(10));
+      } catch (err) {
+        console.error('Data loading error:', err);
+      } finally {
+        setLoading(false);
+      }
 
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user?.id) {
-          const { data: historyData } = await supabase
+      // Load Continue Reading from Supabase if logged in, otherwise localStorage
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session?.user) {
+          const { data: hist } = await supabase
             .from('reading_history')
-            .select('series_id, chapter_id, chapter_number, series:series(id, slug, title, english_title, synopsis, cover_image_url, cover_url, reading_mode)')
+            .select(`
+              series_id,
+              chapter_id,
+              chapter_number,
+              series:series_id (id, slug, title, english_title, cover_image_url, cover_url, reading_mode)
+            `)
             .eq('user_id', session.user.id)
             .order('updated_at', { ascending: false })
             .limit(6);
 
-          if (historyData?.length) {
-            const mapped: ContinueItem[] = historyData
-              .filter((h: any) => h.series)
-              .map((h: any) => ({
+          if (hist && hist.length > 0) {
+            setContinueReading(
+              hist.map((h: any) => ({
                 series_id: h.series_id,
                 chapter_id: h.chapter_id,
                 chapter_number: h.chapter_number,
                 series: {
-                  id: h.series.id,
-                  slug: h.series.slug || h.series.id,
-                  title: h.series.english_title || h.series.title,
-                  english_title: h.series.english_title,
-                  synopsis: h.series.synopsis,
-                  cover_image_url: h.series.cover_image_url || h.series.cover_url,
-                  cover_url: h.series.cover_url || h.series.cover_image_url,
-                  reading_mode: h.series.reading_mode,
+                  id: h.series?.id || h.series_id,
+                  slug: h.series?.slug || h.series_id,
+                  title: h.series?.english_title || h.series?.title || 'Unknown Title',
+                  english_title: h.series?.english_title,
+                  synopsis: null,
+                  cover_image_url: h.series?.cover_image_url || h.series?.cover_url,
+                  cover_url: h.series?.cover_url,
+                  reading_mode: h.series?.reading_mode,
                 },
-              }));
-            setContinueList(mapped);
+              }))
+            );
+            return;
           }
         }
-      } catch (err) {
-        console.warn('Home page hydration warning:', err);
-      } finally {
-        setLoading(false);
-      }
+
+        const local = localStorage.getItem('mangaflow_history');
+        if (local) {
+          const parsed = JSON.parse(local);
+          if (Array.isArray(parsed)) {
+            setContinueReading(parsed.slice(0, 6));
+          }
+        }
+      } catch {}
     }
 
     loadData();
@@ -292,46 +313,38 @@ export default function HomePage() {
 
   const Row = ({ title, items, color }: { title: string; items: SeriesItem[]; color: string }) => {
     if (!items || items.length === 0) return null;
-
     return (
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className={`w-1.5 h-4 ${color} rounded-sm`} />
-            <h2 className="text-sm sm:text-base font-bold text-white tracking-wide">{title}</h2>
+            <span className={`w-1.5 h-4 rounded-full ${color}`} />
+            <h2 className="text-sm font-black uppercase tracking-wider text-white">{title}</h2>
           </div>
-          <Link
-            href={`/category/${encodeURIComponent(title.toLowerCase().replace(/\s+/g, '-'))}`}
-            className="text-[11px] font-semibold text-neutral-400 hover:text-indigo-400 transition"
-          >
-            View More &rarr;
+          <Link href="/filter" className="text-[11px] text-neutral-400 hover:text-white font-medium transition">
+            View More →
           </Link>
         </div>
 
-        <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 w-full max-w-full">
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2.5 sm:gap-3">
           {items.map((item) => {
-            const coverUrl = resolveCoverUrl(item);
-
+            const cover = resolveCoverUrl(item);
+            const titleText = item.english_title || item.title;
             return (
-              <Link
-                key={item.id}
-                href={`/series/${item.slug}`}
-                className="shrink-0 w-28 sm:w-36 flex flex-col group"
-              >
-                <div className="relative aspect-[3/4.2] w-full rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-800 group-hover:border-neutral-700 transition">
+              <Link key={item.id} href={`/series/${item.slug}`} className="group flex flex-col space-y-1.5">
+                <div className="relative aspect-[3/4.2] rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 shadow-md transition">
                   <SafeImage
-                    src={coverUrl}
-                    alt={item.title}
+                    src={cover}
+                    alt={titleText}
                     className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                   />
-                  {item.reading_mode && (
-                    <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-black/80 text-white">
-                      {item.reading_mode}
+                  <div className="absolute top-1.5 left-1.5">
+                    <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-sm text-neutral-200 border border-white/10">
+                      {item.reading_mode === 'webtoon' ? 'WEBTOON' : 'MANGA'}
                     </span>
-                  )}
+                  </div>
                 </div>
-                <h3 className="text-xs font-semibold text-neutral-200 group-hover:text-indigo-400 transition truncate mt-1.5">
-                  {item.title}
+                <h3 className="text-xs font-semibold text-neutral-200 group-hover:text-indigo-400 line-clamp-1 transition">
+                  {titleText}
                 </h3>
               </Link>
             );
@@ -342,30 +355,41 @@ export default function HomePage() {
   };
 
   return (
-    <main className="space-y-6 sm:space-y-8 w-full max-w-full overflow-x-hidden pt-3 sm:pt-4">
+    <div className="max-w-7xl mx-auto px-4 lg:px-8 py-5 space-y-7">
+      {/* Spotlight Carousel */}
       <SpotlightSlider items={trendingList} />
 
+      {/* Share Bar */}
       <ShareBar />
 
-      {continueList.length > 0 && (
+      {/* Continue Reading Shelf */}
+      {continueReading.length > 0 && (
         <section className="space-y-3">
           <div className="flex items-center gap-2">
-            <span className="w-1.5 h-4 bg-emerald-500 rounded-sm" />
-            <h2 className="text-sm sm:text-base font-bold text-white">Continue Reading</h2>
+            <span className="w-1.5 h-4 rounded-full bg-emerald-500" />
+            <h2 className="text-sm font-black uppercase tracking-wider text-white">Continue Reading</h2>
           </div>
-          <div className="flex gap-2.5 sm:gap-3 overflow-x-auto no-scrollbar pb-2 w-full max-w-full">
-            {continueList.map((entry) => {
-              const coverUrl = resolveCoverUrl(entry.series);
 
+          <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-none">
+            {continueReading.map((item, idx) => {
+              const cover = resolveCoverUrl(item.series);
               return (
-                <Link key={entry.series_id} href={`/read/${entry.chapter_id}`} className="shrink-0 w-28 sm:w-36 flex flex-col group">
-                  <div className="relative aspect-[3/4.2] w-full rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-800">
-                    <SafeImage src={coverUrl} alt="" className="w-full h-full object-cover" />
-                    <span className="absolute bottom-1.5 right-1.5 text-[8px] font-black px-1.5 py-0.5 rounded bg-black/90 text-emerald-400">
-                      Ch. {entry.chapter_number}
-                    </span>
+                <Link
+                  key={idx}
+                  href={`/read/${item.chapter_id}`}
+                  className="shrink-0 w-32 group flex flex-col space-y-1.5"
+                >
+                  <div className="relative aspect-[3/4.2] rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-emerald-500/50 transition">
+                    <SafeImage src={cover} alt={item.series?.title || 'Comic'} className="w-full h-full object-cover" />
+                    <div className="absolute bottom-1.5 right-1.5">
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-black/80 text-emerald-400 border border-emerald-500/30">
+                        Ch. {item.chapter_number}
+                      </span>
+                    </div>
                   </div>
-                  <h3 className="text-xs font-semibold text-neutral-200 truncate mt-1.5">{entry.series?.title}</h3>
+                  <h3 className="text-xs font-semibold text-neutral-200 group-hover:text-emerald-400 line-clamp-1 transition">
+                    {item.series?.title}
+                  </h3>
                 </Link>
               );
             })}
@@ -373,10 +397,12 @@ export default function HomePage() {
         </section>
       )}
 
+      {/* Catalog Rows */}
       <Row title="Trending Series" items={trendingList} color="bg-indigo-500" />
-      <Row title="Popular Series" items={popularList} color="bg-amber-500" />
-      <Row title="Latest Updates" items={latestList} color="bg-cyan-500" />
-      <Row title="Random Recommendations" items={randomList} color="bg-emerald-500" />
-    </main>
+      <Row title="Latest Updates" items={latestList} color="bg-amber-500" />
+      <Row title="Popular Comics" items={popularList} color="bg-rose-500" />
+      <Row title="Recommended For You" items={featuredList} color="bg-cyan-500" />
+      <Row title="More Series" items={randomList} color="bg-purple-500" />
+    </div>
   );
 }
