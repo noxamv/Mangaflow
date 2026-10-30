@@ -2,7 +2,6 @@ name: MangaFlow Gap Sweeper & Epilogue Auditor (Daily)
 
 on:
   schedule:
-    # Runs daily at 02:00 UTC
     - cron: '0 2 * * *'
   workflow_dispatch:
 
@@ -13,7 +12,7 @@ concurrency:
 jobs:
   deep-audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Checkout Codebase
@@ -23,9 +22,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci || npm install
 
       - name: Execute Multi-Lane Gap Stitcher & Status Sync
         env:
