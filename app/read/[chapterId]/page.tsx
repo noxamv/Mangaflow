@@ -1,3 +1,4 @@
+// app/read/[chapterId]/page.tsx
 'use client';
 
 import { useEffect, useState, useRef, useCallback } from 'react';
@@ -51,10 +52,27 @@ export default function ReaderPage() {
   const [headerVisible, setHeaderVisible] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chapterListOpen, setChapterListOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState('Broken / Missing Images');
+  const [reportStatus, setReportStatus] = useState<'idle' | 'sending' | 'sent'>('idle');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const lastScrollY = useRef(0);
   const touchStartX = useRef<number | null>(null);
 
+  // Restore saved reader preferences from localStorage
+  useEffect(() => {
+    try {
+      const savedMode = localStorage.getItem('mangaflow_reader_mode') as 'webtoon' | 'paged';
+      const savedDir = localStorage.getItem('mangaflow_reader_dir') as 'rtl' | 'ltr';
+      const savedFit = localStorage.getItem('mangaflow_reader_fit') as 'width' | 'height';
+      if (savedMode) setReadingMode(savedMode);
+      if (savedDir) setReadingDirection(savedDir);
+      if (savedFit) setPageFit(savedFit);
+    } catch {}
+  }, []);
+
+  // Header Auto-Hide on Scroll (Webtoon Mode)
   useEffect(() => {
     if (readingMode !== 'webtoon') {
       setHeaderVisible(true);
@@ -65,6 +83,8 @@ export default function ReaderPage() {
       const currentScrollY = window.scrollY;
       if (currentScrollY > lastScrollY.current && currentScrollY > 150) {
         setHeaderVisible(false);
+        setSettingsOpen(false);
+        setChapterListOpen(false);
       } else {
         setHeaderVisible(true);
       }
@@ -75,6 +95,7 @@ export default function ReaderPage() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [readingMode]);
 
+  // Load Chapter Data
   useEffect(() => {
     async function loadReader() {
       if (!chapterId) return;
@@ -92,22 +113,22 @@ export default function ReaderPage() {
 
         if (data.series) {
           setSeries(data.series);
-          setReadingMode(data.series.reading_mode === 'webtoon' ? 'webtoon' : 'paged');
+          const localSavedMode = localStorage.getItem('mangaflow_reader_mode');
+          if (!localSavedMode) {
+            setReadingMode(data.series.reading_mode === 'webtoon' ? 'webtoon' : 'paged');
+          }
         }
 
-        if (data.allChapters) {
-          setAllChapters(data.allChapters);
-        }
+        if (data.allChapters) setAllChapters(data.allChapters);
         setPrevChapter(data.prevChapter);
         setNextChapter(data.nextChapter);
 
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (session?.user?.id && data.series_id) {
+        // Record Reading History
+        const { data: authData } = await supabase.auth.getSession();
+        if (authData?.session?.user?.id && data.series_id) {
           await supabase.from('reading_history').upsert(
             {
-              user_id: session.user.id,
+              user_id: authData.session.user.id,
               series_id: data.series_id,
               chapter_id: data.id,
               chapter_number: data.chapter_number,
@@ -143,10 +164,10 @@ export default function ReaderPage() {
         }
       }
 
-      // If it belongs to domains known for aggressive hotlink blocking, proxy immediately
       if (
         fullUrl.includes('readdetectiveconan.com') ||
         fullUrl.includes('mangapill.com') ||
+        fullUrl.includes('mpcdn.top') ||
         fullUrl.includes('hivetoons.org') ||
         fullUrl.includes('asuracomic.net')
       ) {
@@ -159,13 +180,6 @@ export default function ReaderPage() {
   );
 
   const totalPages = chapter?.pages?.length || 0;
-
-  useEffect(() => {
-    if (readingMode === 'paged' && chapter?.pages && currentPage < totalPages - 1) {
-      const nextImg = new Image();
-      nextImg.src = resolveImageUrl(chapter.pages[currentPage + 1]);
-    }
-  }, [readingMode, chapter?.pages, currentPage, totalPages, resolveImageUrl]);
 
   const handleNextPage = useCallback(() => {
     if (currentPage < totalPages - 1) {
@@ -185,36 +199,59 @@ export default function ReaderPage() {
     }
   }, [currentPage, prevChapter, router]);
 
+  // Global Keyboard Navigation
   useEffect(() => {
-    if (readingMode !== 'paged') return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight') {
-        readingDirection === 'rtl' ? handlePrevPage() : handleNextPage();
-      } else if (e.key === 'ArrowLeft') {
-        readingDirection === 'rtl' ? handleNextPage() : handlePrevPage();
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+        if (readingMode === 'paged') {
+          readingDirection === 'rtl' ? handlePrevPage() : handleNextPage();
+        } else if (nextChapter) {
+          router.push(`/read/${nextChapter.id}`);
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+        if (readingMode === 'paged') {
+          readingDirection === 'rtl' ? handleNextPage() : handlePrevPage();
+        } else if (prevChapter) {
+          router.push(`/read/${prevChapter.id}`);
+        }
+      } else if (e.key === 'f' || e.key === 'F') {
+        toggleFullscreen();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [readingMode, readingDirection, handleNextPage, handlePrevPage]);
+  }, [readingMode, readingDirection, handleNextPage, handlePrevPage, nextChapter, prevChapter, router]);
 
-  const onTouchStart = (e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+      setIsFullscreen(true);
+    } else {
+      if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      setIsFullscreen(false);
+    }
   };
 
-  const onTouchEnd = (e: React.TouchEvent) => {
-    if (touchStartX.current === null || readingMode !== 'paged') return;
-    const diff = touchStartX.current - e.changedTouches[0].clientX;
-    if (Math.abs(diff) > 40) {
-      if (diff > 0) {
-        readingDirection === 'rtl' ? handlePrevPage() : handleNextPage();
-      } else {
-        readingDirection === 'rtl' ? handleNextPage() : handlePrevPage();
-      }
+  const handleReportSubmit = async () => {
+    if (!chapterId) return;
+    setReportStatus('sending');
+    try {
+      await fetch('/api/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chapterId, reason: reportReason }),
+      });
+      setReportStatus('sent');
+      setTimeout(() => {
+        setReportOpen(false);
+        setReportStatus('idle');
+      }, 2000);
+    } catch {
+      setReportStatus('idle');
     }
-    touchStartX.current = null;
   };
 
   if (loading) {
@@ -228,8 +265,8 @@ export default function ReaderPage() {
   if (!chapter || !chapter.pages?.length) {
     return (
       <div className="min-h-screen bg-[#07070a] flex flex-col items-center justify-center p-4 text-center">
-        <h1 className="text-xl font-bold text-white mb-2">Chapter Ingestion In Progress</h1>
-        <p className="text-xs text-neutral-400 mb-6">This chapter is currently syncing across upstream mirrors.</p>
+        <h1 className="text-xl font-bold text-white mb-2">Chapter Sync In Progress</h1>
+        <p className="text-xs text-neutral-400 mb-6">This chapter is currently resolving across mirrors.</p>
         {series?.slug && (
           <Link href={`/series/${series.slug}`} className="px-4 py-2 bg-indigo-600 rounded-xl text-xs font-bold text-white">
             Return to Series
@@ -240,11 +277,8 @@ export default function ReaderPage() {
   }
 
   return (
-    <div
-      className="min-h-screen bg-[#07070a] text-neutral-100 flex flex-col select-none relative"
-      onTouchStart={onTouchStart}
-      onTouchEnd={onTouchEnd}
-    >
+    <div className="min-h-screen bg-[#07070a] text-neutral-100 flex flex-col select-none relative">
+      {/* Top Floating Bar */}
       <header
         className={`fixed top-0 left-0 right-0 z-50 bg-[#0c0d14]/95 backdrop-blur-md border-b border-neutral-800/80 px-3 sm:px-6 py-2.5 transition-transform duration-300 flex items-center justify-between ${
           headerVisible ? 'translate-y-0' : '-translate-y-full'
@@ -258,7 +292,7 @@ export default function ReaderPage() {
             ←
           </Link>
           <div className="min-w-0">
-            <h2 className="text-xs font-bold text-white truncate max-w-[200px] sm:max-w-xs">{series?.title}</h2>
+            <h2 className="text-xs font-bold text-white truncate max-w-[160px] sm:max-w-xs">{series?.title}</h2>
             <p className="text-[10px] text-neutral-400 truncate">
               {chapter.title || `Chapter ${chapter.chapter_number}`}
             </p>
@@ -266,6 +300,27 @@ export default function ReaderPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* In-Reader Report Button */}
+          <button
+            onClick={() => setReportOpen(true)}
+            className="p-1.5 rounded-lg hover:bg-red-500/10 text-neutral-400 hover:text-red-400 transition"
+            title="Report broken images"
+            aria-label="Report Chapter"
+          >
+            🚩
+          </button>
+
+          {/* Fullscreen Toggle */}
+          <button
+            onClick={toggleFullscreen}
+            className="p-1.5 rounded-lg hover:bg-neutral-800/80 text-neutral-400 hover:text-white transition hidden sm:inline-flex"
+            title="Toggle Fullscreen"
+            aria-label="Toggle Fullscreen"
+          >
+            {isFullscreen ? '⤦' : '⛶'}
+          </button>
+
+          {/* Chapter Selector Drawer */}
           <button
             onClick={() => {
               setChapterListOpen(!chapterListOpen);
@@ -279,6 +334,7 @@ export default function ReaderPage() {
             </svg>
           </button>
 
+          {/* Settings */}
           <button
             onClick={() => {
               setSettingsOpen(!settingsOpen);
@@ -288,103 +344,121 @@ export default function ReaderPage() {
             aria-label="Settings"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           </button>
         </div>
       </header>
 
+      {/* Settings Modal */}
       {settingsOpen && (
-        <div className="fixed top-12 right-4 z-50 w-72 bg-[#13151f] border border-neutral-800 rounded-2xl p-4 shadow-2xl text-xs space-y-4">
+        <div className="fixed top-14 right-4 z-50 w-72 bg-[#13151f] border border-neutral-800 rounded-2xl p-4 shadow-2xl space-y-4 text-xs">
           <div>
-            <span className="font-bold text-neutral-300 block mb-2">Reading Flow</span>
+            <label className="text-neutral-400 font-bold block mb-1.5">Reading Mode</label>
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={() => setReadingMode('webtoon')}
+                onClick={() => {
+                  setReadingMode('webtoon');
+                  localStorage.setItem('mangaflow_reader_mode', 'webtoon');
+                }}
                 className={`py-1.5 rounded-xl font-bold transition ${
                   readingMode === 'webtoon' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
                 }`}
               >
-                Webtoon (Scroll)
+                Webtoon
               </button>
               <button
-                onClick={() => setReadingMode('paged')}
+                onClick={() => {
+                  setReadingMode('paged');
+                  localStorage.setItem('mangaflow_reader_mode', 'paged');
+                }}
                 className={`py-1.5 rounded-xl font-bold transition ${
                   readingMode === 'paged' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
                 }`}
               >
-                Paged (Manga)
+                Paged
               </button>
             </div>
           </div>
 
           {readingMode === 'paged' && (
-            <>
-              <div>
-                <span className="font-bold text-neutral-300 block mb-2">Reading Direction</span>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setReadingDirection('ltr')}
-                    className={`py-1.5 rounded-xl font-bold transition ${
-                      readingDirection === 'ltr' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
-                    }`}
-                  >
-                    Left to Right
-                  </button>
-                  <button
-                    onClick={() => setReadingDirection('rtl')}
-                    className={`py-1.5 rounded-xl font-bold transition ${
-                      readingDirection === 'rtl' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
-                    }`}
-                  >
-                    Right to Left
-                  </button>
-                </div>
+            <div>
+              <label className="text-neutral-400 font-bold block mb-1.5">Reading Direction</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => {
+                    setReadingDirection('ltr');
+                    localStorage.setItem('mangaflow_reader_dir', 'ltr');
+                  }}
+                  className={`py-1.5 rounded-xl font-bold transition ${
+                    readingDirection === 'ltr' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
+                  }`}
+                >
+                  Left to Right
+                </button>
+                <button
+                  onClick={() => {
+                    setReadingDirection('rtl');
+                    localStorage.setItem('mangaflow_reader_dir', 'rtl');
+                  }}
+                  className={`py-1.5 rounded-xl font-bold transition ${
+                    readingDirection === 'rtl' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
+                  }`}
+                >
+                  Right to Left
+                </button>
               </div>
-
-              <div>
-                <span className="font-bold text-neutral-300 block mb-2">Page Sizing</span>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setPageFit('width')}
-                    className={`py-1.5 rounded-xl font-bold transition ${
-                      pageFit === 'width' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
-                    }`}
-                  >
-                    Fit Width
-                  </button>
-                  <button
-                    onClick={() => setPageFit('height')}
-                    className={`py-1.5 rounded-xl font-bold transition ${
-                      pageFit === 'height' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
-                    }`}
-                  >
-                    Fit Height
-                  </button>
-                </div>
-              </div>
-            </>
+            </div>
           )}
+
+          <div>
+            <label className="text-neutral-400 font-bold block mb-1.5">Page Fit</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => {
+                  setPageFit('width');
+                  localStorage.setItem('mangaflow_reader_fit', 'width');
+                }}
+                className={`py-1.5 rounded-xl font-bold transition ${
+                  pageFit === 'width' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
+                }`}
+              >
+                Fit Width
+              </button>
+              <button
+                onClick={() => {
+                  setPageFit('height');
+                  localStorage.setItem('mangaflow_reader_fit', 'height');
+                }}
+                className={`py-1.5 rounded-xl font-bold transition ${
+                  pageFit === 'height' ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-neutral-400'
+                }`}
+              >
+                Fit Height
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
+      {/* Chapter List Dropdown */}
       {chapterListOpen && (
-        <div className="fixed top-12 right-4 z-50 w-72 max-h-[70vh] bg-[#13151f] border border-neutral-800 rounded-2xl p-3 shadow-2xl overflow-y-auto no-scrollbar text-xs">
-          <span className="font-bold text-neutral-300 block mb-2 px-2">Jump to Chapter</span>
-          <div className="space-y-1">
+        <div className="fixed top-14 right-4 z-50 w-72 max-h-96 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-xs">
+          <div className="p-3 border-b border-neutral-800 font-bold text-white flex justify-between">
+            <span>All Chapters</span>
+            <span className="text-neutral-400">{allChapters.length}</span>
+          </div>
+          <div className="overflow-y-auto divide-y divide-neutral-800/60 p-1">
             {allChapters.map((c) => (
               <Link
                 key={c.id}
                 href={`/read/${c.id}`}
                 onClick={() => setChapterListOpen(false)}
-                className={`block px-3 py-2 rounded-xl transition font-medium ${
-                  c.id === chapter.id ? 'bg-indigo-600 text-white font-bold' : 'hover:bg-neutral-800/80 text-neutral-300'
+                className={`block px-3 py-2 rounded-xl transition ${
+                  c.id === chapter.id
+                    ? 'bg-indigo-600 text-white font-bold'
+                    : 'text-neutral-300 hover:bg-neutral-800/60'
                 }`}
               >
                 Chapter {c.chapter_number}
@@ -394,87 +468,113 @@ export default function ReaderPage() {
         </div>
       )}
 
-      <main className="flex-1 w-full flex flex-col items-center justify-center pt-14 pb-16">
-        {readingMode === 'webtoon' ? (
-          <div className="w-full max-w-3xl flex flex-col items-center">
-            {chapter.pages.map((page, idx) => {
-              const resolvedSrc = resolveImageUrl(page);
+      {/* Report Modal */}
+      {reportOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-[#13151f] border border-neutral-800 rounded-2xl p-5 max-w-sm w-full space-y-4">
+            <h3 className="text-sm font-bold text-white">Report Chapter Issue</h3>
+            <p className="text-xs text-neutral-400">
+              Reporting: Chapter {chapter.chapter_number}
+            </p>
+            <select
+              value={reportReason}
+              onChange={(e) => setReportReason(e.target.value)}
+              className="w-full bg-neutral-900 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
+            >
+              <option value="Broken / Missing Images">Broken / Missing Images</option>
+              <option value="Wrong Chapter Order">Wrong Chapter Order</option>
+              <option value="Scrambled Pages">Scrambled Pages</option>
+              <option value="Duplicate Chapter">Duplicate Chapter</option>
+            </select>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setReportOpen(false)}
+                className="px-3 py-1.5 rounded-xl bg-neutral-800 text-neutral-300 text-xs hover:bg-neutral-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReportSubmit}
+                disabled={reportStatus !== 'idle'}
+                className="px-4 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500 disabled:opacity-50"
+              >
+                {reportStatus === 'sending' ? 'Sending...' : reportStatus === 'sent' ? 'Sent!' : 'Submit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-              return (
-                <div
-                  key={idx}
-                  className="w-full flex justify-center bg-[#090a0f] min-h-[300px] border-b border-neutral-900/30 relative"
-                >
-                  <img
-                    src={resolvedSrc}
-                    alt={`Page ${idx + 1}`}
-                    loading="lazy"
-                    decoding="async"
-                    referrerPolicy="no-referrer"
-                    className="w-full h-auto object-contain block max-w-full"
-                    onError={(e) => {
-                      const target = e.currentTarget;
-                      if (!target.src.includes('/api/proxy-image')) {
-                        target.src = `/api/proxy-image?url=${encodeURIComponent(resolvedSrc)}`;
-                      }
-                    }}
-                  />
-                </div>
-              );
-            })}
+      {/* Reader Body Content */}
+      <main className="flex-1 flex flex-col items-center justify-center pt-14 pb-20 w-full">
+        {readingMode === 'webtoon' ? (
+          <div className={`w-full flex flex-col items-center ${pageFit === 'height' ? 'max-w-2xl' : 'max-w-4xl'}`}>
+            {chapter.pages.map((page, idx) => (
+              <img
+                key={idx}
+                src={resolveImageUrl(page)}
+                alt={`Page ${idx + 1}`}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                className="w-full h-auto block select-none"
+              />
+            ))}
           </div>
         ) : (
-          <div className="relative w-full flex-1 flex flex-col items-center justify-center p-2">
-            <div className="relative max-h-[92vh] max-w-full flex items-center justify-center">
+          <div className="w-full max-w-3xl flex flex-col items-center px-4">
+            <div className="relative w-full flex items-center justify-center min-h-[70vh]">
               <img
                 src={resolveImageUrl(chapter.pages[currentPage])}
                 alt={`Page ${currentPage + 1}`}
-                decoding="async"
-                referrerPolicy="no-referrer"
-                className={`object-contain transition-all ${
-                  pageFit === 'height' ? 'max-h-[88vh] w-auto' : 'max-w-3xl w-full h-auto'
-                }`}
-                onError={(e) => {
-                  const target = e.currentTarget;
-                  const original = resolveImageUrl(chapter.pages[currentPage]);
-                  if (!target.src.includes('/api/proxy-image')) {
-                    target.src = `/api/proxy-image?url=${encodeURIComponent(original)}`;
-                  }
-                }}
+                className="max-h-[85vh] w-auto object-contain select-none shadow-2xl rounded-lg"
               />
             </div>
-            <div className="mt-3 text-[11px] font-bold text-neutral-500">
-              {currentPage + 1} / {totalPages}
+            <div className="flex items-center justify-between w-full mt-4 text-xs font-bold text-neutral-400">
+              <button onClick={handlePrevPage} className="px-3 py-1.5 bg-neutral-800 rounded-xl hover:text-white">
+                ← Prev
+              </button>
+              <span>
+                {currentPage + 1} / {totalPages}
+              </span>
+              <button onClick={handleNextPage} className="px-3 py-1.5 bg-neutral-800 rounded-xl hover:text-white">
+                Next →
+              </button>
             </div>
           </div>
         )}
       </main>
 
-      <footer className="fixed bottom-0 left-0 right-0 z-50 bg-[#0c0d14]/95 backdrop-blur-md border-t border-neutral-800/80 px-4 py-2.5 flex items-center justify-between text-xs font-semibold">
+      {/* Navigation Footer */}
+      <footer className="fixed bottom-0 left-0 right-0 z-40 bg-[#0c0d14]/90 backdrop-blur-md border-t border-neutral-800/80 px-4 py-3 flex items-center justify-between text-xs font-bold">
         {prevChapter ? (
           <Link
             href={`/read/${prevChapter.id}`}
-            className="px-3 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 transition"
+            className="px-3.5 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-300 transition"
           >
-            ← Prev Ch. {prevChapter.chapter_number}
+            ← Ch. {prevChapter.chapter_number}
           </Link>
         ) : (
-          <div className="w-20" />
+          <span className="opacity-0 px-3.5 py-1.5">←</span>
         )}
 
-        <div className="text-[11px] text-neutral-400">
-          Chapter {chapter.chapter_number}
-        </div>
+        <span className="text-neutral-500 text-[11px]">
+          Ch. {chapter.chapter_number}
+        </span>
 
         {nextChapter ? (
           <Link
             href={`/read/${nextChapter.id}`}
-            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition"
+            className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-md transition"
           >
-            Next Ch. {nextChapter.chapter_number} →
+            Ch. {nextChapter.chapter_number} →
           </Link>
         ) : (
-          <div className="w-20 text-right text-[10px] text-neutral-500">Latest</div>
+          <Link
+            href={series ? `/series/${series.slug}` : '/'}
+            className="px-3.5 py-1.5 rounded-xl bg-neutral-800 text-neutral-400 hover:text-white transition"
+          >
+            Completed
+          </Link>
         )}
       </footer>
     </div>
