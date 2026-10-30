@@ -7,6 +7,7 @@ const ALLOWED_HOSTS = [
   'mangadex.org',
   'uploads.mangadex.org',
   'mangapill.com',
+  'mpcdn.top',
   'readdetectiveconan.com',
   'weebcentral.com',
   'temp.compsci88.com',
@@ -21,6 +22,8 @@ const ALLOWED_HOSTS = [
   'hivetoons.org',
   'asuracomic.net',
   'asuratool.com',
+  'anilist.co',
+  's4.anilist.co',
   // MangaFire domains
   'mangafire.to',
   'static.mangafire.to',
@@ -44,10 +47,12 @@ export async function GET(req: NextRequest) {
 
     const hostname = parsedUrl.hostname.toLowerCase();
     const isAllowed = ALLOWED_HOSTS.some((h) => hostname === h || hostname.endsWith(`.${h}`));
-    if (!isAllowed) return new NextResponse('Host domain not in image proxy allowlist', { status: 403 });
+    if (!isAllowed) {
+      return new NextResponse(`Host domain (${hostname}) not in image proxy allowlist`, { status: 403 });
+    }
 
     let referer = `${parsedUrl.protocol}//${parsedUrl.host}/`;
-    if (hostname.includes('mangapill') || hostname.includes('readdetectiveconan')) {
+    if (hostname.includes('mangapill') || hostname.includes('mpcdn') || hostname.includes('readdetectiveconan')) {
       referer = 'https://mangapill.com/';
     } else if (hostname.includes('weebcentral') || hostname.includes('compsci88')) {
       referer = 'https://weebcentral.com/';
@@ -55,6 +60,8 @@ export async function GET(req: NextRequest) {
       referer = 'https://chapmanganato.to/';
     } else if (hostname.includes('mangafire')) {
       referer = 'https://mangafire.to/';
+    } else if (hostname.includes('anilist')) {
+      referer = 'https://anilist.co/';
     }
 
     const upstreamRes = await fetch(imageUrl, {
