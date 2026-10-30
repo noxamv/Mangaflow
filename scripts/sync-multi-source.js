@@ -18,7 +18,9 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: false }
+});
 
 const BROWSER_HEADERS = {
   'User-Agent':
@@ -73,6 +75,9 @@ async function fetchAniListMetadata(title) {
         status
         chapters
         format
+        genres
+        description(asHtml: false)
+        coverImage { extraLarge large }
         title { english romaji }
       }
     }
@@ -81,7 +86,8 @@ async function fetchAniListMetadata(title) {
     const res = await fetch('https://graphql.anilist.co', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ query, variables: { search: cleanTitle(title) } })
+      body: JSON.stringify({ query, variables: { search: cleanTitle(title) } }),
+      signal: AbortSignal.timeout(8000)
     });
     if (!res.ok) return null;
     const json = await res.json();
@@ -95,6 +101,9 @@ async function fetchAniListMetadata(title) {
     return {
       status: pubStatus,
       officialChapters: media.chapters || null,
+      coverUrl: media.coverImage?.extraLarge || media.coverImage?.large || null,
+      description: media.description || '',
+      genres: media.genres || [],
       isFinished: media.status === 'FINISHED'
     };
   } catch {
@@ -113,7 +122,8 @@ async function scrapeWeebCentral(title) {
 
     const searchRes = await fetch(searchUrl, {
       method: 'GET',
-      headers: { ...BROWSER_HEADERS, 'HX-Request': 'true', Referer: 'https://weebcentral.com/search' }
+      headers: { ...BROWSER_HEADERS, 'HX-Request': 'true', Referer: 'https://weebcentral.com/search' },
+      signal: AbortSignal.timeout(10000)
     });
     if (!searchRes.ok) return { chapters: [], platform: 'weebcentral' };
 
@@ -127,7 +137,8 @@ async function scrapeWeebCentral(title) {
     if (!seriesId) return { chapters: [], platform: 'weebcentral' };
 
     const chapsRes = await fetch(`https://weebcentral.com/series/${seriesId}/full-chapter-list`, {
-      headers: { ...BROWSER_HEADERS, 'HX-Request': 'true', Referer: seriesUrl }
+      headers: { ...BROWSER_HEADERS, 'HX-Request': 'true', Referer: seriesUrl },
+      signal: AbortSignal.timeout(12000)
     });
     if (!chapsRes.ok) return { chapters: [], platform: 'weebcentral' };
 
@@ -167,7 +178,8 @@ async function scrapeComick(title) {
   for (const base of domains) {
     try {
       const searchRes = await fetch(`${base}/v1.0/search?q=${encodeURIComponent(cleanTitle(title))}&limit=1`, {
-        headers: { ...BROWSER_HEADERS, Referer: 'https://comick.io/' }
+        headers: { ...BROWSER_HEADERS, Referer: 'https://comick.io/' },
+        signal: AbortSignal.timeout(8000)
       });
       if (!searchRes.ok) continue;
 
@@ -180,7 +192,8 @@ async function scrapeComick(title) {
 
       while (page <= 15) {
         const chapRes = await fetch(`${base}/comic/${comic.hid}/chapters?lang=en&limit=100&page=${page}`, {
-          headers: { ...BROWSER_HEADERS, Referer: 'https://comick.io/' }
+          headers: { ...BROWSER_HEADERS, Referer: 'https://comick.io/' },
+          signal: AbortSignal.timeout(8000)
         });
         if (!chapRes.ok) break;
 
@@ -221,7 +234,8 @@ async function scrapeMangaPill(targetUrl, title) {
   if (!url) {
     try {
       const searchRes = await fetch(`https://mangapill.com/search?q=${encodeURIComponent(cleanTitle(title))}`, {
-        headers: BROWSER_HEADERS
+        headers: BROWSER_HEADERS,
+        signal: AbortSignal.timeout(8000)
       });
       if (searchRes.ok) {
         const html = await searchRes.text();
@@ -235,7 +249,7 @@ async function scrapeMangaPill(targetUrl, title) {
   if (!url) return { chapters: [], platform: 'mangapill' };
 
   try {
-    const res = await fetch(url, { headers: BROWSER_HEADERS });
+    const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return { chapters: [], platform: 'mangapill' };
 
     const html = await res.text();
@@ -275,7 +289,7 @@ async function scrapeMangaDex(targetUrl, title) {
     try {
       const res = await fetch(
         `https://api.mangadex.org/manga?title=${encodeURIComponent(cleanTitle(title))}&limit=1&contentRating[]=safe&contentRating[]=suggestive`,
-        { headers: BROWSER_HEADERS }
+        { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(8000) }
       );
       if (res.ok) {
         const json = await res.json();
@@ -293,7 +307,7 @@ async function scrapeMangaDex(targetUrl, title) {
     while (offset < 1000) {
       const feedRes = await fetch(
         `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=100&offset=${offset}&contentRating[]=safe&contentRating[]=suggestive`,
-        { headers: BROWSER_HEADERS }
+        { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(8000) }
       );
       if (!feedRes.ok) break;
 
@@ -324,7 +338,83 @@ async function scrapeMangaDex(targetUrl, title) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. MULTI-LANE STITCHING & ADAPTIVE SCHEDULING
+// 6. CATALOG EXPANDER (TRENDING DISCOVERY)
+// ---------------------------------------------------------------------------
+async function discoverNewSeries() {
+  console.log('[DISCOVERY] Scouting AniList trending manga to expand catalog...');
+  const query = `
+    query {
+      Page(page: 1, perPage: 15) {
+        media(type: MANGA, sort: TRENDING_DESC, countryOfOrigin: "KR") {
+          title { english romaji }
+          status
+          chapters
+          description(asHtml: false)
+          coverImage { extraLarge }
+          genres
+        }
+      }
+    }
+  `;
+
+  try {
+    const res = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!res.ok) return;
+    const json = await res.json();
+    const mediaList = json.data?.Page?.media || [];
+
+    for (const item of mediaList) {
+      const canonicalTitle = item.title.english || item.title.romaji;
+      if (!canonicalTitle) continue;
+
+      const slug = cleanTitle(canonicalTitle).replace(/\s+/g, '-');
+      const { data: existing } = await supabase
+        .from('series')
+        .select('id')
+        .or(`slug.eq.${slug},title.ilike.${canonicalTitle}`)
+        .maybeSingle();
+
+      if (!existing) {
+        console.log(`[DISCOVERY] Ingesting new title: "${canonicalTitle}"`);
+        const { data: inserted } = await supabase
+          .from('series')
+          .insert({
+            title: canonicalTitle,
+            slug,
+            description: item.description || '',
+            cover_url: item.coverImage?.extraLarge || '',
+            status: item.status === 'FINISHED' ? 'Completed' : 'Ongoing',
+            reading_mode: 'webtoon'
+          })
+          .select('id, slug')
+          .single();
+
+        if (inserted) {
+          await supabase.from('series_intel').upsert(
+            {
+              series_id: inserted.id,
+              slug: inserted.slug || slug,
+              source_platform: 'unassigned',
+              target_url: 'placeholder',
+              next_scout_at: new Date().toISOString()
+            },
+            { onConflict: 'series_id' }
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[WARN] Discovery Engine: ${err.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7. MULTI-LANE STITCHING & ADAPTIVE SCHEDULING
 // ---------------------------------------------------------------------------
 async function resolveAndStitchSeries(series) {
   const intel = Array.isArray(series.series_intel) ? series.series_intel[0] || {} : series.series_intel || {};
@@ -432,19 +522,31 @@ async function resolveAndStitchSeries(series) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. QUEUE AUDITOR ENTRYPOINT
+// 8. QUEUE AUDITOR ENTRYPOINT
 // ---------------------------------------------------------------------------
 async function main() {
   console.log('--- STAGE 2: MULTI-LANE GAP AUDITOR & BACKLOG STITCHER ---');
+
+  // Trigger database self-healing function before starting the sweep
+  try {
+    const { error: healErr } = await supabase.rpc('fn_heal_catalog_queue');
+    if (healErr) console.warn('[WARN] Queue Self-Heal RPC:', healErr.message);
+    else console.log('[HEAL] Database queue self-healing completed.');
+  } catch (err) {
+    console.warn('[WARN] Queue Self-Heal skipped:', err.message);
+  }
+
+  await discoverNewSeries();
 
   const { data: queue, error } = await supabase
     .from('series')
     .select(`
       id,
       title,
+      slug,
       reading_mode,
       status,
-      series_intel(source_platform, target_url, last_scouted_at, next_scout_at, completed_at, is_complete)
+      series_intel(source_platform, target_url, last_scouted_at, next_scout_at, completed_at, is_complete, total_official_chapters)
     `)
     .or(`next_scout_at.lte.${new Date().toISOString()},next_scout_at.is.null`, { foreignTable: 'series_intel' })
     .limit(300);
