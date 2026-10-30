@@ -3,81 +3,85 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-const ALLOWED_DOMAINS = [
+const ALLOWED_HOSTS = [
   'mangadex.org',
   'uploads.mangadex.org',
   'mangapill.com',
   'readdetectiveconan.com',
-  'hivetoons.org',
-  'asuracomic.net',
-  'asuratool.com',
-  'reaperscans.com',
-  'flamecomics.xyz',
+  'weebcentral.com',
+  'temp.compsci88.com',
   'comick.fun',
   'comick.io',
   'comick.pictures',
   'meo.comick.pictures',
   'meo3.comick.pictures',
-  'toonily.com',
-  'toongod.org',
-  'wp.com'
+  'manganato.com',
+  'chapmanganato.to',
+  'natomanga.com',
+  'hivetoons.org',
+  'asuracomic.net',
+  'asuratool.com',
+  // MangaFire domains
+  'mangafire.to',
+  'static.mangafire.to',
+  's1.mangafire.to',
+  's2.mangafire.to'
 ];
 
 export async function GET(req: NextRequest) {
-  const url = req.nextUrl.searchParams.get('url');
-
-  if (!url) {
-    return new NextResponse('Image URL is required', { status: 400 });
-  }
-
   try {
-    const targetUrl = new URL(url);
-    const hostname = targetUrl.hostname;
+    const { searchParams } = new URL(req.url);
+    const imageUrl = searchParams.get('url');
 
-    const isAllowed = ALLOWED_DOMAINS.some(
-      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
-    );
+    if (!imageUrl) return new NextResponse('Missing image URL parameter', { status: 400 });
 
-    if (!isAllowed) {
-      return new NextResponse('Domain not allowed', { status: 403 });
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(imageUrl);
+    } catch {
+      return new NextResponse('Invalid target image URL', { status: 400 });
     }
 
-    // Determine correct Referer based on target CDN
-    let referer = `${targetUrl.protocol}//${targetUrl.host}/`;
-    if (hostname.includes('readdetectiveconan.com') || hostname.includes('mangapill.com')) {
+    const hostname = parsedUrl.hostname.toLowerCase();
+    const isAllowed = ALLOWED_HOSTS.some((h) => hostname === h || hostname.endsWith(`.${h}`));
+    if (!isAllowed) return new NextResponse('Host domain not in image proxy allowlist', { status: 403 });
+
+    let referer = `${parsedUrl.protocol}//${parsedUrl.host}/`;
+    if (hostname.includes('mangapill') || hostname.includes('readdetectiveconan')) {
       referer = 'https://mangapill.com/';
-    } else if (hostname.includes('hivetoons.org')) {
-      referer = 'https://hivetoons.org/';
-    } else if (hostname.includes('comick')) {
-      referer = 'https://comick.io/';
+    } else if (hostname.includes('weebcentral') || hostname.includes('compsci88')) {
+      referer = 'https://weebcentral.com/';
+    } else if (hostname.includes('manganato') || hostname.includes('chapmanganato') || hostname.includes('natomanga')) {
+      referer = 'https://chapmanganato.to/';
+    } else if (hostname.includes('mangafire')) {
+      referer = 'https://mangafire.to/';
     }
 
-    const headers: Record<string, string> = {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-      'Referer': referer,
-      'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-    };
+    const upstreamRes = await fetch(imageUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        Referer: referer,
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+      },
+      cache: 'force-cache'
+    });
 
-    const upstreamResponse = await fetch(url, { headers });
-
-    if (!upstreamResponse.ok) {
-      return new NextResponse(`Failed to fetch image: ${upstreamResponse.statusText}`, {
-        status: upstreamResponse.status,
-      });
+    if (!upstreamRes.ok) {
+      return new NextResponse(`Failed to fetch upstream image: ${upstreamRes.statusText}`, { status: upstreamRes.status });
     }
 
-    const contentType = upstreamResponse.headers.get('content-type') || 'image/jpeg';
-    const buffer = await upstreamResponse.arrayBuffer();
+    const contentType = upstreamRes.headers.get('content-type') || 'image/jpeg';
+    const buffer = await upstreamRes.arrayBuffer();
 
     return new NextResponse(buffer, {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=604800, immutable',
-      },
+        'Cache-Control': 'public, max-age=604800, immutable'
+      }
     });
-  } catch (error: any) {
-    return new NextResponse(`Internal error: ${error.message}`, { status: 500 });
+  } catch (err: any) {
+    return new NextResponse(err.message || 'Image Proxy Error', { status: 500 });
   }
 }
