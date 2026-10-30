@@ -1,3 +1,4 @@
+// scripts/sync-multi-source.js
 if (typeof globalThis.WebSocket === 'undefined') {
   globalThis.WebSocket = class WebSocket {};
 }
@@ -153,7 +154,7 @@ async function scrapeComickClean(title) {
   }
 }
 
-// 3. MANGAPILL ADAPTER (WITH TITLE FALLBACK ON 404)
+// 3. MANGAPILL ADAPTER
 async function scrapeMangaPill(targetUrl, title) {
   let url = targetUrl && targetUrl.includes('mangapill.com') ? targetUrl : null;
 
@@ -210,7 +211,51 @@ async function scrapeMangaPill(targetUrl, title) {
   return { chapters, resolvedUrl: url, platform: 'mangapill' };
 }
 
-// 4. MANGADEX API ADAPTER
+// 4. MANGAFIRE ADAPTER
+async function scrapeMangaFire(title) {
+  try {
+    const searchUrl = `https://mangafire.to/filter?keyword=${encodeURIComponent(title)}`;
+    const searchRes = await fetch(searchUrl, { headers: HEADERS });
+    if (!searchRes.ok) return { chapters: [], platform: 'mangafire' };
+
+    const searchHtml = await searchRes.text();
+    const $ = cheerio.load(searchHtml);
+    const href = $('.original.card-lg .inner a, .unit .inner a').first().attr('href');
+    if (!href) return { chapters: [], platform: 'mangafire' };
+
+    const seriesUrl = href.startsWith('http') ? href : `https://mangafire.to${href}`;
+    const res = await fetch(seriesUrl, { headers: HEADERS });
+    if (!res.ok) return { chapters: [], platform: 'mangafire' };
+
+    const pageHtml = await res.text();
+    const $p = cheerio.load(pageHtml);
+    const chapters = [];
+
+    $p('.chapter-list li a, ul.scroll-sm li a').each((_, el) => {
+      const chHref = $p(el).attr('href');
+      const text = $p(el).text().trim();
+      const match = text.match(/chapter\s*([\d.]+)/i) || chHref?.match(/chapter-([\d.]+)/i);
+      if (match && chHref) {
+        const fullUrl = chHref.startsWith('http') ? chHref : `https://mangafire.to${chHref}`;
+        const chNum = parseFloat(match[1]);
+        if (!isNaN(chNum)) {
+          chapters.push({
+            chapter_number: chNum,
+            title: text || `Chapter ${chNum}`,
+            external_id: fullUrl,
+            pages: [fullUrl]
+          });
+        }
+      }
+    });
+
+    return { chapters, resolvedUrl: seriesUrl, platform: 'mangafire' };
+  } catch {
+    return { chapters: [], platform: 'mangafire' };
+  }
+}
+
+// 5. MANGADEX API ADAPTER
 async function scrapeMangaDex(targetUrl, title) {
   let mangaId = null;
   if (targetUrl?.includes('mangadex.org/title/')) {
@@ -307,6 +352,9 @@ async function resolveSeries(series) {
     const cm = await scrapeComickClean(title);
     if (cm.chapters.length > 0) candidates.push(cm);
 
+    const mf = await scrapeMangaFire(title);
+    if (mf.chapters.length > 0) candidates.push(mf);
+
     const mp = await scrapeMangaPill(targetUrl, title);
     if (mp.chapters.length > 0) candidates.push(mp);
 
@@ -324,6 +372,9 @@ async function resolveSeries(series) {
 
     const cm = await scrapeComickClean(title);
     if (cm.chapters.length > 0) candidates.push(cm);
+
+    const mf = await scrapeMangaFire(title);
+    if (mf.chapters.length > 0) candidates.push(mf);
   }
 
   const validCandidates = candidates
@@ -337,7 +388,6 @@ async function resolveSeries(series) {
     return;
   }
 
-  // Max-Coverage Selection: choose candidate with the most chapters
   validCandidates.sort((a, b) => b.chapters.length - a.chapters.length);
   const best = validCandidates[0];
 
