@@ -1,4 +1,4 @@
-// scripts/repair-covers.js
+// scripts/repair-catalog-metadata.js
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -13,7 +13,7 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } });
 
 const HEADERS = {
   'User-Agent':
@@ -31,11 +31,13 @@ function cleanTitle(str) {
     .trim();
 }
 
-async function fetchAniListCover(title) {
+async function fetchAniListMetadata(title) {
   const query = `
     query ($search: String) {
       Media (search: $search, type: MANGA) {
+        description(asHtml: false)
         coverImage { extraLarge large }
+        status
       }
     }
   `;
@@ -47,7 +49,14 @@ async function fetchAniListCover(title) {
     });
     if (!res.ok) return null;
     const json = await res.json();
-    return json?.data?.Media?.coverImage?.extraLarge || json?.data?.Media?.coverImage?.large || null;
+    const media = json?.data?.Media;
+    if (!media) return null;
+
+    return {
+      description: media.description || null,
+      coverUrl: media.coverImage?.extraLarge || media.coverImage?.large || null,
+      status: media.status === 'FINISHED' ? 'Completed' : 'Ongoing'
+    };
   } catch {
     return null;
   }
@@ -70,12 +79,12 @@ async function fetchMangaDexCover(title) {
   return null;
 }
 
-async function repairCovers() {
-  console.log('--- SCANNING FOR MISSING AND BROKEN COVERS ---');
+async function repairCatalogMetadata() {
+  console.log('--- SCANNING CATALOG FOR MISSING COVERS & BIOS ---');
 
   const { data: allSeries, error } = await supabase
     .from('series')
-    .select('id, title, english_title, cover_url, cover_image_url')
+    .select('id, title, english_title, cover_url, cover_image_url, description')
     .order('created_at', { ascending: false });
 
   if (error || !allSeries) {
@@ -84,50 +93,62 @@ async function repairCovers() {
   }
 
   const needsRepair = allSeries.filter((s) => {
-    const url = s.cover_image_url || s.cover_url || '';
+    const cover = s.cover_image_url || s.cover_url || '';
+    const bio = s.description || '';
     return (
-      !url ||
-      url.trim() === '' ||
-      url.includes('undefined') ||
-      url.includes('placeholder') ||
-      url.startsWith('data:image/svg')
+      !cover ||
+      cover.trim() === '' ||
+      cover.includes('MISSING') ||
+      cover.includes('undefined') ||
+      cover.includes('placeholder') ||
+      !bio ||
+      bio.trim() === ''
     );
   });
 
-  console.log(`Found ${needsRepair.length} series needing cover repair out of ${allSeries.length} total.`);
+  console.log(`Found ${needsRepair.length} series needing cover or bio repair out of ${allSeries.length} total.`);
 
   let repairedCount = 0;
 
   for (const s of needsRepair) {
     const title = s.english_title || s.title;
-    console.log(`Fixing cover for: "${title}"`);
+    console.log(`Repairing metadata for: "${title}"`);
 
-    let newCover = await fetchAniListCover(title);
+    const meta = await fetchAniListMetadata(title);
+    let newCover = meta?.coverUrl;
+    const newBio = meta?.description;
+
     if (!newCover) {
       newCover = await fetchMangaDexCover(title);
     }
 
-    if (newCover) {
+    const updatePayload = {};
+    if (newCover && (!s.cover_url || s.cover_url.includes('MISSING') || s.cover_url.includes('placeholder'))) {
+      updatePayload.cover_url = newCover;
+      updatePayload.cover_image_url = newCover;
+    }
+    if (newBio && (!s.description || s.description.trim() === '')) {
+      updatePayload.description = newBio;
+    }
+
+    if (Object.keys(updatePayload).length > 0) {
       const { error: updateErr } = await supabase
         .from('series')
-        .update({
-          cover_image_url: newCover,
-          cover_url: newCover
-        })
+        .update(updatePayload)
         .eq('id', s.id);
 
       if (!updateErr) {
-        console.log(`   [SUCCESS] Updated cover: ${newCover}`);
+        console.log(`   [SUCCESS] Repaired fields: ${Object.keys(updatePayload).join(', ')}`);
         repairedCount++;
       }
     } else {
-      console.log(`   [SKIP] No external cover found.`);
+      console.log(`   [SKIP] No external metadata found.`);
     }
 
-    await delay(700);
+    await delay(600);
   }
 
-  console.log(`\n--- COVER REPAIR COMPLETE: Repaired ${repairedCount} series ---`);
+  console.log(`\n--- CATALOG METADATA REPAIR COMPLETE: Repaired ${repairedCount} series ---`);
 }
 
-repairCovers().catch(console.error);
+repairCatalogMetadata().catch(console.error);
