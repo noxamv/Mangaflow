@@ -1,9 +1,13 @@
-name: MangaFlow Gap Sweeper & Epilogue Auditor (Daily)
+name: MangaFlow Gap Sweeper & Epilogue Auditor (45-Min)
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    # Runs at :07 and :52 past every hour (45-min interval offset to avoid top-of-hour congestion)
+    - cron: '7,52 * * * *'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: mangaflow-sweeper
