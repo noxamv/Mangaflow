@@ -26,24 +26,26 @@ const BROWSER_HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9'
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Cache-Control': 'no-cache',
+  Pragma: 'no-cache'
 };
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function cleanTitle(str) {
   return (str || '')
-    .toLowerCase()
-    .replace(/[^\w\s-]/g, '')
+    .split(/[\n\r]/)[0]
+    .replace(/[^\w\s-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 function parseChapterNumber(text, href) {
-  const match = text?.match(/chapter\s*([\d.]+)/i) || href?.match(/chapter-([\d.]+)/i);
+  const match = text?.match(/chapter\s*([\d.]+)/i) || href?.match(/chapter-([\d.]+)/i) || href?.match(/\/([\d.]+)$/);
   if (match) {
     const num = parseFloat(match[1]);
-    if (!isNaN(num) && num >= 0 && num <= 4000) return num;
+    if (!isNaN(num) && num >= 0 && num <= 5000) return num;
   }
   return null;
 }
@@ -60,7 +62,9 @@ function isManhwa(series) {
     t.includes('ranker') ||
     t.includes('tower') ||
     t.includes('cultivat') ||
-    t.includes('martial')
+    t.includes('martial') ||
+    t.includes('sword') ||
+    t.includes('academy')
   );
 }
 
@@ -112,18 +116,17 @@ async function fetchAniListMetadata(title) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. WEEBCENTRAL SCRAPER
+// 2. WEEBCENTRAL SCRAPER (PAGINATED & ROBUST HEADERS)
 // ---------------------------------------------------------------------------
 async function scrapeWeebCentral(title) {
   try {
-    const searchUrl = `https://weebcentral.com/search/data?limit=12&offset=0&text=${encodeURIComponent(
-      cleanTitle(title)
-    )}&sort=Best+Match&order=Ascending&official=Any`;
+    const query = encodeURIComponent(cleanTitle(title));
+    const searchUrl = `https://weebcentral.com/search/data?limit=12&offset=0&text=${query}&sort=Best+Match&order=Ascending&official=Any`;
 
     const searchRes = await fetch(searchUrl, {
       method: 'GET',
       headers: { ...BROWSER_HEADERS, 'HX-Request': 'true', Referer: 'https://weebcentral.com/search' },
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(9000)
     });
     if (!searchRes.ok) return { chapters: [], platform: 'weebcentral' };
 
@@ -190,7 +193,7 @@ async function scrapeComick(title) {
       let page = 1;
       const chapters = [];
 
-      while (page <= 15) {
+      while (page <= 25) {
         const chapRes = await fetch(`${base}/comic/${comic.hid}/chapters?lang=en&limit=100&page=${page}`, {
           headers: { ...BROWSER_HEADERS, Referer: 'https://comick.io/' },
           signal: AbortSignal.timeout(8000)
@@ -203,7 +206,7 @@ async function scrapeComick(title) {
 
         for (const item of items) {
           const chNum = parseFloat(item.chap);
-          if (!isNaN(chNum) && chNum >= 0 && chNum <= 4000) {
+          if (!isNaN(chNum) && chNum >= 0 && chNum <= 5000) {
             chapters.push({
               chapter_number: chNum,
               title: item.title ? `Chapter ${chNum} - ${item.title}` : `Chapter ${chNum}`,
@@ -214,7 +217,7 @@ async function scrapeComick(title) {
           }
         }
         page++;
-        await delay(80);
+        await delay(120);
       }
 
       if (chapters.length > 0) {
@@ -226,24 +229,33 @@ async function scrapeComick(title) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. MANGAPILL SCRAPER
+// 4. MANGAPILL SCRAPER (KEYWORD SPLIT FALLBACK)
 // ---------------------------------------------------------------------------
 async function scrapeMangaPill(targetUrl, title) {
   let url = targetUrl && targetUrl.includes('mangapill.com') ? targetUrl : null;
 
   if (!url) {
-    try {
-      const searchRes = await fetch(`https://mangapill.com/search?q=${encodeURIComponent(cleanTitle(title))}`, {
-        headers: BROWSER_HEADERS,
-        signal: AbortSignal.timeout(8000)
-      });
-      if (searchRes.ok) {
-        const html = await searchRes.text();
-        const $ = cheerio.load(html);
-        const match = $('a[href*="/manga/"]').first().attr('href');
-        if (match) url = match.startsWith('http') ? match : `https://mangapill.com${match}`;
-      }
-    } catch {}
+    const searchTerms = [cleanTitle(title), cleanTitle(title).split(' ').slice(0, 3).join(' ')];
+
+    for (const term of searchTerms) {
+      if (!term || term.length < 2) continue;
+      try {
+        const searchRes = await fetch(`https://mangapill.com/search?q=${encodeURIComponent(term)}`, {
+          headers: BROWSER_HEADERS,
+          signal: AbortSignal.timeout(8000)
+        });
+        if (searchRes.ok) {
+          const html = await searchRes.text();
+          const $ = cheerio.load(html);
+          const match = $('a[href*="/manga/"]').first().attr('href');
+          if (match) {
+            url = match.startsWith('http') ? match : `https://mangapill.com${match}`;
+            break;
+          }
+        }
+      } catch {}
+      await delay(200);
+    }
   }
 
   if (!url) return { chapters: [], platform: 'mangapill' };
@@ -256,7 +268,7 @@ async function scrapeMangaPill(targetUrl, title) {
     const $ = cheerio.load(html);
     const chapters = [];
 
-    $('#chapters a[href*="/chapters/"], .chapters a').each((_, el) => {
+    $('#chapters a[href*="/chapters/"], .chapters a, a[href*="/chapters/"]').each((_, el) => {
       const href = $(el).attr('href');
       const text = $(el).text().trim();
       const chNum = parseChapterNumber(text, href);
@@ -280,7 +292,7 @@ async function scrapeMangaPill(targetUrl, title) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. MANGADEX SCRAPER
+// 5. MANGADEX SCRAPER (AUTO-PAGINATED TO END)
 // ---------------------------------------------------------------------------
 async function scrapeMangaDex(targetUrl, title) {
   let mangaId = targetUrl?.match(/title\/([a-f0-9-]{36})/)?.[1];
@@ -302,22 +314,30 @@ async function scrapeMangaDex(targetUrl, title) {
 
   try {
     let offset = 0;
+    const limit = 100;
+    let total = Infinity;
     const chapters = [];
 
-    while (offset < 1000) {
+    while (offset < total) {
       const feedRes = await fetch(
-        `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=100&offset=${offset}&contentRating[]=safe&contentRating[]=suggestive`,
+        `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=${limit}&offset=${offset}&contentRating[]=safe&contentRating[]=suggestive`,
         { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(8000) }
       );
+
+      if (feedRes.status === 429) {
+        await delay(2000);
+        continue;
+      }
       if (!feedRes.ok) break;
 
       const feedJson = await feedRes.json();
+      total = feedJson.total || 0;
       const items = feedJson.data || [];
       if (items.length === 0) break;
 
       for (const item of items) {
         const chNum = parseFloat(item.attributes?.chapter);
-        if (!isNaN(chNum) && chNum >= 0 && chNum <= 4000) {
+        if (!isNaN(chNum) && chNum >= 0 && chNum <= 5000) {
           chapters.push({
             chapter_number: chNum,
             title: item.attributes?.title ? `Chapter ${chNum} - ${item.attributes.title}` : `Chapter ${chNum}`,
@@ -327,8 +347,10 @@ async function scrapeMangaDex(targetUrl, title) {
           });
         }
       }
-      offset += 100;
-      await delay(100);
+
+      offset += limit;
+      if (offset >= total) break;
+      await delay(250);
     }
 
     return { chapters, platform: 'mangadex', resolvedUrl: `https://mangadex.org/title/${mangaId}` };
@@ -341,10 +363,10 @@ async function scrapeMangaDex(targetUrl, title) {
 // 6. CATALOG EXPANDER (TRENDING DISCOVERY)
 // ---------------------------------------------------------------------------
 async function discoverNewSeries() {
-  console.log('[DISCOVERY] Scouting AniList trending manga to expand catalog...');
+  console.log('[DISCOVERY] Scouting AniList trending titles to expand catalog...');
   const query = `
     query {
-      Page(page: 1, perPage: 15) {
+      Page(page: 1, perPage: 10) {
         media(type: MANGA, sort: TRENDING_DESC, countryOfOrigin: "KR") {
           title { english romaji }
           status
@@ -440,13 +462,15 @@ async function resolveAndStitchSeries(series) {
 
   if (candidates.length === 0) {
     console.log(`  [FAILED] No chapters found on any provider for "${title}".`);
-    await supabase
-      .from('series_intel')
-      .update({
+    await supabase.from('series_intel').upsert(
+      {
+        series_id: series.id,
+        slug: series.slug,
         last_scouted_at: new Date().toISOString(),
         next_scout_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
-      })
-      .eq('series_id', series.id);
+      },
+      { onConflict: 'series_id' }
+    );
     return;
   }
 
@@ -478,9 +502,16 @@ async function resolveAndStitchSeries(series) {
   const primaryPlatform = candidates[0].platform;
   const primaryUrl = candidates[0].resolvedUrl || targetUrl || '';
 
+  // Batch upsert chapters
   const CHUNK = 200;
   for (let i = 0; i < payload.length; i += CHUNK) {
-    await supabase.from('chapters').upsert(payload.slice(i, i + CHUNK), { onConflict: 'series_id,chapter_number' });
+    const { error: upsertErr } = await supabase
+      .from('chapters')
+      .upsert(payload.slice(i, i + CHUNK), { onConflict: 'series_id,chapter_number' });
+
+    if (upsertErr) {
+      console.warn(`  [Upsert Warn]: ${upsertErr.message}`);
+    }
   }
 
   const now = Date.now();
@@ -501,9 +532,10 @@ async function resolveAndStitchSeries(series) {
     nextInterval = ONE_DAY * 14;
   }
 
-  await supabase
-    .from('series_intel')
-    .update({
+  await supabase.from('series_intel').upsert(
+    {
+      series_id: series.id,
+      slug: series.slug,
       source_platform: primaryPlatform,
       target_url: primaryUrl,
       latest_known_chapter: maxCh,
@@ -511,8 +543,9 @@ async function resolveAndStitchSeries(series) {
       next_scout_at: new Date(now + nextInterval).toISOString(),
       is_complete: isActuallyComplete,
       total_official_chapters: aniMeta?.officialChapters || intel.total_official_chapters || null
-    })
-    .eq('series_id', series.id);
+    },
+    { onConflict: 'series_id' }
+  );
 
   console.log(
     `  [STITCHED] Ingested ${payload.length} chapters (Max: Ch. ${maxCh}) merged across ${candidates
@@ -527,7 +560,6 @@ async function resolveAndStitchSeries(series) {
 async function main() {
   console.log('--- STAGE 2: MULTI-LANE GAP AUDITOR & BACKLOG STITCHER ---');
 
-  // Trigger database self-healing function before starting the sweep
   try {
     const { error: healErr } = await supabase.rpc('fn_heal_catalog_queue');
     if (healErr) console.warn('[WARN] Queue Self-Heal RPC:', healErr.message);
@@ -548,7 +580,6 @@ async function main() {
       status,
       series_intel(source_platform, target_url, last_scouted_at, next_scout_at, completed_at, is_complete, total_official_chapters)
     `)
-    .or(`next_scout_at.lte.${new Date().toISOString()},next_scout_at.is.null`, { foreignTable: 'series_intel' })
     .limit(300);
 
   if (error || !queue) {
@@ -556,7 +587,15 @@ async function main() {
     process.exit(1);
   }
 
-  queue.sort((a, b) => {
+  const nowIso = new Date().toISOString();
+
+  // Filter series due for a scout or missing intel entirely
+  const dueSeries = queue.filter((s) => {
+    const intel = Array.isArray(s.series_intel) ? s.series_intel[0] : s.series_intel;
+    return !intel || !intel.next_scout_at || intel.next_scout_at <= nowIso;
+  });
+
+  dueSeries.sort((a, b) => {
     const intelA = Array.isArray(a.series_intel) ? a.series_intel[0] : a.series_intel;
     const intelB = Array.isArray(b.series_intel) ? b.series_intel[0] : b.series_intel;
 
@@ -569,15 +608,22 @@ async function main() {
     return timeA - timeB;
   });
 
-  const batch = queue.slice(0,100);
+  const batch = dueSeries.slice(0, 50);
   console.log(`Auditing top ${batch.length} prioritized series in this sweep...`);
 
   for (const s of batch) {
-    await resolveAndStitchSeries(s);
-    await delay(700);
+    try {
+      await resolveAndStitchSeries(s);
+    } catch (seriesErr) {
+      console.error(`[ERROR] Failed to process "${s.title}":`, seriesErr.message);
+    }
+    await delay(600); // 600ms grace pause to avoid downstream IP bans
   }
 
-  console.log('--- MULTI-LANE AUDIT FINISHED ---');
+  console.log('--- AUDITOR SWEEP BATCH COMPLETE ---');
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error('[FATAL]:', err);
+  process.exit(1);
+});
