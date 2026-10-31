@@ -2,8 +2,12 @@ name: MangaFlow Fast Release Radar (30-Min)
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    # Runs at :14 and :44 past every hour (30-min cadence avoiding :00 and :30 congestion)
+    - cron: '14,44 * * * *'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: mangaflow-radar
