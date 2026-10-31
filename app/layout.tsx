@@ -1,3 +1,4 @@
+// app/layout.tsx
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -47,49 +48,39 @@ export default function RootLayout({
   const [notifTab, setNotifTab] = useState<'all' | 'unread' | 'read'>('all');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
-  // PWA Install Prompt State
+  // PWA Prompt State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
 
-  // References for Outside Click Detection
+  // References
   const menuDropdownRef = useRef<HTMLDivElement>(null);
-  const searchContainerRef = useRef<HTMLDivElement>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Identify Reader Route to Conditionally Hide Global Navbar
-  const isReadingPage = pathname ? pathname.startsWith('/read/') : false;
+  const isReadingPage = pathname?.startsWith('/read/');
 
-  // 1. Initial Auth Session Check
+  // Auth Listener
   useEffect(() => {
-    async function checkAuth() {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      setUser(session?.user ?? null);
-    }
-    checkAuth();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser((session?.user as UserProfile) || null);
+    });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      setUser((session?.user as UserProfile) || null);
     });
 
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
-  // 2. Fetch Notifications
+  // Notifications Realtime Subscription
   useEffect(() => {
-    if (!user) {
-      setNotifications([]);
-      return;
-    }
+    if (!user) return;
 
-    async function loadNotifications() {
+    async function fetchNotifications() {
       const { data } = await supabase
         .from('notifications')
         .select('*')
@@ -97,15 +88,13 @@ export default function RootLayout({
         .order('created_at', { ascending: false })
         .limit(20);
 
-      if (data) {
-        setNotifications(data);
-      }
+      if (data) setNotifications(data);
     }
 
-    loadNotifications();
+    fetchNotifications();
 
     const channel = supabase
-      .channel('realtime_user_notifications')
+      .channel('notifications_realtime')
       .on(
         'postgres_changes',
         {
@@ -125,7 +114,7 @@ export default function RootLayout({
     };
   }, [user]);
 
-  // 3. PWA Install Event Handler
+  // PWA Install Event Handler
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -155,7 +144,7 @@ export default function RootLayout({
     localStorage.setItem('mangaflow_pwa_dismissed', 'true');
   };
 
-  // Click Outside to Dismiss Panels
+  // Click Outside to Dismiss Overlays
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
@@ -189,7 +178,7 @@ export default function RootLayout({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [searchOpen]);
 
-  // 4. Live Search logic
+  // Live Instant Search Logic
   useEffect(() => {
     if (!searchQuery.trim()) {
       setSearchResults([]);
@@ -212,14 +201,13 @@ export default function RootLayout({
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Auto focus on search opening
   useEffect(() => {
     if (searchOpen) {
       searchInputRef.current?.focus();
     }
   }, [searchOpen]);
 
-  // Global Keyboard Shortcuts
+  // Keyboard Shortcuts (⌘K / Ctrl+K and ESC)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -274,13 +262,13 @@ export default function RootLayout({
 
       <body className="bg-[#0e1015] text-neutral-200 antialiased min-h-screen w-full max-w-full overflow-x-hidden flex flex-col selection:bg-indigo-500/20 selection:text-indigo-300">
         
-        {/* PWA INSTALL BANNER */}
+        {/* PWA Install Banner */}
         {showInstallBanner && !isReadingPage && (
           <div className="bg-gradient-to-r from-indigo-950 via-purple-950 to-neutral-900 border-b border-indigo-500/20 px-4 py-2.5 flex items-center justify-between text-xs sticky top-0 z-[60] backdrop-blur-md">
             <div className="flex items-center gap-3">
               <span className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">📱</span>
               <p className="font-medium text-neutral-200">
-                Install <strong className="text-white">MangaFlow</strong> app for the fastest full-screen reading experience.
+                Install <strong className="text-white">MangaFlow</strong> app for full-screen reading.
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -306,9 +294,8 @@ export default function RootLayout({
           <header className="sticky top-0 z-50 bg-[#0e1015]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 lg:px-8 py-3 transition-colors">
             <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
               
-              {/* Left: Mobile Menu on FAR LEFT, followed by MangaFlow */}
+              {/* Left Side: Mobile Drawer Toggle & MangaFlow Brand */}
               <div className="flex items-center gap-2 sm:gap-4">
-                {/* Mobile / Quick Dropdown Menu Trigger on the FAR LEFT */}
                 <div ref={menuDropdownRef} className="relative md:hidden">
                   <button
                     onClick={() => setMenuDropdownOpen(!menuDropdownOpen)}
@@ -320,48 +307,70 @@ export default function RootLayout({
                     </svg>
                   </button>
 
+                  {/* Improved Drawer Menu with Sub-Categories */}
                   {menuDropdownOpen && (
-                    <div className="absolute left-0 mt-2 w-48 bg-[#13151f] border border-neutral-800 rounded-2xl p-1.5 shadow-2xl z-50 text-xs font-semibold space-y-0.5">
+                    <div className="absolute left-0 mt-2 w-56 bg-[#13151f] border border-neutral-800 rounded-2xl p-2 shadow-2xl z-50 text-xs font-semibold space-y-1">
+                      <span className="px-3 py-1 text-[10px] uppercase font-bold text-neutral-500 block">
+                        Navigation
+                      </span>
                       <Link
                         href="/"
                         onClick={() => setMenuDropdownOpen(false)}
-                        className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                       >
-                        Home
-                      </Link>
-                      <Link
-                        href="/latest"
-                        onClick={() => setMenuDropdownOpen(false)}
-                        className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
-                      >
-                        Latest Releases
-                      </Link>
-                      <Link
-                        href="/popular"
-                        onClick={() => setMenuDropdownOpen(false)}
-                        className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
-                      >
-                        Popular Comics
+                        <span>🏠</span> Home
                       </Link>
                       <Link
                         href="/trending"
                         onClick={() => setMenuDropdownOpen(false)}
-                        className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                       >
-                        Trending
+                        <span>🔥</span> Trending Series
                       </Link>
+                      <Link
+                        href="/popular"
+                        onClick={() => setMenuDropdownOpen(false)}
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                      >
+                        <span>⭐</span> Popular Series
+                      </Link>
+                      <Link
+                        href="/latest"
+                        onClick={() => setMenuDropdownOpen(false)}
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                      >
+                        <span>⚡</span> Latest Releases
+                      </Link>
+                      <div className="h-px bg-neutral-800/80 my-1" />
+                      <span className="px-3 py-1 text-[10px] uppercase font-bold text-neutral-500 block">
+                        Browse & Filters
+                      </span>
                       <Link
                         href="/filter"
                         onClick={() => setMenuDropdownOpen(false)}
-                        className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                       >
-                        Filter & Search
+                        <span>🔍</span> Full Filter & Genres
+                      </Link>
+                      <Link
+                        href="/category/manhwa"
+                        onClick={() => setMenuDropdownOpen(false)}
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                      >
+                        <span>🇰🇷</span> Manhwa Shelf
+                      </Link>
+                      <Link
+                        href="/category/manga"
+                        onClick={() => setMenuDropdownOpen(false)}
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                      >
+                        <span>🇯🇵</span> Manga Shelf
                       </Link>
                     </div>
                   )}
                 </div>
 
-                {/* Brand Name (Without the purple [ M ] box) */}
+                {/* Brand Name */}
                 <Link href="/" className="flex items-center gap-2 group">
                   <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-white via-neutral-100 to-neutral-400 bg-clip-text text-transparent group-hover:text-white transition-colors">
                     MangaFlow
@@ -388,10 +397,10 @@ export default function RootLayout({
                 </nav>
               </div>
 
-              {/* Right: Floating Search Icon, Notifications, Profile / Sign In */}
+              {/* Right Side: Search, Notifications, User Menu */}
               <div className="flex items-center gap-2">
                 
-                {/* Floating Search Toggle Button */}
+                {/* Search Trigger */}
                 <button
                   onClick={() => setSearchOpen(!searchOpen)}
                   className={`p-2 rounded-xl border border-neutral-800/80 transition flex items-center justify-center ${
@@ -404,7 +413,7 @@ export default function RootLayout({
                   </svg>
                 </button>
 
-                {/* Notifications Panel */}
+                {/* Notifications Drawer */}
                 <div ref={notifRef} className="relative">
                   <button
                     onClick={() => setNotifOpen(!notifOpen)}
@@ -426,19 +435,16 @@ export default function RootLayout({
                     )}
                   </button>
 
-                  {/* Notifications Overlay Panel */}
                   {notifOpen && (
                     <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden text-xs">
                       <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
                         <span className="font-bold text-white">Notifications</span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={handleMarkAllAsRead}
-                            className="text-[10px] text-indigo-400 hover:underline font-semibold"
-                          >
-                            Mark all read
-                          </button>
-                        </div>
+                        <button
+                          onClick={handleMarkAllAsRead}
+                          className="text-[10px] text-indigo-400 hover:underline font-semibold"
+                        >
+                          Mark all read
+                        </button>
                       </div>
 
                       {/* Filter Tabs */}
@@ -515,7 +521,7 @@ export default function RootLayout({
                   )}
                 </div>
 
-                {/* User Authentication Menu Button */}
+                {/* User Profile Menu */}
                 {user ? (
                   <div ref={userMenuRef} className="relative">
                     <button
@@ -534,42 +540,47 @@ export default function RootLayout({
                       )}
                     </button>
 
+                    {/* Expanded User Sub-Categories */}
                     {userMenuOpen && (
-                      <div className="absolute right-0 mt-2 w-48 bg-[#13151f] border border-neutral-800 rounded-2xl p-1.5 shadow-2xl z-50 text-xs font-semibold space-y-0.5">
+                      <div className="absolute right-0 mt-2 w-52 bg-[#13151f] border border-neutral-800 rounded-2xl p-1.5 shadow-2xl z-50 text-xs font-semibold space-y-0.5">
+                        <div className="px-3 py-2 border-b border-neutral-800/80 mb-1">
+                          <p className="text-[10px] text-neutral-400">Signed in as</p>
+                          <p className="font-bold text-white truncate">{user.email}</p>
+                        </div>
                         <Link
                           href="/profile/edit"
                           onClick={() => setUserMenuOpen(false)}
-                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          Profile Details
+                          <span>👤</span> Profile Details
                         </Link>
                         <Link
                           href="/profile/following"
                           onClick={() => setUserMenuOpen(false)}
-                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          Bookmarks & Follows
+                          <span>📚</span> My Library & Bookmarks
                         </Link>
                         <Link
                           href="/profile/sync"
                           onClick={() => setUserMenuOpen(false)}
-                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          Sync State & Clouds
+                          <span>🔄</span> Sync AniList / MAL
                         </Link>
                         <Link
                           href="/profile/import-export"
                           onClick={() => setUserMenuOpen(false)}
-                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          Backup / Export
+                          <span>💾</span> Backup & Export
                         </Link>
                         <Link
                           href="/settings"
                           onClick={() => setUserMenuOpen(false)}
-                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          Settings
+                          <span>⚙️</span> Reader Settings
                         </Link>
                         <div className="h-px bg-neutral-800 my-1" />
                         <button
@@ -578,9 +589,9 @@ export default function RootLayout({
                             setUserMenuOpen(false);
                             router.push('/');
                           }}
-                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-500/10 text-red-400 hover:text-red-300 transition"
+                          className="w-full text-left flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-red-500/10 text-red-400 hover:text-red-300 transition"
                         >
-                          Sign Out
+                          <span>🚪</span> Sign Out
                         </button>
                       </div>
                     )}
@@ -598,71 +609,84 @@ export default function RootLayout({
           </header>
         )}
 
-        {/* FLOATING EXPANDED SEARCH OVERLAY */}
+        {/* Global Floating Search Modal with Live Results */}
         {searchOpen && (
-          <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-20 px-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
             <div
               ref={searchContainerRef}
-              className="w-full max-w-2xl bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
+              className="w-full max-w-xl bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
             >
-              <div className="flex items-center px-4 py-3 border-b border-neutral-800 gap-3">
-                <span className="text-neutral-400 text-sm">🔍</span>
+              <div className="p-3 border-b border-neutral-800 flex items-center gap-3">
+                <span className="text-neutral-400 pl-1">🔍</span>
                 <input
                   ref={searchInputRef}
                   type="text"
-                  placeholder="Search series by title or alternate name..."
+                  placeholder="Search series by title or author..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-transparent text-sm text-white focus:outline-none placeholder-neutral-500"
+                  className="w-full bg-transparent text-white text-sm focus:outline-none placeholder-neutral-500"
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="text-xs text-neutral-400 hover:text-white px-2 py-1"
+                  >
+                    Clear
+                  </button>
+                )}
                 <button
                   onClick={() => setSearchOpen(false)}
-                  className="text-xs px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white rounded-lg transition"
+                  className="text-neutral-400 hover:text-white text-xs px-2 py-1 rounded-lg bg-neutral-800"
                 >
                   ESC
                 </button>
               </div>
 
-              {/* SEARCH RESULTS FEED */}
-              <div className="max-h-96 overflow-y-auto divide-y divide-neutral-800/60 p-2">
+              {/* Instant Search Results */}
+              <div className="max-h-96 overflow-y-auto p-2 divide-y divide-neutral-800/40">
                 {isSearching ? (
-                  <div className="p-8 text-center text-xs text-neutral-500">
-                    Scanning active series catalog...
+                  <div className="py-8 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
+                    <div className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                    Searching catalogue...
                   </div>
                 ) : searchResults.length > 0 ? (
-                  searchResults.map((item) => (
+                  searchResults.map((res) => (
                     <Link
-                      key={item.id}
-                      href={`/series/${item.slug}`}
+                      key={res.id}
+                      href={`/series/${res.slug}`}
                       onClick={() => setSearchOpen(false)}
                       className="flex items-center gap-3 p-2 rounded-xl hover:bg-neutral-800/50 transition group"
                     >
-                      <div className="w-10 h-14 rounded-lg overflow-hidden bg-neutral-800 shrink-0">
-                        {item.cover_url && (
+                      <div className="w-10 h-14 rounded-lg bg-neutral-900 border border-neutral-800 overflow-hidden shrink-0">
+                        {res.cover_url ? (
                           <img
-                            src={item.cover_url}
-                            alt={item.title}
-                            className="w-full h-full object-cover group-hover:scale-105 transition"
+                            src={res.cover_url}
+                            alt={res.title}
+                            className="w-full h-full object-cover"
                           />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-[8px] text-neutral-600">
+                            Cover
+                          </div>
                         )}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-neutral-200 group-hover:text-indigo-400 truncate transition">
-                          {item.title}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-white group-hover:text-indigo-400 transition truncate">
+                          {res.title}
                         </p>
-                        <p className="text-[10px] text-neutral-400 capitalize">
-                          {item.reading_mode === 'webtoon' ? 'Webtoon' : 'Manga'}
-                        </p>
+                        <span className="text-[10px] text-neutral-400 uppercase font-black">
+                          {res.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
+                        </span>
                       </div>
                     </Link>
                   ))
                 ) : searchQuery.trim() ? (
-                  <div className="p-8 text-center text-xs text-neutral-500">
-                    No series found matching &quot;{searchQuery}&quot;
+                  <div className="py-8 text-center text-xs text-neutral-500">
+                    No series matching "{searchQuery}"
                   </div>
                 ) : (
-                  <div className="p-8 text-center text-xs text-neutral-500">
-                    Type to search titles across the indexed catalog.
+                  <div className="py-6 text-center text-xs text-neutral-500">
+                    Type a title above to search across the catalog.
                   </div>
                 )}
               </div>
@@ -670,11 +694,9 @@ export default function RootLayout({
           </div>
         )}
 
-        {/* AUTH MODAL */}
-        <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
-
-        {/* MAIN BODY CONTENT */}
         <main className="flex-1 w-full max-w-full">{children}</main>
+
+        <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
       </body>
     </html>
   );
