@@ -78,7 +78,7 @@ function SafeImage({
   );
 }
 
-// 1. FIXED & CONSISTENT SPOTLIGHT BAR (Exactly 7 items, Fixed Height, Tap-to-Navigate, Micro Dots)
+// 1. REFINED SPOTLIGHT SLIDER
 function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const [index, setIndex] = useState(0);
   const spotlightItems = items.slice(0, 7);
@@ -97,52 +97,44 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const displayTitle = current.english_title || current.title;
 
   return (
-    <div className="relative w-full h-[210px] sm:h-[250px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-2xl flex flex-col justify-between">
-      {/* Background blurred cover */}
+    <div className="relative w-full h-[200px] sm:h-[240px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-2xl flex flex-col justify-between">
+      {/* Blurred background artwork */}
       <div
         className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700 pointer-events-none"
         style={{ backgroundImage: `url(${coverUrl})` }}
       />
       <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-[#0a0b0e] via-[#0a0b0e]/90 to-transparent z-10 pointer-events-none" />
 
-      {/* Main Clickable Hero Link */}
+      {/* Tap anywhere opens series page */}
       <Link
         href={`/series/${current.slug}`}
-        className="relative z-20 w-full p-4 sm:p-6 flex justify-between items-center gap-4 flex-1 group"
+        className="relative z-20 w-full p-4 sm:p-5 flex justify-between items-center gap-4 flex-1 group"
       >
-        {/* Left Side Metadata */}
-        <div className="flex flex-col justify-between self-stretch flex-1 min-w-0 pr-2">
-          {/* Top Badges */}
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded-md bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 shadow-sm">
-              Spotlight #{index + 1}
-            </span>
-            <span className="text-[9px] uppercase font-black px-2 py-0.5 rounded-md bg-black/75 text-neutral-300 border border-white/10 shadow-sm">
-              {current.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
-            </span>
+        {/* Left Side: Category, Rating, Title, Synopsis */}
+        <div className="flex flex-col justify-center self-stretch flex-1 min-w-0 pr-2 space-y-1.5">
+          {/* Subtle Category & Rating Badges */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {current.reading_mode && (
+              <span className="text-[8px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-white/10 text-neutral-300 border border-white/10">
+                {current.reading_mode === 'webtoon' ? 'MANHWA' : 'MANGA'}
+              </span>
+            )}
             {current.rating && current.rating > 0 && (
-              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30">
+              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/20">
                 ★ {current.rating.toFixed(1)}
               </span>
             )}
           </div>
 
-          {/* Middle Title & Description */}
-          <div className="my-auto py-1.5 space-y-1">
-            <h2 className="text-base sm:text-2xl font-black text-white line-clamp-1 sm:line-clamp-2 tracking-tight group-hover:text-indigo-400 transition-colors leading-snug">
-              {displayTitle}
-            </h2>
-            <p className="text-xs sm:text-sm text-neutral-300 line-clamp-2 sm:line-clamp-3 leading-relaxed max-w-2xl font-normal">
-              {current.synopsis || 'Read online for free in high definition with fast chapter loading on MangaFlow.'}
-            </p>
-          </div>
+          {/* Title */}
+          <h2 className="text-base sm:text-xl font-black text-white line-clamp-1 sm:line-clamp-2 tracking-tight group-hover:text-indigo-400 transition-colors leading-snug">
+            {displayTitle}
+          </h2>
 
-          {/* Bottom Action Button */}
-          <div className="shrink-0 pt-1">
-            <span className="inline-flex items-center gap-1.5 px-4 py-1.5 sm:px-5 sm:py-2 bg-indigo-600 group-hover:bg-indigo-500 text-white font-bold text-xs sm:text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition transform group-hover:-translate-y-0.5">
-              Read Now →
-            </span>
-          </div>
+          {/* Synopsis */}
+          <p className="text-xs sm:text-[13px] text-neutral-400 line-clamp-3 sm:line-clamp-4 leading-relaxed max-w-2xl font-normal">
+            {current.synopsis || 'Read online for free in high definition with fast chapter loading on MangaFlow.'}
+          </p>
         </div>
 
         {/* Right Cover Poster */}
@@ -151,25 +143,35 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
         </div>
       </Link>
 
-      {/* Slide Navigation Dots (Clean & Small) */}
-      <div className="relative z-30 pb-2.5 flex items-center justify-center gap-1">
+      {/* Touch-Friendly Navigation Dots */}
+      <div className="relative z-30 pb-2 flex items-center justify-center gap-1">
         {spotlightItems.map((_, i) => (
           <button
             key={i}
             type="button"
-            onClick={() => setIndex(i)}
-            className={`rounded-full transition-all duration-300 ${
-              index === i ? 'w-3 h-1 bg-indigo-500 shadow-sm shadow-indigo-500/50' : 'w-1 h-1 bg-neutral-700 hover:bg-neutral-500'
-            }`}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIndex(i);
+            }}
+            className="p-1 focus:outline-none"
             aria-label={`Slide ${i + 1}`}
-          />
+          >
+            <span
+              className={`block rounded-full transition-all duration-300 ${
+                index === i
+                  ? 'w-3 h-1.5 bg-indigo-500 shadow-sm shadow-indigo-500/50'
+                  : 'w-1.5 h-1.5 bg-neutral-700 hover:bg-neutral-500'
+              }`}
+            />
+          </button>
         ))}
       </div>
     </div>
   );
 }
 
-// 2. SOCIAL SHARE BAR (Includes Instagram, Repaired Twitter/X Intent, WhatsApp, Facebook, Reddit, Telegram, Copy)
+// 2. SOCIAL SHARE BAR (Includes Twitter/X, Facebook, Instagram, WhatsApp, Reddit, Telegram, Copy)
 function ShareBar() {
   const [copied, setCopied] = useState(false);
   const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://mangaflow-psi.vercel.app';
@@ -189,7 +191,7 @@ function ShareBar() {
       <div className="flex items-center gap-1.5 sm:gap-2">
         {/* Twitter / X */}
         <a
-          href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(siteUrl)}`}
+          href={`https://x.com/intent/post?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(siteUrl)}`}
           target="_blank"
           rel="noopener noreferrer"
           className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg transition"
@@ -228,14 +230,27 @@ function ShareBar() {
 
         {/* WhatsApp */}
         <a
-          href={`https://wa.me/?text=${encodeURIComponent(`${shareText}${siteUrl}`)}`}
+          href={`https://wa.me/?text=${encodeURIComponent(`${shareText} ${siteUrl}`)}`}
           target="_blank"
           rel="noopener noreferrer"
           className="p-1.5 bg-[#25D366]/20 hover:bg-[#25D366]/30 text-[#25D366] rounded-lg transition"
           aria-label="Share on WhatsApp"
         >
           <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981z"/>
+            <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946.003-6.556 5.338-11.891 11.893-11.891 3.181.001 6.167 1.24 8.413 3.488 2.245 2.248 3.481 5.236 3.48 8.414-.003 6.557-5.338 11.892-11.893 11.892-1.99-.001-3.951-.5-5.688-1.448l-6.305 1.654zm6.597-3.807c1.676.995 3.276 1.591 5.392 1.592 5.448 0 9.886-4.434 9.889-9.885.002-5.462-4.415-9.89-9.881-9.892-5.452 0-9.887 4.434-9.889 9.884-.001 2.225.651 3.891 1.746 5.634l-.999 3.648 3.742-.981zm11.387-5.464c-.074-.124-.272-.198-.57-.347-.297-.149-1.758-.868-2.031-.967-.272-.099-.47-.149-.669.149-.198.297-.768.967-.941 1.165-.173.198-.347.223-.644.074-.297-.149-1.255-.462-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.521.151-.172.2-.296.3-.495.099-.198.05-.372-.025-.521-.075-.148-.669-1.611-.916-2.206-.242-.579-.487-.501-.669-.51l-.57-.01c-.198 0-.52.074-.792.372s-1.04 1.016-1.04 2.479 1.065 2.876 1.213 3.074c.149.198 2.095 3.2 5.076 4.487.709.306 1.263.489 1.694.626.712.226 1.36.194 1.872.118.571-.085 1.758-.719 2.006-1.413.248-.695.248-1.29.173-1.414z"/>
+          </svg>
+        </a>
+
+        {/* Reddit */}
+        <a
+          href={`https://reddit.com/submit?url=${encodeURIComponent(siteUrl)}&title=${encodeURIComponent(shareText)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="p-1.5 bg-neutral-800 hover:bg-neutral-700 text-[#FF4500] rounded-lg transition"
+          aria-label="Share on Reddit"
+        >
+          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 0 1 .042.52c0 2.694-3.13 4.87-7.004 4.87-3.874 0-7.004-2.176-7.004-4.87 0-.183.015-.366.043-.534A1.748 1.748 0 0 1 4.028 12c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 0 1 .14-.197.35.35 0 0 1 .238-.042l2.906.617a1.214 1.214 0 0 1 1.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248.687 0 1.248-.561 1.248-1.249 0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .687.561 1.248 1.249 1.248.688 0 1.249-.561 1.249-1.249 0-.688-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 0 0-.231.094.33.33 0 0 0 0 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.056 2.961-.913a.361.361 0 0 0 .029-.463.33.33 0 0 0-.464 0c-.547.533-1.684.73-2.512.73-.828 0-1.979-.197-2.512-.73a.326.326 0 0 0-.232-.095z"/>
           </svg>
         </a>
 
@@ -398,7 +413,7 @@ export default function HomePage() {
 
     return (
       <section className="space-y-3">
-        {/* Prominent Scaled Section Titles */}
+        {/* Prominent Section Titles */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <span className={`w-1.5 h-4 sm:h-5 rounded-full ${color}`} />
@@ -478,10 +493,10 @@ export default function HomePage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 lg:px-8 py-4 space-y-6">
-      {/* 1. Consistent Spotlight Slider (Exactly 7 items, Fixed height, Tap-through enabled) */}
+      {/* 1. Spotlight Slider */}
       <SpotlightSlider items={trendingList} />
 
-      {/* 2. Repaired Social Share Bar (Includes Instagram & Verified X intent) */}
+      {/* 2. Social Share Bar */}
       <ShareBar />
 
       {/* 3. Continue Reading */}
@@ -523,7 +538,7 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* 4. All 4 Distinct Series Shelves */}
+      {/* 4. Series Shelves */}
       <HorizontalRow
         title="Trending Series"
         items={trendingList}
