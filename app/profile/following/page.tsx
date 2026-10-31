@@ -1,3 +1,4 @@
+// app/profile/following/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -26,37 +27,41 @@ const FOLDERS = [
   { id: 'reading', label: 'Reading' },
   { id: 'plan_to_read', label: 'Plan to Read' },
   { id: 'completed', label: 'Completed' },
-  { id: 'on_hold', label: 'On-Hold' },
+  { id: 'on_hold', label: 'On Hold' },
   { id: 'dropped', label: 'Dropped' },
 ];
 
 export default function FollowingPage() {
   const [items, setItems] = useState<FollowedItem[]>([]);
   const [activeFolder, setActiveFolder] = useState('all');
-  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
-  const [showAuth, setShowAuth] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
 
   useEffect(() => {
-    async function load() {
-      setLoading(true);
-      const { data: auth } = await supabase.auth.getUser();
-      if (!auth?.user) {
-        setUser(null);
+    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+    });
+    return () => authListener.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    async function loadFollows() {
+      if (!user) {
         setLoading(false);
         return;
       }
-      setUser(auth.user);
+      setLoading(true);
 
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('user_follows')
         .select(`
           id,
           series_id,
           folder,
           created_at,
-          series (
+          series:series_id (
             id,
             slug,
             title,
@@ -66,88 +71,67 @@ export default function FollowingPage() {
             reading_mode
           )
         `)
-        .eq('user_id', auth.user.id)
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false });
 
-      const sanitized = (data || []).map((item: any) => ({
-        id: item.id,
-        series_id: item.series_id,
-        folder: item.folder,
-        created_at: item.created_at,
-        series: Array.isArray(item.series) ? item.series[0] : item.series,
-      }));
-
-      setItems(sanitized);
+      if (!error && data) {
+        setItems(data as unknown as FollowedItem[]);
+      }
       setLoading(false);
     }
-    load();
-  }, []);
 
-  const handleFolderChange = async (followId: string, newFolder: string) => {
-    await supabase.from('user_follows').update({ folder: newFolder }).eq('id', followId);
-    setItems((prev) =>
-      prev.map((it) => (it.id === followId ? { ...it, folder: newFolder } : it))
-    );
-  };
+    loadFollows();
+  }, [user]);
 
-  const handleRemove = async (followId: string) => {
-    await supabase.from('user_follows').delete().eq('id', followId);
-    setItems((prev) => prev.filter((it) => it.id !== followId));
-  };
-
-  const filtered = items.filter((item) => {
-    if (activeFolder !== 'all' && item.folder !== activeFolder) return false;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      const title = (item.series?.english_title || item.series?.title || '').toLowerCase();
-      return title.includes(q);
-    }
-    return true;
+  const filteredItems = items.filter((item) => {
+    if (activeFolder === 'all') return true;
+    return item.folder === activeFolder;
   });
 
-  if (!loading && !user) {
+  if (!user && !loading) {
     return (
-      <main className="max-w-4xl mx-auto px-4 py-20 text-center space-y-4">
-        <h1 className="text-xl font-bold text-white">Your Reading Library</h1>
-        <p className="text-xs text-neutral-400">Sign in to track reading progress and organize series.</p>
+      <div className="min-h-screen bg-[#0d0e15] text-white flex flex-col items-center justify-center p-4">
+        <h1 className="text-xl font-bold mb-2">My Library</h1>
+        <p className="text-neutral-400 text-sm mb-4">Sign in to track your reading lists and bookmarks.</p>
         <button
-          onClick={() => setShowAuth(true)}
-          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
+          onClick={() => setAuthOpen(true)}
+          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold transition shadow-lg shadow-indigo-600/30"
         >
-          Sign In
+          Sign In / Register
         </button>
-        <AuthModal isOpen={showAuth} onClose={() => setShowAuth(false)} />
-      </main>
+        <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
+      </div>
     );
   }
 
   return (
-    <main className="max-w-6xl mx-auto px-4 py-8 space-y-6 w-full max-w-full overflow-x-hidden min-w-0">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-4">
+    <div className="min-h-screen bg-[#0d0e15] text-white pb-24 pt-6 px-4 sm:px-6 max-w-6xl mx-auto space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800/80 pb-4">
         <div>
-          <h1 className="text-xl font-bold text-white">Library Tracker</h1>
-          <p className="text-xs text-neutral-400 mt-1">Organize and monitor reading progress across shelves</p>
+          <h1 className="text-xl sm:text-2xl font-extrabold text-white flex items-center gap-2">
+            <span>📚</span> My Library
+          </h1>
+          <p className="text-neutral-400 text-xs">Organize and track your active series.</p>
         </div>
 
-        <input
-          type="text"
-          placeholder="Filter library..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="px-3 py-1.5 bg-[#13151f] border border-neutral-800 rounded-xl text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500 w-full sm:w-60"
-        />
+        <Link
+          href="/profile/sync"
+          className="inline-flex items-center gap-2 px-3.5 py-2 bg-[#13151f] hover:bg-neutral-800 border border-neutral-700/80 rounded-xl text-xs font-semibold text-neutral-300 transition self-start sm:self-auto"
+        >
+          <span>🔄</span> Sync AniList / MAL
+        </Link>
       </div>
 
-      {/* MangaFire 6-Shelf Tabs */}
-      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+      {/* Folder Tabs */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
         {FOLDERS.map((f) => (
           <button
             key={f.id}
             onClick={() => setActiveFolder(f.id)}
-            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
               activeFolder === f.id
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'bg-[#13151f] text-neutral-400 hover:text-white border border-neutral-800/80'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                : 'bg-[#13151f] text-neutral-400 hover:text-white border border-neutral-800'
             }`}
           >
             {f.label}
@@ -155,64 +139,76 @@ export default function FollowingPage() {
         ))}
       </div>
 
+      {/* Grid Content */}
       {loading ? (
-        <div className="py-20 text-center text-xs text-neutral-500">Loading library items...</div>
-      ) : filtered.length === 0 ? (
-        <div className="py-20 text-center text-xs text-neutral-500 bg-[#0e1015] rounded-2xl border border-neutral-900">
-          No series found in this shelf.
+        <div className="py-24 flex justify-center">
+          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : filteredItems.length === 0 ? (
+        /* Empty State with 1-Click Migration Banner */
+        <div className="bg-[#13151f] border border-neutral-800/80 rounded-2xl p-8 text-center max-w-lg mx-auto space-y-4 my-12">
+          <div className="text-4xl">📂</div>
+          <div className="space-y-1">
+            <h3 className="text-white font-bold text-base">No series in this folder yet</h3>
+            <p className="text-neutral-400 text-xs leading-relaxed">
+              Bookmark series from the catalog, or migrate your entire reading list automatically from other platforms.
+            </p>
+          </div>
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2.5">
+            <Link
+              href="/profile/sync"
+              className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-indigo-600/30"
+            >
+              Import AniList / MAL →
+            </Link>
+            <Link
+              href="/"
+              className="w-full sm:w-auto px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded-xl text-xs font-semibold transition"
+            >
+              Browse Catalog
+            </Link>
+          </div>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-          {filtered.map((item) => {
-            const cover = item.series?.cover_image_url || item.series?.cover_url || '';
-            const title = item.series?.english_title || item.series?.title || 'Unknown';
+        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3 sm:gap-4">
+          {filteredItems.map((item) => {
+            const cover = item.series?.cover_image_url || item.series?.cover_url;
+            const title = item.series?.title || item.series?.english_title || 'Untitled';
 
             return (
-              <div
+              <Link
                 key={item.id}
-                className="bg-[#13151f] border border-neutral-800/80 rounded-2xl p-2 flex flex-col justify-between group shadow-lg"
+                href={`/series/${item.series?.slug}`}
+                className="group flex flex-col space-y-1.5"
               >
-                <Link href={`/series/${item.series?.slug}`} className="block">
-                  <div className="aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 relative">
-                    {cover ? (
-                      <img src={cover} alt={title} className="w-full h-full object-cover group-hover:scale-105 transition" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-neutral-600">📖</div>
-                    )}
-                    <span className="absolute top-1 left-1 text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-black/80 text-neutral-200">
-                      {item.series?.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
+                <div className="relative aspect-[3/4.2] w-full rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800/80 group-hover:border-indigo-500/50 shadow-md transition">
+                  {cover ? (
+                    <img
+                      src={cover}
+                      alt={title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-xs text-neutral-500">
+                      No Art
+                    </div>
+                  )}
+                  {item.series?.reading_mode && (
+                    <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-sm text-neutral-200 border border-white/10">
+                      {item.series.reading_mode === 'webtoon' ? 'MANHWA' : 'MANGA'}
                     </span>
-                  </div>
-                  <h3 className="text-xs font-bold text-white truncate mt-2 group-hover:text-indigo-400 transition">
-                    {title}
-                  </h3>
-                </Link>
-
-                <div className="mt-2 pt-2 border-t border-neutral-800/80 flex items-center justify-between gap-1">
-                  <select
-                    value={item.folder}
-                    onChange={(e) => handleFolderChange(item.id, e.target.value)}
-                    className="bg-neutral-900 text-neutral-300 text-[10px] rounded-lg px-2 py-1 outline-none border border-neutral-800 w-full"
-                  >
-                    <option value="reading">Reading</option>
-                    <option value="plan_to_read">Plan to Read</option>
-                    <option value="completed">Completed</option>
-                    <option value="on_hold">On-Hold</option>
-                    <option value="dropped">Dropped</option>
-                  </select>
-                  <button
-                    onClick={() => handleRemove(item.id)}
-                    className="text-neutral-500 hover:text-red-400 text-xs px-1.5 py-1"
-                    title="Remove from library"
-                  >
-                    ✕
-                  </button>
+                  )}
                 </div>
-              </div>
+                <h3 className="text-xs font-semibold text-neutral-200 group-hover:text-indigo-400 line-clamp-1 transition">
+                  {title}
+                </h3>
+              </Link>
             );
           })}
         </div>
       )}
-    </main>
+
+      <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
+    </div>
   );
 }
