@@ -1,3 +1,4 @@
+// app/series/[slug]/page.tsx
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
@@ -6,6 +7,7 @@ import Link from 'next/link';
 import { supabase } from '../../../lib/supabase';
 import AuthModal from '../../../components/AuthModal';
 import ShareBar from '../../../components/ShareBar';
+import { getLocalProgress } from '../../../lib/useReadingHistory';
 
 interface Chapter {
   id: string;
@@ -30,461 +32,507 @@ interface Series {
   updated_at?: string;
 }
 
-interface CommentItem {
+interface Comment {
   id: string;
-  series_id: string;
   user_id: string;
-  user_name: string;
-  user_avatar?: string | null;
-  content: string;
+  user_email?: string;
+  comment: string;
   created_at: string;
 }
 
-function formatRelativeTime(dateStr?: string) {
-  if (!dateStr) return 'Recently';
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return 'Recently';
+const FOLDERS = [
+  { id: 'reading', label: 'Reading' },
+  { id: 'plan_to_read', label: 'Plan to Read' },
+  { id: 'completed', label: 'Completed' },
+  { id: 'on_hold', label: 'On Hold' },
+  { id: 'dropped', label: 'Dropped' },
+];
 
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffHours / 24);
-
-  const timeString = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const dateString = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-
-  if (diffHours < 1) return 'Just now';
-  if (diffHours < 24) return `Today at ${timeString}`;
-  if (diffDays === 1) return `Yesterday at ${timeString}`;
-  if (diffDays < 7) return `${diffDays} days ago (${dateString})`;
-  return `${dateString} at ${timeString}`;
-}
-
-export default function SeriesDetailsPage() {
+export default function SeriesDetailPage() {
   const params = useParams();
-  const rawSlug = params?.slug as string;
+  const slug = params?.slug as string;
 
   const [series, setSeries] = useState<Series | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isFollowing, setIsFollowing] = useState(false);
-  const [authOpen, setAuthOpen] = useState(false);
   const [user, setUser] = useState<any>(null);
+  const [authOpen, setAuthOpen] = useState(false);
 
-  const [aliasesExpanded, setAliasesExpanded] = useState(false);
+  // Library / Follow State
+  const [currentFolder, setCurrentFolder] = useState<string | null>(null);
+  const [folderMenuOpen, setFolderMenuOpen] = useState(false);
+  const [savingFolder, setSavingFolder] = useState(false);
+
+  // Chapter Search & Sort
   const [chapterSearch, setChapterSearch] = useState('');
   const [sortDesc, setSortDesc] = useState(true);
 
-  // Comments State
-  const [comments, setComments] = useState<CommentItem[]>([]);
+  // Community Comments
+  const [comments, setComments] = useState<Comment[]>([]);
   const [commentText, setCommentText] = useState('');
-  const [submittingComment, setSubmittingComment] = useState(false);
-  const [visibleCommentCount, setVisibleCommentCount] = useState(7);
+  const [postingComment, setPostingComment] = useState(false);
+
+  // Reading History (Highest Read Chapter Number)
+  const [lastReadChapterNum, setLastReadChapterNum] = useState<number | null>(null);
 
   useEffect(() => {
-    async function loadData() {
-      if (!rawSlug) return;
+    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+    });
+    return () => authListener.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    async function loadSeriesData() {
+      if (!slug) return;
       setLoading(true);
 
       const { data: sData } = await supabase
         .from('series')
         .select('*')
-        .eq('slug', decodeURIComponent(rawSlug))
+        .eq('slug', slug)
         .single();
 
       if (!sData) {
         setLoading(false);
         return;
       }
+
       setSeries(sData);
 
-      const [{ data: cData }, { data: auth }, { data: commentsData }] = await Promise.all([
-        supabase
-          .from('chapters')
-          .select('id, chapter_number, title, created_at')
-          .eq('series_id', sData.id)
-          .order('chapter_number', { ascending: false }),
-        supabase.auth.getUser(),
-        supabase
-          .from('comments')
-          .select('*')
-          .eq('series_id', sData.id)
-          .order('created_at', { ascending: false })
-          .limit(30),
-      ]);
+      // Check client-side localStorage history first
+      const localHist = getLocalProgress(sData.id);
+      if (localHist?.chapterNumber) {
+        setLastReadChapterNum(localHist.chapterNumber);
+      }
 
-      if (cData) setChapters(cData);
-      if (commentsData) setComments(commentsData);
+      // Check database reading history if user is authenticated
+      const { data: authUser } = await supabase.auth.getUser();
+      if (authUser?.user) {
+        const { data: hist } = await supabase
+          .from('reading_history')
+          .select('chapter_number')
+          .eq('user_id', authUser.user.id)
+          .eq('series_id', sData.id)
+          .maybeSingle();
 
-      if (auth?.user) {
-        setUser(auth.user);
+        if (hist?.chapter_number) {
+          setLastReadChapterNum((prev) => Math.max(prev || 0, hist.chapter_number));
+        }
+
         const { data: follow } = await supabase
           .from('user_follows')
-          .select('id')
-          .eq('user_id', auth.user.id)
+          .select('folder')
+          .eq('user_id', authUser.user.id)
           .eq('series_id', sData.id)
-          .single();
-        setIsFollowing(!!follow);
+          .maybeSingle();
+
+        if (follow) setCurrentFolder(follow.folder);
       }
+
+      // Load Chapters
+      const { data: cData } = await supabase
+        .from('chapters')
+        .select('id, chapter_number, title, created_at')
+        .eq('series_id', sData.id)
+        .order('chapter_number', { ascending: false });
+
+      if (cData) setChapters(cData);
+
+      // Load Comments
+      const { data: comData } = await supabase
+        .from('series_comments')
+        .select('id, user_id, user_email, comment, created_at')
+        .eq('series_id', sData.id)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (comData) setComments(comData);
+
       setLoading(false);
     }
-    loadData();
-  }, [rawSlug]);
 
-  const toggleFollow = async () => {
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth?.user) {
+    loadSeriesData();
+  }, [slug]);
+
+  const displayedChapters = useMemo(() => {
+    let list = [...chapters];
+    if (chapterSearch.trim()) {
+      const q = chapterSearch.toLowerCase();
+      list = list.filter(
+        (c) =>
+          c.chapter_number.toString().includes(q) ||
+          (c.title && c.title.toLowerCase().includes(q))
+      );
+    }
+    list.sort((a, b) =>
+      sortDesc ? b.chapter_number - a.chapter_number : a.chapter_number - b.chapter_number
+    );
+    return list;
+  }, [chapters, chapterSearch, sortDesc]);
+
+  const handleFolderChange = async (folderId: string | null) => {
+    if (!user) {
       setAuthOpen(true);
       return;
     }
     if (!series) return;
+    setSavingFolder(true);
 
-    if (isFollowing) {
-      await supabase
-        .from('user_follows')
-        .delete()
-        .eq('user_id', auth.user.id)
-        .eq('series_id', series.id);
-      setIsFollowing(false);
-    } else {
-      await supabase
-        .from('user_follows')
-        .insert({ user_id: auth.user.id, series_id: series.id, folder: 'reading' });
-      setIsFollowing(true);
+    try {
+      if (folderId === null) {
+        await supabase
+          .from('user_follows')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('series_id', series.id);
+        setCurrentFolder(null);
+      } else {
+        await supabase.from('user_follows').upsert(
+          {
+            user_id: user.id,
+            series_id: series.id,
+            folder: folderId,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'user_id,series_id' }
+        );
+        setCurrentFolder(folderId);
+      }
+    } finally {
+      setSavingFolder(false);
+      setFolderMenuOpen(false);
     }
   };
 
   const handlePostComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!commentText.trim()) return;
-
-    const { data: auth } = await supabase.auth.getUser();
-    if (!auth?.user) {
+    if (!user) {
       setAuthOpen(true);
       return;
     }
-    if (!series) return;
+    if (!series || !commentText.trim()) return;
 
-    setSubmittingComment(true);
-    const fallbackName = auth.user.email ? auth.user.email.split('@')[0] : 'Reader';
+    setPostingComment(true);
+    try {
+      const newComment = {
+        series_id: series.id,
+        user_id: user.id,
+        user_email: user.email?.split('@')[0] || 'Reader',
+        comment: commentText.trim(),
+        created_at: new Date().toISOString(),
+      };
 
-    const newComment = {
-      series_id: series.id,
-      user_id: auth.user.id,
-      user_name: auth.user.user_metadata?.display_name || auth.user.user_metadata?.full_name || fallbackName,
-      user_avatar: auth.user.user_metadata?.avatar_url || null,
-      content: commentText.trim(),
-    };
+      const { data, error } = await supabase
+        .from('series_comments')
+        .insert([newComment])
+        .select()
+        .single();
 
-    const { data, error } = await supabase
-      .from('comments')
-      .insert(newComment)
-      .select()
-      .single();
-
-    if (!error && data) {
-      setComments((prev) => [data, ...prev]);
-      setCommentText('');
+      if (!error && data) {
+        setComments((prev) => [data, ...prev]);
+        setCommentText('');
+      }
+    } finally {
+      setPostingComment(false);
     }
-    setSubmittingComment(false);
   };
-
-  const aliasList = useMemo(() => {
-    if (!series) return [];
-    const list: string[] = [];
-    if (series.native_title) list.push(series.native_title);
-    if (Array.isArray(series.synonyms)) list.push(...series.synonyms);
-    else if (typeof series.synonyms === 'string') {
-      try {
-        const parsed = JSON.parse(series.synonyms);
-        if (Array.isArray(parsed)) list.push(...parsed);
-        else list.push(series.synonyms);
-      } catch {
-        list.push(...series.synonyms.split(/[,;\n]/));
-      }
-    }
-    return Array.from(new Set(list.map((s) => s.trim()).filter((s) => s.length > 0)));
-  }, [series]);
-
-  // Frontend Deduplication Guard
-  const displayedChapters = useMemo(() => {
-    const seenNumbers = new Set<number>();
-    const deduped: Chapter[] = [];
-
-    for (const c of chapters) {
-      if (!seenNumbers.has(c.chapter_number)) {
-        seenNumbers.add(c.chapter_number);
-        deduped.push(c);
-      }
-    }
-
-    let list = deduped;
-    if (chapterSearch.trim()) {
-      const q = chapterSearch.trim().toLowerCase();
-      list = list.filter(
-        (c) => String(c.chapter_number).includes(q) || c.title?.toLowerCase().includes(q)
-      );
-    }
-    return sortDesc ? list : [...list].reverse();
-  }, [chapters, chapterSearch, sortDesc]);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0e1015] flex items-center justify-center text-neutral-500">
-        <div className="w-8 h-8 border-2 border-neutral-700 border-t-indigo-500 rounded-full animate-spin" />
+      <div className="min-h-screen bg-[#0d0e15] flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   if (!series) {
     return (
-      <div className="min-h-screen bg-[#0e1015] flex flex-col items-center justify-center text-neutral-400">
-        <p className="text-sm">Series not found.</p>
-        <Link href="/" className="mt-3 text-xs text-indigo-400 hover:underline">
-          Back to library
+      <div className="min-h-screen bg-[#0d0e15] text-white flex flex-col items-center justify-center p-4">
+        <h1 className="text-xl font-bold mb-2">Series Not Found</h1>
+        <p className="text-neutral-400 text-sm mb-4">This series may have been renamed or moved.</p>
+        <Link href="/" className="px-4 py-2 bg-indigo-600 rounded-xl text-sm font-semibold">
+          Return Home
         </Link>
       </div>
     );
   }
 
-  const latestChapter = chapters[0];
-  const firstChapter = chapters[chapters.length - 1];
-  const lastUpdatedDisplay = formatRelativeTime(latestChapter?.created_at || series.updated_at);
+  const firstChapter = chapters.length > 0 ? chapters[chapters.length - 1] : null;
+  const continueChapter = chapters.find((c) =>
+    lastReadChapterNum ? c.chapter_number >= lastReadChapterNum : false
+  ) || firstChapter;
 
   return (
-    <main className="max-w-5xl mx-auto px-4 py-8 space-y-8 min-h-screen text-neutral-200 w-full max-w-full overflow-x-hidden min-w-0">
-      <div className="flex flex-col sm:flex-row gap-6 sm:gap-8 items-start">
-        {/* Cover Poster */}
-        <div className="w-36 sm:w-48 aspect-[3/4.2] rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 shrink-0 shadow-2xl">
+    <div className="min-h-screen bg-[#0d0e15] text-white pb-24">
+      {/* Background Hero Accent */}
+      <div className="relative w-full h-72 sm:h-96 overflow-hidden bg-neutral-900 border-b border-neutral-800">
+        {series.cover_image_url && (
           <img
-            src={series.cover_image_url || '/placeholder.png'}
+            src={series.cover_image_url}
             alt={series.title}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover blur-2xl opacity-20 scale-110"
           />
-        </div>
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-[#0d0e15] via-[#0d0e15]/70 to-transparent" />
+      </div>
 
-        {/* Metadata Details */}
-        <div className="flex-1 space-y-3 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-neutral-900 text-neutral-300 border border-neutral-800">
-              {series.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
-            </span>
-            <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-neutral-900 text-indigo-400 border border-neutral-800">
-              {series.status || 'Ongoing'}
-            </span>
-            <span className="text-[11px] text-neutral-500">
-              {displayedChapters.length} Chapters Indexed
-            </span>
+      {/* Main Series Container */}
+      <div className="max-w-5xl mx-auto px-4 -mt-40 sm:-mt-56 relative z-10 space-y-8">
+        {/* Header Grid: Poster + Metadata */}
+        <div className="flex flex-col sm:flex-row gap-6 items-start">
+          {/* Poster */}
+          <div className="w-36 sm:w-48 aspect-[3/4.2] rounded-2xl overflow-hidden shadow-2xl border border-neutral-700/80 bg-neutral-900 shrink-0">
+            {series.cover_image_url ? (
+              <img
+                src={series.cover_image_url}
+                alt={series.title}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-xs text-neutral-500">
+                No Cover
+              </div>
+            )}
           </div>
 
-          <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-            {series.english_title || series.title}
-          </h1>
-
-          {/* Alternative Titles */}
-          {aliasList.length > 0 && (
-            <div className="text-xs text-neutral-400 space-y-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-neutral-500 font-medium">Also Known As:</span>
-                <span className="text-neutral-300">
-                  {aliasesExpanded ? aliasList.join(', ') : aliasList.slice(0, 2).join(', ')}
+          {/* Details */}
+          <div className="flex-1 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {series.reading_mode && (
+                <span className="px-2 py-0.5 text-[10px] font-black uppercase rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                  {series.reading_mode === 'webtoon' ? 'MANHWA' : 'MANGA'}
                 </span>
-                {aliasList.length > 2 && (
-                  <button
-                    type="button"
-                    onClick={() => setAliasesExpanded(!aliasesExpanded)}
-                    className="text-[11px] text-indigo-400 hover:text-indigo-300 underline font-medium transition"
-                  >
-                    {aliasesExpanded ? 'Show less' : `+${aliasList.length - 2} more`}
-                  </button>
+              )}
+              {series.status && (
+                <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-neutral-800 text-neutral-300 border border-neutral-700">
+                  {series.status}
+                </span>
+              )}
+            </div>
+
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-white leading-tight">
+              {series.title}
+            </h1>
+            {series.english_title && series.english_title !== series.title && (
+              <p className="text-neutral-400 text-xs sm:text-sm">{series.english_title}</p>
+            )}
+
+            {/* Reading Action Row */}
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              {continueChapter && (
+                <Link
+                  href={`/read/${continueChapter.id}`}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs sm:text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition flex items-center gap-2"
+                >
+                  <span>▶</span>
+                  {lastReadChapterNum ? `Resume Ch. ${lastReadChapterNum}` : 'Start Reading'}
+                </Link>
+              )}
+
+              {/* Bookmark Folder Menu */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setFolderMenuOpen(!folderMenuOpen)}
+                  disabled={savingFolder}
+                  className="px-4 py-2.5 bg-[#13151f] hover:bg-neutral-800 border border-neutral-700/80 rounded-xl text-xs sm:text-sm font-semibold text-neutral-200 transition flex items-center gap-2"
+                >
+                  <span>🔖</span>
+                  {currentFolder
+                    ? FOLDERS.find((f) => f.id === currentFolder)?.label || 'Bookmarked'
+                    : 'Add to Library'}
+                  <span className="text-[10px] text-neutral-400">▼</span>
+                </button>
+
+                {folderMenuOpen && (
+                  <div className="absolute left-0 mt-2 w-44 bg-[#181a24] border border-neutral-800 rounded-xl shadow-2xl p-1 z-30 space-y-0.5">
+                    {FOLDERS.map((f) => (
+                      <button
+                        key={f.id}
+                        onClick={() => handleFolderChange(f.id)}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition ${
+                          currentFolder === f.id
+                            ? 'bg-indigo-600 text-white font-bold'
+                            : 'text-neutral-300 hover:bg-neutral-800'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                    {currentFolder && (
+                      <button
+                        onClick={() => handleFolderChange(null)}
+                        className="w-full text-left px-3 py-2 rounded-lg text-xs font-medium text-red-400 hover:bg-red-500/10 transition border-t border-neutral-800/80"
+                      >
+                        Remove from Library
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
-          )}
 
-          <p className="text-xs text-neutral-400 leading-relaxed line-clamp-3">
-            {series.synopsis || 'No synopsis provided.'}
-          </p>
+            <ShareBar title={series.title} />
+          </div>
+        </div>
 
-          {/* Action Row */}
-          <div className="pt-2 flex flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-2.5">
-              {firstChapter && (
-                <Link
-                  href={`/read/${firstChapter.id}`}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 text-white font-semibold text-xs rounded-xl shadow-lg transition"
-                >
-                  Start Reading (Ch. {firstChapter.chapter_number})
-                </Link>
-              )}
-              {latestChapter && (
-                <Link
-                  href={`/read/${latestChapter.id}`}
-                  className="px-4 py-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-indigo-400 font-semibold text-xs rounded-xl transition"
-                >
-                  Latest (Ch. {latestChapter.chapter_number})
-                </Link>
-              )}
-              <button
-                onClick={toggleFollow}
-                className={`px-4 py-2 font-semibold text-xs rounded-xl transition flex items-center gap-1.5 ${
-                  isFollowing
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                    : 'bg-white text-black hover:bg-neutral-200 shadow-sm'
-                }`}
-              >
-                <span>{isFollowing ? '✓ In Library' : '+ Follow Series'}</span>
-              </button>
-            </div>
-
-            <p className="text-[10px] text-neutral-500 font-medium pl-0.5">
-              Latest update: {lastUpdatedDisplay}
+        {/* Synopsis */}
+        {series.synopsis && (
+          <div className="bg-[#13151f] border border-neutral-800/80 rounded-2xl p-5 space-y-2">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-400">Synopsis</h2>
+            <p className="text-sm text-neutral-300 leading-relaxed whitespace-pre-line">
+              {series.synopsis}
             </p>
           </div>
+        )}
 
-          <div className="pt-2">
-            <ShareBar />
+        {/* Chapter Ladder & Search */}
+        <div className="space-y-4 pt-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base sm:text-lg font-bold text-white">Chapters</h2>
+              <span className="text-xs text-neutral-500 font-mono">({chapters.length})</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Search chapter..."
+                value={chapterSearch}
+                onChange={(e) => setChapterSearch(e.target.value)}
+                className="px-3 py-1.5 bg-[#13151f] border border-neutral-800 rounded-xl text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
+              />
+              <button
+                type="button"
+                onClick={() => setSortDesc(!sortDesc)}
+                className="px-3 py-1.5 bg-[#13151f] hover:bg-neutral-800 border border-neutral-800 rounded-xl text-xs font-medium text-neutral-300 transition"
+              >
+                Sort: {sortDesc ? '9 → 1' : '1 → 9'}
+              </button>
+            </div>
+          </div>
+
+          {/* Scrollable Chapter Grid with Progress Highlighting */}
+          <div className="max-h-[500px] overflow-y-auto pr-1 space-y-2 rounded-2xl border border-neutral-800/80 p-2 bg-[#13151f]/40 scrollbar-thin scrollbar-thumb-neutral-800 scrollbar-track-transparent">
+            {displayedChapters.length === 0 ? (
+              <div className="py-12 text-center text-xs text-neutral-500">
+                No chapters match your search.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {displayedChapters.map((c) => {
+                  const isRead = lastReadChapterNum !== null && c.chapter_number <= lastReadChapterNum;
+                  const isNextUnread = lastReadChapterNum !== null && c.chapter_number === lastReadChapterNum + 1;
+
+                  return (
+                    <Link
+                      key={c.id}
+                      href={`/read/${c.id}`}
+                      className={`p-3 border rounded-xl flex items-center justify-between transition group ${
+                        isNextUnread
+                          ? 'bg-indigo-600/15 border-indigo-500/60 hover:bg-indigo-600/25'
+                          : isRead
+                          ? 'bg-[#10121a]/60 border-neutral-800/40 opacity-70 hover:opacity-100 hover:bg-[#13151f]'
+                          : 'bg-[#13151f] hover:bg-neutral-800/70 border-neutral-800/80'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        {isRead && <span className="text-emerald-400 text-xs font-bold">✓</span>}
+                        <span
+                          className={`text-xs font-semibold truncate ${
+                            isNextUnread
+                              ? 'text-indigo-400 font-bold'
+                              : isRead
+                              ? 'text-neutral-400'
+                              : 'text-neutral-200 group-hover:text-indigo-400'
+                          }`}
+                        >
+                          Chapter {c.chapter_number}
+                          {c.title && c.title !== `Chapter ${c.chapter_number}` ? ` - ${c.title}` : ''}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {isNextUnread && (
+                          <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500 text-white">
+                            Next
+                          </span>
+                        )}
+                        <span className="text-[11px] text-neutral-500 group-hover:text-neutral-300">
+                          {isRead ? 'Re-read' : 'Read →'}
+                        </span>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
-      </div>
 
-      {/* Chapters Section */}
-      <div className="space-y-3 pt-4 border-t border-neutral-800/80">
-        <div className="flex flex-col sm:flex-row gap-3 sm:items-center justify-between">
-          <h2 className="text-sm font-bold text-white">
-            Chapters List ({displayedChapters.length})
-          </h2>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              placeholder="Find chapter..."
-              value={chapterSearch}
-              onChange={(e) => setChapterSearch(e.target.value)}
-              className="bg-[#13151f] border border-neutral-800 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-indigo-500 w-36 sm:w-44"
-            />
-            <button
-              onClick={() => setSortDesc(!sortDesc)}
-              className="px-3 py-1.5 bg-[#13151f] hover:bg-neutral-800 border border-neutral-800 rounded-xl text-xs font-medium text-neutral-300 transition"
-            >
-              Sort: {sortDesc ? '9 → 1' : '1 → 9'}
-            </button>
-          </div>
-        </div>
-
-        {/* Scrollable Container */}
-        <div className="max-h-[480px] overflow-y-auto pr-1 space-y-2 rounded-2xl border border-neutral-800/80 p-2 bg-[#13151f]/40 scrollbar-thin scrollbar-thumb-neutral-800 scrollbar-track-transparent">
-          {displayedChapters.length === 0 ? (
-            <div className="py-12 text-center text-xs text-neutral-500">
-              No chapters match your search.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {displayedChapters.map((c) => (
-                <Link
-                  key={c.id}
-                  href={`/read/${c.id}`}
-                  className="p-3 bg-[#13151f] hover:bg-neutral-800/70 border border-neutral-800/80 rounded-xl flex items-center justify-between transition group"
-                >
-                  <span className="text-xs font-semibold text-neutral-200 group-hover:text-indigo-400 transition truncate">
-                    Chapter {c.chapter_number}
-                    {c.title && c.title !== `Chapter ${c.chapter_number}` ? ` - ${c.title}` : ''}
-                  </span>
-                  <span className="text-[11px] text-neutral-500 group-hover:text-neutral-300 shrink-0">
-                    Read →
-                  </span>
-                </Link>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Community Discussion (7-Comment Section) */}
-      <div className="space-y-4 pt-6 border-t border-neutral-800/80">
-        <div className="flex items-center justify-between">
+        {/* Community Discussion Section */}
+        <div className="space-y-4 pt-6 border-t border-neutral-800/80">
           <div className="flex items-center gap-2">
             <span className="text-base">💬</span>
             <h2 className="text-sm sm:text-base font-bold text-white">Community Discussion</h2>
             <span className="text-xs text-neutral-500">({comments.length})</span>
           </div>
-        </div>
 
-        {/* Comment Input */}
-        <form onSubmit={handlePostComment} className="space-y-2">
-          {user ? (
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Leave a comment or discuss this series (max 500 characters)..."
-                value={commentText}
-                maxLength={500}
-                onChange={(e) => setCommentText(e.target.value)}
-                className="flex-1 px-3 py-2 bg-[#13151f] border border-neutral-800 rounded-xl text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
-              />
-              <button
-                type="submit"
-                disabled={submittingComment || !commentText.trim()}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition shadow-md"
-              >
-                {submittingComment ? 'Posting...' : 'Post'}
-              </button>
-            </div>
-          ) : (
-            <div
-              onClick={() => setAuthOpen(true)}
-              className="p-3 bg-[#13151f] border border-neutral-800 rounded-xl text-xs text-neutral-400 cursor-pointer hover:border-neutral-700 transition flex items-center justify-between"
-            >
-              <span>Sign in with email to join the discussion...</span>
-              <span className="text-indigo-400 font-bold">Sign In →</span>
-            </div>
-          )}
-        </form>
-
-        {/* 7 Recent Comments List */}
-        <div className="space-y-2.5">
-          {comments.length === 0 ? (
-            <div className="py-8 text-center text-xs text-neutral-500 bg-[#13151f]/50 rounded-2xl border border-neutral-800/60">
-              No comments yet. Be the first to share your thoughts on this series!
-            </div>
-          ) : (
-            comments.slice(0, visibleCommentCount).map((c) => (
-              <div
-                key={c.id}
-                className="p-3.5 bg-[#13151f] border border-neutral-800/80 rounded-2xl flex items-start gap-3 shadow-md"
-              >
-                <div className="w-8 h-8 rounded-full bg-indigo-600/30 text-indigo-400 border border-indigo-500/30 flex items-center justify-center font-bold text-xs shrink-0 uppercase">
-                  {c.user_name ? c.user_name.charAt(0) : 'U'}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold text-white truncate">{c.user_name}</span>
-                    <span className="text-[10px] text-neutral-500">
-                      {new Date(c.created_at).toLocaleDateString()}
-                    </span>
-                  </div>
-                  <p className="text-xs text-neutral-300 mt-1 leading-relaxed break-words">
-                    {c.content}
-                  </p>
-                </div>
+          <form onSubmit={handlePostComment} className="space-y-2">
+            {user ? (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Leave a comment (max 500 characters)..."
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  maxLength={500}
+                  className="flex-1 px-4 py-2.5 bg-[#13151f] border border-neutral-800 rounded-xl text-xs sm:text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="submit"
+                  disabled={postingComment || !commentText.trim()}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition"
+                >
+                  {postingComment ? 'Posting...' : 'Post'}
+                </button>
               </div>
-            ))
-          )}
+            ) : (
+              <div className="p-4 bg-[#13151f] border border-neutral-800 rounded-xl text-center text-xs text-neutral-400">
+                Please{' '}
+                <button
+                  type="button"
+                  onClick={() => setAuthOpen(true)}
+                  className="text-indigo-400 underline font-semibold"
+                >
+                  sign in
+                </button>{' '}
+                to participate in community discussions.
+              </div>
+            )}
+          </form>
 
-          {comments.length > visibleCommentCount && (
-            <div className="text-center pt-2">
-              <button
-                type="button"
-                onClick={() => setVisibleCommentCount((prev) => prev + 7)}
-                className="text-xs text-indigo-400 hover:text-indigo-300 font-bold bg-[#13151f] border border-neutral-800 px-4 py-2 rounded-xl transition hover:border-neutral-700"
+          {/* Comment List */}
+          <div className="space-y-2">
+            {comments.map((comm) => (
+              <div
+                key={comm.id}
+                className="p-3 bg-[#13151f] border border-neutral-800/60 rounded-xl space-y-1"
               >
-                Load more comments ({comments.length - visibleCommentCount} remaining) ↓
-              </button>
-            </div>
-          )}
+                <div className="flex items-center justify-between text-[11px] text-neutral-400">
+                  <span className="font-semibold text-neutral-300">{comm.user_email}</span>
+                  <span>{new Date(comm.created_at).toLocaleDateString()}</span>
+                </div>
+                <p className="text-xs text-neutral-200">{comm.comment}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
       <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} />
-    </main>
+    </div>
   );
 }
