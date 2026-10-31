@@ -254,7 +254,7 @@ async function scrapeMangaPill(targetUrl, title) {
           }
         }
       } catch {}
-      await delay(200);
+      await delay(150);
     }
   }
 
@@ -292,7 +292,7 @@ async function scrapeMangaPill(targetUrl, title) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. MANGADEX SCRAPER (AUTO-PAGINATED TO END)
+// 5. MANGADEX SCRAPER (ALL RATINGS & AUTO-PAGINATED TO END)
 // ---------------------------------------------------------------------------
 async function scrapeMangaDex(targetUrl, title) {
   let mangaId = targetUrl?.match(/title\/([a-f0-9-]{36})/)?.[1];
@@ -300,7 +300,7 @@ async function scrapeMangaDex(targetUrl, title) {
   if (!mangaId) {
     try {
       const res = await fetch(
-        `https://api.mangadex.org/manga?title=${encodeURIComponent(cleanTitle(title))}&limit=1&contentRating[]=safe&contentRating[]=suggestive`,
+        `https://api.mangadex.org/manga?title=${encodeURIComponent(cleanTitle(title))}&limit=1&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica`,
         { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(8000) }
       );
       if (res.ok) {
@@ -320,12 +320,13 @@ async function scrapeMangaDex(targetUrl, title) {
 
     while (offset < total) {
       const feedRes = await fetch(
-        `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=${limit}&offset=${offset}&contentRating[]=safe&contentRating[]=suggestive`,
-        { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(8000) }
+        `https://api.mangadex.org/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=desc&limit=${limit}&offset=${offset}&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica&includeExternalUrl=0`,
+        { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(9000) }
       );
 
       if (feedRes.status === 429) {
-        await delay(2000);
+        console.log(`   [MangaDex Rate Limit] Backing off 2.5s on offset ${offset}...`);
+        await delay(2500);
         continue;
       }
       if (!feedRes.ok) break;
@@ -451,14 +452,14 @@ async function resolveAndStitchSeries(series) {
     await supabase.from('series').update({ status: aniMeta.status }).eq('id', series.id);
   }
 
-  const [wcRes, cmRes, mpRes, mdRes] = await Promise.all([
+  const [mdRes, wcRes, cmRes, mpRes] = await Promise.all([
+    scrapeMangaDex(targetUrl, title),
     scrapeWeebCentral(title),
     scrapeComick(title),
-    scrapeMangaPill(targetUrl, title),
-    scrapeMangaDex(targetUrl, title)
+    scrapeMangaPill(targetUrl, title)
   ]);
 
-  const candidates = [wcRes, cmRes, mpRes, mdRes].filter((c) => c && c.chapters && c.chapters.length > 0);
+  const candidates = [mdRes, wcRes, cmRes, mpRes].filter((c) => c && c.chapters && c.chapters.length > 0);
 
   if (candidates.length === 0) {
     console.log(`  [FAILED] No chapters found on any provider for "${title}".`);
@@ -475,8 +476,8 @@ async function resolveAndStitchSeries(series) {
   }
 
   const providerPriority = manhwaFlag
-    ? ['weebcentral', 'comick', 'mangapill', 'mangadex']
-    : ['mangapill', 'mangadex', 'weebcentral', 'comick'];
+    ? ['mangadex', 'weebcentral', 'comick', 'mangapill']
+    : ['mangadex', 'mangapill', 'weebcentral', 'comick'];
 
   candidates.sort((a, b) => providerPriority.indexOf(a.platform) - providerPriority.indexOf(b.platform));
 
@@ -502,16 +503,13 @@ async function resolveAndStitchSeries(series) {
   const primaryPlatform = candidates[0].platform;
   const primaryUrl = candidates[0].resolvedUrl || targetUrl || '';
 
-  // Batch upsert chapters
   const CHUNK = 200;
   for (let i = 0; i < payload.length; i += CHUNK) {
     const { error: upsertErr } = await supabase
       .from('chapters')
       .upsert(payload.slice(i, i + CHUNK), { onConflict: 'series_id,chapter_number' });
 
-    if (upsertErr) {
-      console.warn(`  [Upsert Warn]: ${upsertErr.message}`);
-    }
+    if (upsertErr) console.warn(`  [Upsert Error]: ${upsertErr.message}`);
   }
 
   const now = Date.now();
@@ -524,8 +522,7 @@ async function resolveAndStitchSeries(series) {
 
   let nextInterval = ONE_DAY * 2;
   if (isActuallyComplete) {
-    const isRecent = intel.completed_at && now - new Date(intel.completed_at).getTime() < 90 * ONE_DAY;
-    nextInterval = isRecent ? ONE_DAY * 7 : ONE_DAY * 30;
+    nextInterval = ONE_DAY * 14;
   } else if (currentStatus === 'Completed') {
     nextInterval = ONE_DAY * 1;
   } else if (currentStatus === 'Hiatus') {
@@ -589,7 +586,7 @@ async function main() {
 
   const nowIso = new Date().toISOString();
 
-  // Filter series due for a scout or missing intel entirely
+  // Find series due for scout or needing setup
   const dueSeries = queue.filter((s) => {
     const intel = Array.isArray(s.series_intel) ? s.series_intel[0] : s.series_intel;
     return !intel || !intel.next_scout_at || intel.next_scout_at <= nowIso;
@@ -617,7 +614,7 @@ async function main() {
     } catch (seriesErr) {
       console.error(`[ERROR] Failed to process "${s.title}":`, seriesErr.message);
     }
-    await delay(600); // 600ms grace pause to avoid downstream IP bans
+    await delay(600);
   }
 
   console.log('--- AUDITOR SWEEP BATCH COMPLETE ---');
