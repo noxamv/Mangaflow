@@ -14,7 +14,6 @@ interface UserProfile {
   user_metadata?: {
     avatar_url?: string | null;
     display_name?: string;
-    full_name?: string;
   };
 }
 
@@ -35,24 +34,21 @@ export default function RootLayout({
   const pathname = usePathname();
   const router = useRouter();
 
-  // Navigation & UI States
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [menuDropdownOpen, setMenuDropdownOpen] = useState(false);
+
+  // MangaFire-Style Inline Search States
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  // MangaFire-Style Notification States
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifTab, setNotifTab] = useState<'all' | 'unread' | 'read'>('all');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
-  // PWA Prompt State
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [showInstallBanner, setShowInstallBanner] = useState(false);
-
-  // References
   const menuDropdownRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -61,7 +57,6 @@ export default function RootLayout({
 
   const isReadingPage = pathname?.startsWith('/read/');
 
-  // Auth Listener
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser((session?.user as UserProfile) || null);
@@ -76,7 +71,6 @@ export default function RootLayout({
     return () => subscription.unsubscribe();
   }, []);
 
-  // Notifications Realtime Subscription
   useEffect(() => {
     if (!user) return;
 
@@ -86,154 +80,66 @@ export default function RootLayout({
         .select('*')
         .eq('user_id', user!.id)
         .order('created_at', { ascending: false })
-        .limit(20);
+        .limit(10);
 
       if (data) setNotifications(data);
     }
 
     fetchNotifications();
-
-    const channel = supabase
-      .channel('notifications_realtime')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload) => {
-          setNotifications((prev) => [payload.new as NotificationItem, ...prev]);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
   }, [user]);
 
-  // PWA Install Event Handler
-  useEffect(() => {
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      const dismissed = localStorage.getItem('mangaflow_pwa_dismissed');
-      if (!dismissed) {
-        setShowInstallBanner(true);
-      }
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-  }, []);
-
-  const handleInstallPwa = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setShowInstallBanner(false);
-      setDeferredPrompt(null);
-    }
-  };
-
-  const dismissInstallBanner = () => {
-    setShowInstallBanner(false);
-    localStorage.setItem('mangaflow_pwa_dismissed', 'true');
-  };
-
-  // Click Outside to Dismiss Overlays
+  // Click Outside to Dismiss
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (
-        menuDropdownRef.current &&
-        !menuDropdownRef.current.contains(event.target as Node)
-      ) {
+      if (menuDropdownRef.current && !menuDropdownRef.current.contains(event.target as Node)) {
         setMenuDropdownOpen(false);
       }
-      if (
-        userMenuRef.current &&
-        !userMenuRef.current.contains(event.target as Node)
-      ) {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
         setUserMenuOpen(false);
       }
-      if (
-        notifRef.current &&
-        !notifRef.current.contains(event.target as Node)
-      ) {
+      if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
         setNotifOpen(false);
       }
-      if (
-        searchOpen &&
-        searchContainerRef.current &&
-        !searchContainerRef.current.contains(event.target as Node)
-      ) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) {
         setSearchOpen(false);
       }
     }
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [searchOpen]);
+  }, []);
 
-  // Live Instant Search Logic
+  // Fast Live Search Query
   useEffect(() => {
-    if (!searchQuery.trim()) {
+    const q = searchQuery.trim();
+    if (!q) {
       setSearchResults([]);
       setIsSearching(false);
       return;
     }
 
+    setIsSearching(true);
     const timer = setTimeout(async () => {
-      setIsSearching(true);
       const { data } = await supabase
         .from('series')
-        .select('id, title, slug, cover_url, reading_mode')
-        .ilike('title', `%${searchQuery.trim()}%`)
+        .select('id, title, slug, cover_url, cover_image_url, reading_mode')
+        .ilike('title', `%${q}%`)
         .limit(6);
 
       setSearchResults(data || []);
       setIsSearching(false);
-    }, 200);
+    }, 180);
 
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
   useEffect(() => {
     if (searchOpen) {
-      searchInputRef.current?.focus();
+      setTimeout(() => searchInputRef.current?.focus(), 50);
     }
   }, [searchOpen]);
 
-  // Keyboard Shortcuts (⌘K / Ctrl+K and ESC)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setSearchOpen((prev) => !prev);
-      }
-      if (e.key === 'Escape') {
-        setSearchOpen(false);
-        setMenuDropdownOpen(false);
-        setUserMenuOpen(false);
-        setNotifOpen(false);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
-
   const unreadCount = notifications.filter((n) => !n.read).length;
-
-  const handleMarkAsRead = async (id: string) => {
-    await supabase.from('notifications').update({ read: true }).eq('id', id);
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
-  };
 
   const handleMarkAllAsRead = async () => {
     if (!user) return;
@@ -241,65 +147,27 @@ export default function RootLayout({
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
 
-  const filteredNotifications = notifications.filter((n) => {
-    if (notifTab === 'unread') return !n.read;
-    if (notifTab === 'read') return n.read;
-    return true;
-  });
-
   return (
     <html lang="en" className="dark scroll-smooth overflow-x-hidden">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-        <title>MangaFlow - High Performance Comic Reader</title>
-        <meta name="description" content="Read trending and popular manga, manhwa, and manhua with instant high-speed chapters." />
+        <title>MangaFlow - Read Free Manga Online</title>
         <meta name="referrer" content="no-referrer" />
         <link rel="manifest" href="/manifest.json" />
         <meta name="theme-color" content="#0e1015" />
-        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </head>
 
       <body className="bg-[#0e1015] text-neutral-200 antialiased min-h-screen w-full max-w-full overflow-x-hidden flex flex-col selection:bg-indigo-500/20 selection:text-indigo-300">
-        
-        {/* PWA Install Banner */}
-        {showInstallBanner && !isReadingPage && (
-          <div className="bg-gradient-to-r from-indigo-950 via-purple-950 to-neutral-900 border-b border-indigo-500/20 px-4 py-2.5 flex items-center justify-between text-xs sticky top-0 z-[60] backdrop-blur-md">
-            <div className="flex items-center gap-3">
-              <span className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">📱</span>
-              <p className="font-medium text-neutral-200">
-                Install <strong className="text-white">MangaFlow</strong> app for full-screen reading.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleInstallPwa}
-                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-[11px] transition shadow-md shadow-indigo-600/30"
-              >
-                Install
-              </button>
-              <button
-                onClick={dismissInstallBanner}
-                className="p-1 text-neutral-400 hover:text-white transition rounded-md"
-                aria-label="Dismiss banner"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* TOP NAVIGATION BAR */}
         {!isReadingPage && (
-          <header className="sticky top-0 z-50 bg-[#0e1015]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 lg:px-8 py-3 transition-colors">
-            <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-              
-              {/* Left Side: Mobile Drawer Toggle & MangaFlow Brand */}
-              <div className="flex items-center gap-2 sm:gap-4">
+          <header className="sticky top-0 z-50 bg-[#0e1015]/98 backdrop-blur-md border-b border-neutral-800/80 transition-colors">
+            <div className="max-w-7xl mx-auto px-4 lg:px-8 py-2.5 flex items-center justify-between gap-4">
+              {/* Left Side: Mobile Menu & Logo */}
+              <div className="flex items-center gap-3">
                 <div ref={menuDropdownRef} className="relative md:hidden">
                   <button
                     onClick={() => setMenuDropdownOpen(!menuDropdownOpen)}
-                    className="p-1.5 rounded-lg hover:bg-neutral-800/80 text-neutral-400 hover:text-white transition"
+                    className="p-1.5 rounded-lg text-neutral-300 hover:text-white transition"
                     aria-label="Navigation Menu"
                   >
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -307,12 +175,9 @@ export default function RootLayout({
                     </svg>
                   </button>
 
-                  {/* Improved Drawer Menu with Sub-Categories */}
+                  {/* Clean Drawer Menu */}
                   {menuDropdownOpen && (
-                    <div className="absolute left-0 mt-2 w-56 bg-[#13151f] border border-neutral-800 rounded-2xl p-2 shadow-2xl z-50 text-xs font-semibold space-y-1">
-                      <span className="px-3 py-1 text-[10px] uppercase font-bold text-neutral-500 block">
-                        Navigation
-                      </span>
+                    <div className="absolute left-0 mt-2 w-52 bg-[#13151f] border border-neutral-800 rounded-2xl p-2 shadow-2xl z-50 text-xs font-semibold space-y-1">
                       <Link
                         href="/"
                         onClick={() => setMenuDropdownOpen(false)}
@@ -325,14 +190,14 @@ export default function RootLayout({
                         onClick={() => setMenuDropdownOpen(false)}
                         className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                       >
-                        <span>🔥</span> Trending Series
+                        <span>🔥</span> Trending
                       </Link>
                       <Link
                         href="/popular"
                         onClick={() => setMenuDropdownOpen(false)}
                         className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                       >
-                        <span>⭐</span> Popular Series
+                        <span>⭐</span> Popular
                       </Link>
                       <Link
                         href="/latest"
@@ -341,55 +206,36 @@ export default function RootLayout({
                       >
                         <span>⚡</span> Latest Releases
                       </Link>
-                      <div className="h-px bg-neutral-800/80 my-1" />
-                      <span className="px-3 py-1 text-[10px] uppercase font-bold text-neutral-500 block">
-                        Browse & Filters
-                      </span>
+                      <div className="h-px bg-neutral-800 my-1" />
                       <Link
                         href="/filter"
                         onClick={() => setMenuDropdownOpen(false)}
                         className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                       >
-                        <span>🔍</span> Full Filter & Genres
-                      </Link>
-                      <Link
-                        href="/category/manhwa"
-                        onClick={() => setMenuDropdownOpen(false)}
-                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
-                      >
-                        <span>🇰🇷</span> Manhwa Shelf
-                      </Link>
-                      <Link
-                        href="/category/manga"
-                        onClick={() => setMenuDropdownOpen(false)}
-                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
-                      >
-                        <span>🇯🇵</span> Manga Shelf
+                        <span>🔍</span> Browse All Comics
                       </Link>
                     </div>
                   )}
                 </div>
 
-                {/* Brand Name */}
-                <Link href="/" className="flex items-center gap-2 group">
-                  <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-white via-neutral-100 to-neutral-400 bg-clip-text text-transparent group-hover:text-white transition-colors">
+                <Link href="/" className="flex items-center gap-1.5 group">
+                  <span className="font-extrabold text-xl tracking-tight text-white group-hover:text-indigo-400 transition-colors">
                     MangaFlow
                   </span>
                 </Link>
 
-                {/* Desktop Global Links */}
                 <nav className="hidden md:flex items-center gap-1 ml-4 text-xs font-semibold text-neutral-400">
                   <Link href="/" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
                     Home
                   </Link>
-                  <Link href="/latest" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
-                    Latest
+                  <Link href="/trending" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
+                    Trending
                   </Link>
                   <Link href="/popular" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
                     Popular
                   </Link>
-                  <Link href="/trending" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
-                    Trending
+                  <Link href="/latest" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
+                    Latest
                   </Link>
                   <Link href="/filter" className="px-3 py-1.5 rounded-lg hover:text-white hover:bg-neutral-800/60 transition">
                     Browse
@@ -397,30 +243,28 @@ export default function RootLayout({
                 </nav>
               </div>
 
-              {/* Right Side: Search, Notifications, User Menu */}
-              <div className="flex items-center gap-2">
-                
-                {/* Search Trigger */}
+              {/* Right Side Controls */}
+              <div className="flex items-center gap-1.5 sm:gap-2">
                 <button
                   onClick={() => setSearchOpen(!searchOpen)}
-                  className={`p-2 rounded-xl border border-neutral-800/80 transition flex items-center justify-center ${
-                    searchOpen ? 'bg-indigo-600 text-white' : 'text-neutral-300 hover:text-white hover:bg-neutral-800/80'
+                  className={`p-2 rounded-xl transition ${
+                    searchOpen ? 'bg-indigo-600 text-white' : 'text-neutral-400 hover:text-white hover:bg-neutral-800/80'
                   }`}
-                  aria-label="Toggle Search"
+                  aria-label="Search"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                   </svg>
                 </button>
 
-                {/* Notifications Drawer */}
+                {/* Notifications Dropdown (MangaFire Style) */}
                 <div ref={notifRef} className="relative">
                   <button
                     onClick={() => setNotifOpen(!notifOpen)}
-                    className="p-2 rounded-xl border border-neutral-800/80 text-neutral-300 hover:text-white hover:bg-neutral-800/80 transition relative flex items-center justify-center"
+                    className="p-2 rounded-xl text-neutral-400 hover:text-white hover:bg-neutral-800/80 transition relative"
                     aria-label="Notifications"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
@@ -429,99 +273,58 @@ export default function RootLayout({
                       />
                     </svg>
                     {unreadCount > 0 && (
-                      <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-indigo-600 text-white text-[9px] font-bold flex items-center justify-center shadow-md shadow-indigo-600/40">
-                        {unreadCount > 9 ? '9+' : unreadCount}
-                      </span>
+                      <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-indigo-500 shadow-md shadow-indigo-500/50" />
                     )}
                   </button>
 
                   {notifOpen && (
-                    <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden text-xs">
-                      <div className="p-3 border-b border-neutral-800 flex items-center justify-between">
-                        <span className="font-bold text-white">Notifications</span>
+                    <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl z-50 overflow-hidden text-xs animate-in fade-in duration-150">
+                      <div className="p-3.5 border-b border-neutral-800 flex items-center justify-between">
+                        <span className="font-bold text-white text-sm">Notifications</span>
                         <button
                           onClick={handleMarkAllAsRead}
-                          className="text-[10px] text-indigo-400 hover:underline font-semibold"
+                          className="text-xs text-sky-400 hover:underline flex items-center gap-1 font-semibold"
                         >
-                          Mark all read
+                          <span>✓</span> Mark as read
                         </button>
                       </div>
 
-                      {/* Filter Tabs */}
-                      <div className="flex border-b border-neutral-800 bg-neutral-900/40 text-[11px]">
-                        <button
-                          onClick={() => setNotifTab('all')}
-                          className={`flex-1 py-1.5 font-bold text-center border-b-2 transition ${
-                            notifTab === 'all'
-                              ? 'border-indigo-500 text-white'
-                              : 'border-transparent text-neutral-400 hover:text-neutral-200'
-                          }`}
-                        >
-                          All
-                        </button>
-                        <button
-                          onClick={() => setNotifTab('unread')}
-                          className={`flex-1 py-1.5 font-bold text-center border-b-2 transition ${
-                            notifTab === 'unread'
-                              ? 'border-indigo-500 text-white'
-                              : 'border-transparent text-neutral-400 hover:text-neutral-200'
-                          }`}
-                        >
-                          Unread ({unreadCount})
-                        </button>
-                        <button
-                          onClick={() => setNotifTab('read')}
-                          className={`flex-1 py-1.5 font-bold text-center border-b-2 transition ${
-                            notifTab === 'read'
-                              ? 'border-indigo-500 text-white'
-                              : 'border-transparent text-neutral-400 hover:text-neutral-200'
-                          }`}
-                        >
-                          Read
-                        </button>
-                      </div>
-
-                      <div className="max-h-80 overflow-y-auto divide-y divide-neutral-800/40">
-                        {filteredNotifications.length === 0 ? (
+                      <div className="max-h-72 overflow-y-auto divide-y divide-neutral-800/50">
+                        {notifications.length === 0 ? (
                           <div className="py-8 text-center text-neutral-500 text-xs">
-                            No notifications in this view
+                            You're all caught up.
                           </div>
                         ) : (
-                          filteredNotifications.map((n) => (
-                            <div
+                          notifications.map((n) => (
+                            <Link
                               key={n.id}
-                              onClick={() => handleMarkAsRead(n.id)}
-                              className={`p-3 hover:bg-neutral-800/40 transition cursor-pointer flex flex-col gap-1 ${
+                              href={n.chapter_id ? `/read/${n.chapter_id}` : '/notifications'}
+                              onClick={() => setNotifOpen(false)}
+                              className={`p-3 flex items-start gap-3 hover:bg-neutral-800/40 transition block ${
                                 !n.read ? 'bg-indigo-950/20' : ''
                               }`}
                             >
-                              <div className="flex items-center justify-between">
-                                <span className="font-bold text-neutral-200">{n.title}</span>
-                                <span className="text-[10px] text-neutral-500">
-                                  {new Date(n.created_at).toLocaleTimeString([], {
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                  })}
-                                </span>
+                              <div className="flex-1 min-w-0 space-y-0.5">
+                                <p className="font-bold text-white truncate text-xs">{n.title}</p>
+                                <p className="text-[11px] text-neutral-400 line-clamp-1">{n.message}</p>
                               </div>
-                              <p className="text-[11px] text-neutral-400">{n.message}</p>
-                              {n.chapter_id && (
-                                <Link
-                                  href={`/read/${n.chapter_id}`}
-                                  className="text-[10px] font-bold text-indigo-400 hover:underline mt-1 inline-block"
-                                >
-                                  Open Chapter →
-                                </Link>
-                              )}
-                            </div>
+                            </Link>
                           ))
                         )}
                       </div>
+
+                      <Link
+                        href="/notifications"
+                        onClick={() => setNotifOpen(false)}
+                        className="block w-full py-2.5 text-center text-xs font-bold text-sky-400 hover:bg-neutral-800/60 border-t border-neutral-800 transition"
+                      >
+                        View all notifications
+                      </Link>
                     </div>
                   )}
                 </div>
 
-                {/* User Profile Menu */}
+                {/* User Menu */}
                 {user ? (
                   <div ref={userMenuRef} className="relative">
                     <button
@@ -529,58 +332,31 @@ export default function RootLayout({
                       className="w-8 h-8 rounded-xl bg-neutral-800 border border-neutral-700/80 flex items-center justify-center font-bold text-xs text-white overflow-hidden shadow-sm"
                       aria-label="User Account Menu"
                     >
-                      {user.user_metadata?.avatar_url ? (
-                        <img
-                          src={user.user_metadata.avatar_url}
-                          alt="Profile Avatar"
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        user.email?.[0]?.toUpperCase() || 'U'
-                      )}
+                      {user.email?.[0]?.toUpperCase() || 'U'}
                     </button>
 
-                    {/* Expanded User Sub-Categories */}
                     {userMenuOpen && (
-                      <div className="absolute right-0 mt-2 w-52 bg-[#13151f] border border-neutral-800 rounded-2xl p-1.5 shadow-2xl z-50 text-xs font-semibold space-y-0.5">
-                        <div className="px-3 py-2 border-b border-neutral-800/80 mb-1">
-                          <p className="text-[10px] text-neutral-400">Signed in as</p>
-                          <p className="font-bold text-white truncate">{user.email}</p>
-                        </div>
-                        <Link
-                          href="/profile/edit"
-                          onClick={() => setUserMenuOpen(false)}
-                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
-                        >
-                          <span>👤</span> Profile Details
-                        </Link>
+                      <div className="absolute right-0 mt-2 w-48 bg-[#13151f] border border-neutral-800 rounded-2xl p-1.5 shadow-2xl z-50 text-xs font-semibold space-y-0.5">
                         <Link
                           href="/profile/following"
                           onClick={() => setUserMenuOpen(false)}
-                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          <span>📚</span> My Library & Bookmarks
+                          My Library
                         </Link>
                         <Link
                           href="/profile/sync"
                           onClick={() => setUserMenuOpen(false)}
-                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          <span>🔄</span> Sync AniList / MAL
-                        </Link>
-                        <Link
-                          href="/profile/import-export"
-                          onClick={() => setUserMenuOpen(false)}
-                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
-                        >
-                          <span>💾</span> Backup & Export
+                          Sync AniList / MAL
                         </Link>
                         <Link
                           href="/settings"
                           onClick={() => setUserMenuOpen(false)}
-                          className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
+                          className="block px-3 py-2 rounded-xl hover:bg-neutral-800/80 text-neutral-300 hover:text-white transition"
                         >
-                          <span>⚙️</span> Reader Settings
+                          Settings
                         </Link>
                         <div className="h-px bg-neutral-800 my-1" />
                         <button
@@ -589,9 +365,9 @@ export default function RootLayout({
                             setUserMenuOpen(false);
                             router.push('/');
                           }}
-                          className="w-full text-left flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-red-500/10 text-red-400 hover:text-red-300 transition"
+                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-500/10 text-red-400 hover:text-red-300 transition"
                         >
-                          <span>🚪</span> Sign Out
+                          Sign Out
                         </button>
                       </div>
                     )}
@@ -606,92 +382,80 @@ export default function RootLayout({
                 )}
               </div>
             </div>
+
+            {/* MangaFire-Style Inline Dropdown Search Bar */}
+            {searchOpen && (
+              <div
+                ref={searchContainerRef}
+                className="border-t border-neutral-800/80 bg-[#10121a] px-4 py-2.5 animate-in slide-in-from-top-2 duration-150 relative"
+              >
+                <div className="max-w-2xl mx-auto relative">
+                  <div className="flex items-center gap-2 bg-[#181a24] border border-neutral-700/80 rounded-xl px-3 py-2 focus-within:border-indigo-500 transition">
+                    <span className="text-neutral-400 text-sm">🔍</span>
+                    <input
+                      ref={searchInputRef}
+                      type="text"
+                      placeholder="Search titles..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-transparent text-white text-xs sm:text-sm focus:outline-none placeholder-neutral-500"
+                    />
+                    {searchQuery && (
+                      <button
+                        onClick={() => setSearchQuery('')}
+                        className="text-neutral-400 hover:text-white text-xs px-1"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  {searchQuery.trim() && (
+                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-[#141620] border border-neutral-800 rounded-xl shadow-2xl z-50 overflow-hidden text-xs max-h-80 overflow-y-auto">
+                      <div className="px-3 py-1.5 bg-neutral-900/60 text-[10px] font-black uppercase tracking-wider text-neutral-400 border-b border-neutral-800">
+                        RESULTS
+                      </div>
+
+                      {isSearching ? (
+                        <div className="py-6 text-center text-xs text-neutral-500 animate-pulse">
+                          Searching...
+                        </div>
+                      ) : searchResults.length > 0 ? (
+                        searchResults.map((item) => (
+                          <Link
+                            key={item.id}
+                            href={`/series/${item.slug}`}
+                            onClick={() => setSearchOpen(false)}
+                            className="p-2.5 flex items-center gap-3 hover:bg-neutral-800/60 border-b border-neutral-800/40 transition group"
+                          >
+                            <div className="w-9 h-12 rounded-lg bg-neutral-900 overflow-hidden shrink-0 border border-neutral-800">
+                              <img
+                                src={item.cover_url || item.cover_image_url}
+                                alt={item.title}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1 space-y-0.5">
+                              <p className="text-xs font-bold text-white group-hover:text-indigo-400 transition truncate">
+                                {item.title}
+                              </p>
+                              <p className="text-[10px] text-neutral-400 uppercase font-semibold">
+                                {item.reading_mode === 'webtoon' ? 'manhwa' : 'manga'}
+                              </p>
+                            </div>
+                          </Link>
+                        ))
+                      ) : (
+                        <div className="py-6 text-center text-xs text-neutral-500">
+                          No results found.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </header>
-        )}
-
-        {/* Global Floating Search Modal with Live Results */}
-        {searchOpen && (
-          <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-20 px-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
-            <div
-              ref={searchContainerRef}
-              className="w-full max-w-xl bg-[#13151f] border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
-            >
-              <div className="p-3 border-b border-neutral-800 flex items-center gap-3">
-                <span className="text-neutral-400 pl-1">🔍</span>
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  placeholder="Search series by title or author..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-transparent text-white text-sm focus:outline-none placeholder-neutral-500"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="text-xs text-neutral-400 hover:text-white px-2 py-1"
-                  >
-                    Clear
-                  </button>
-                )}
-                <button
-                  onClick={() => setSearchOpen(false)}
-                  className="text-neutral-400 hover:text-white text-xs px-2 py-1 rounded-lg bg-neutral-800"
-                >
-                  ESC
-                </button>
-              </div>
-
-              {/* Instant Search Results */}
-              <div className="max-h-96 overflow-y-auto p-2 divide-y divide-neutral-800/40">
-                {isSearching ? (
-                  <div className="py-8 text-center text-xs text-neutral-400 flex items-center justify-center gap-2">
-                    <div className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                    Searching catalogue...
-                  </div>
-                ) : searchResults.length > 0 ? (
-                  searchResults.map((res) => (
-                    <Link
-                      key={res.id}
-                      href={`/series/${res.slug}`}
-                      onClick={() => setSearchOpen(false)}
-                      className="flex items-center gap-3 p-2 rounded-xl hover:bg-neutral-800/50 transition group"
-                    >
-                      <div className="w-10 h-14 rounded-lg bg-neutral-900 border border-neutral-800 overflow-hidden shrink-0">
-                        {res.cover_url ? (
-                          <img
-                            src={res.cover_url}
-                            alt={res.title}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-[8px] text-neutral-600">
-                            Cover
-                          </div>
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-white group-hover:text-indigo-400 transition truncate">
-                          {res.title}
-                        </p>
-                        <span className="text-[10px] text-neutral-400 uppercase font-black">
-                          {res.reading_mode === 'webtoon' ? 'Manhwa' : 'Manga'}
-                        </span>
-                      </div>
-                    </Link>
-                  ))
-                ) : searchQuery.trim() ? (
-                  <div className="py-8 text-center text-xs text-neutral-500">
-                    No series matching "{searchQuery}"
-                  </div>
-                ) : (
-                  <div className="py-6 text-center text-xs text-neutral-500">
-                    Type a title above to search across the catalog.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
         )}
 
         <main className="flex-1 w-full max-w-full">{children}</main>
