@@ -78,7 +78,7 @@ function SafeImage({
   );
 }
 
-// 1. SPOTLIGHT BAR: Category Pinned Directly to Top-Left, 4-5 Lines Synopsis, Touch-Friendly Dots
+// 1. SPOTLIGHT BAR: Category & Rating Pinned Directly Top-Left, 4-5 Lines Synopsis, Direct Card Link
 function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   const [index, setIndex] = useState(0);
   const spotlightItems = items.slice(0, 7);
@@ -98,19 +98,16 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
 
   return (
     <div className="relative w-full h-[220px] sm:h-[250px] rounded-2xl overflow-hidden border border-neutral-800/80 bg-neutral-950 shadow-2xl flex flex-col justify-between">
-      {/* Blurred cover backdrop */}
       <div
         className="absolute inset-0 bg-cover bg-center filter blur-xl scale-110 opacity-25 transition-all duration-700 pointer-events-none"
         style={{ backgroundImage: `url(${coverUrl})` }}
       />
       <div className="absolute inset-0 bg-gradient-to-t sm:bg-gradient-to-r from-[#0a0b0e] via-[#0a0b0e]/95 to-transparent z-10 pointer-events-none" />
 
-      {/* Whole Banner Clickable Link */}
       <Link
         href={`/series/${current.slug}`}
         className="relative z-20 w-full h-full p-4 sm:p-5 flex justify-between items-center gap-3.5 group select-none"
       >
-        {/* Left Side: Category Pinned Top-Left + Expanded Multi-Line Synopsis */}
         <div className="flex flex-col justify-between h-full flex-1 min-w-0 pr-1">
           {/* Top-Left Pinned Badges */}
           <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
@@ -126,7 +123,7 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
             )}
           </div>
 
-          {/* Middle Title & Multi-Line Synopsis (4 to 5 Lines) */}
+          {/* Title & 4-5 Lines Synopsis */}
           <div className="my-auto py-1 space-y-1">
             <h2 className="text-base sm:text-xl font-black text-white line-clamp-1 sm:line-clamp-2 tracking-tight group-hover:text-indigo-400 transition-colors leading-snug">
               {displayTitle}
@@ -136,17 +133,14 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
             </p>
           </div>
 
-          {/* Bottom Spacer to prevent overlap with dots */}
           <div className="h-2 shrink-0" />
         </div>
 
-        {/* Right: Cover Art Poster */}
         <div className="shrink-0 w-24 sm:w-32 aspect-[3/4.2] rounded-xl overflow-hidden border border-white/15 shadow-2xl bg-neutral-900 self-center">
           <SafeImage src={coverUrl} alt={displayTitle} className="w-full h-full object-cover" />
         </div>
       </Link>
 
-      {/* Balanced Navigation Dots (Easy to tap on mobile) */}
       <div className="relative z-30 pb-2 flex items-center justify-center gap-1">
         {spotlightItems.map((_, i) => (
           <button
@@ -174,33 +168,28 @@ function SpotlightSlider({ items }: { items: SeriesItem[] }) {
   );
 }
 
-// 2. MANGAFIRE-STYLE SHARE BAR: Clean "SHARE · 352.2K" Counter + Background-Blended Buttons
+// 2. REAL-TIME MANGAFLOW SHARE BAR
 function ShareBar() {
   const [copied, setCopied] = useState(false);
-  const [shareCount, setShareCount] = useState(352200);
+  const [shareCount, setShareCount] = useState(0);
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem('mangaflow_share_count');
-      if (stored) {
-        setShareCount(parseInt(stored, 10));
-      } else {
-        localStorage.setItem('mangaflow_share_count', '352200');
-      }
+      const stored = localStorage.getItem('mangaflow_real_share_count');
+      setShareCount(stored ? parseInt(stored, 10) : 0);
     } catch {}
   }, []);
 
-  const incrementShares = () => {
+  const handleShareClick = () => {
     setShareCount((prev) => {
       const next = prev + 1;
       try {
-        localStorage.setItem('mangaflow_share_count', next.toString());
+        localStorage.setItem('mangaflow_real_share_count', next.toString());
       } catch {}
       return next;
     });
   };
 
-  const formattedCount = (shareCount / 1000).toFixed(1) + 'K';
   const siteUrl = typeof window !== 'undefined' ? window.location.origin : 'https://mangaflow-psi.vercel.app';
   const shareText = 'Read trending manga and manhwa free on MangaFlow!';
 
@@ -208,28 +197,25 @@ function ShareBar() {
     if (typeof window !== 'undefined') {
       navigator.clipboard.writeText(siteUrl);
       setCopied(true);
-      incrementShares();
+      handleShareClick();
       setTimeout(() => setCopied(false), 2000);
     }
   };
 
   return (
     <div className="space-y-2 py-1">
-      {/* MangaFire-Style Small Tracking Header */}
       <div className="text-[10px] font-black uppercase tracking-widest text-neutral-500 flex items-center gap-1.5">
         <span>SHARE</span>
         <span>·</span>
-        <span className="text-neutral-400 font-bold">{formattedCount}</span>
+        <span className="text-neutral-300 font-bold">{shareCount.toLocaleString()}</span>
       </div>
 
-      {/* Button Row Blended Cleanly Into Homepage */}
       <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-        {/* Facebook */}
         <a
           href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(siteUrl)}`}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={incrementShares}
+          onClick={handleShareClick}
           className="w-8 h-8 rounded-lg bg-[#14161f] hover:bg-[#1a1d29] border border-neutral-800/80 text-neutral-300 hover:text-[#1877F2] flex items-center justify-center transition shadow-sm"
           aria-label="Share on Facebook"
         >
@@ -238,12 +224,11 @@ function ShareBar() {
           </svg>
         </a>
 
-        {/* Twitter / X */}
         <a
           href={`https://x.com/intent/post?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(siteUrl)}`}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={incrementShares}
+          onClick={handleShareClick}
           className="w-8 h-8 rounded-lg bg-[#14161f] hover:bg-[#1a1d29] border border-neutral-800/80 text-neutral-300 hover:text-white flex items-center justify-center transition shadow-sm"
           aria-label="Share on X"
         >
@@ -252,12 +237,11 @@ function ShareBar() {
           </svg>
         </a>
 
-        {/* Instagram */}
         <a
           href="https://www.instagram.com/"
           target="_blank"
           rel="noopener noreferrer"
-          onClick={incrementShares}
+          onClick={handleShareClick}
           className="w-8 h-8 rounded-lg bg-[#14161f] hover:bg-[#1a1d29] border border-neutral-800/80 text-neutral-300 hover:text-[#E4405F] flex items-center justify-center transition shadow-sm"
           aria-label="Share on Instagram"
         >
@@ -266,12 +250,11 @@ function ShareBar() {
           </svg>
         </a>
 
-        {/* WhatsApp */}
         <a
           href={`https://wa.me/?text=${encodeURIComponent(`${shareText} ${siteUrl}`)}`}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={incrementShares}
+          onClick={handleShareClick}
           className="w-8 h-8 rounded-lg bg-[#14161f] hover:bg-[#1a1d29] border border-neutral-800/80 text-neutral-300 hover:text-[#25D366] flex items-center justify-center transition shadow-sm"
           aria-label="Share on WhatsApp"
         >
@@ -280,12 +263,11 @@ function ShareBar() {
           </svg>
         </a>
 
-        {/* Reddit */}
         <a
           href={`https://reddit.com/submit?url=${encodeURIComponent(siteUrl)}&title=${encodeURIComponent(shareText)}`}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={incrementShares}
+          onClick={handleShareClick}
           className="w-8 h-8 rounded-lg bg-[#14161f] hover:bg-[#1a1d29] border border-neutral-800/80 text-neutral-300 hover:text-[#FF4500] flex items-center justify-center transition shadow-sm"
           aria-label="Share on Reddit"
         >
@@ -294,12 +276,11 @@ function ShareBar() {
           </svg>
         </a>
 
-        {/* Telegram */}
         <a
           href={`https://t.me/share/url?url=${encodeURIComponent(siteUrl)}&text=${encodeURIComponent(shareText)}`}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={incrementShares}
+          onClick={handleShareClick}
           className="w-8 h-8 rounded-lg bg-[#14161f] hover:bg-[#1a1d29] border border-neutral-800/80 text-neutral-300 hover:text-[#0088cc] flex items-center justify-center transition shadow-sm"
           aria-label="Share on Telegram"
         >
@@ -308,7 +289,6 @@ function ShareBar() {
           </svg>
         </a>
 
-        {/* Copy Link */}
         <button
           onClick={copyUrl}
           className="w-8 h-8 rounded-lg bg-[#14161f] hover:bg-[#1a1d29] border border-neutral-800/80 text-neutral-300 hover:text-white flex items-center justify-center transition shadow-sm text-xs"
@@ -371,7 +351,7 @@ export default function HomePage() {
         console.error('Data loading error:', err);
       }
 
-      // Check Local Device Reading History First
+      // 1. Device Local Reading History (0ms latency, zero database overhead)
       const localHist = getAllLocalHistory();
       const localItems = Object.values(localHist);
 
@@ -395,7 +375,7 @@ export default function HomePage() {
         return;
       }
 
-      // Fallback: Supabase Authenticated Reading History
+      // 2. Supabase Fallback for logged-in accounts
       try {
         const {
           data: { session },
@@ -454,7 +434,6 @@ export default function HomePage() {
 
     return (
       <section className="space-y-3">
-        {/* Prominent Section Titles */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <span className={`w-1.5 h-4 sm:h-5 rounded-full ${color}`} />
@@ -470,7 +449,6 @@ export default function HomePage() {
           </Link>
         </div>
 
-        {/* Scrollable Card Ladder */}
         <div className="flex gap-2.5 sm:gap-3 overflow-x-auto pb-2 scrollbar-none w-full max-w-full">
           {items.map((item) => {
             const cover = resolveCoverUrl(item);
@@ -489,14 +467,12 @@ export default function HomePage() {
                       className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                     />
 
-                    {/* Format Badge */}
                     {item.reading_mode && (
                       <span className="absolute top-1.5 left-1.5 text-[8px] font-black uppercase px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-sm text-neutral-200 border border-white/10">
                         {item.reading_mode === 'webtoon' ? 'MANHWA' : 'MANGA'}
                       </span>
                     )}
 
-                    {/* MangaFire-Style Bookmark Quick Action Trigger */}
                     <button
                       type="button"
                       onClick={(e) => openActionMenu(e, item)}
@@ -534,10 +510,10 @@ export default function HomePage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 lg:px-8 py-4 space-y-6">
-      {/* 1. Spotlight Slider (Badges Pinned Top-Left & Expanded Synopsis) */}
+      {/* 1. Spotlight Slider */}
       <SpotlightSlider items={trendingList} />
 
-      {/* 2. MangaFire-Style Share Bar (Live "SHARE · 352.2K" Counter + Clean Blended Icons) */}
+      {/* 2. Real-Time Share Bar */}
       <ShareBar />
 
       {/* 3. Continue Reading */}
@@ -605,7 +581,6 @@ export default function HomePage() {
         href="/filter"
       />
 
-      {/* Universal Action Modal */}
       <SeriesActionModal
         series={selectedSeries}
         isOpen={actionModalOpen}
