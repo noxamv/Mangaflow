@@ -1,9 +1,11 @@
 // scripts/normalize-titles.js
 import { createClient } from '@supabase/supabase-js';
-import WebSocket from 'ws';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('[FATAL] Missing Supabase credentials.');
@@ -12,7 +14,6 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: { persistSession: false },
-  realtime: { transport: WebSocket }
 });
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -37,7 +38,6 @@ function extractSearchCandidates(rawTitle) {
   const candidates = new Set();
 
   for (const line of lines) {
-    // 1. Raw line without extra whitespace
     const cleanedLine = line
       .replace(/["“”'']/g, '')
       .replace(/@comic/gi, '')
@@ -48,13 +48,11 @@ function extractSearchCandidates(rawTitle) {
     if (cleanedLine.length > 1) {
       candidates.add(cleanedLine);
 
-      // 2. Subtitle split by colon, dash, or pipe
       const mainSegment = cleanedLine.split(/[:\-\|]/)[0].trim();
       if (mainSegment.length > 2 && mainSegment !== cleanedLine) {
         candidates.add(mainSegment);
       }
 
-      // 3. Strip parentheses content
       const noParens = cleanedLine.replace(/\(.*?\)|\[.*?\]/g, '').trim();
       if (noParens.length > 2) {
         candidates.add(noParens);
@@ -82,8 +80,8 @@ async function fetchAniListMetadata(candidates) {
     try {
       const res = await fetch('https://graphql.anilist.co', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ query, variables: { search: term } })
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ query, variables: { search: term } }),
       });
 
       if (res.status === 429) {
@@ -98,7 +96,7 @@ async function fetchAniListMetadata(candidates) {
         return {
           coverUrl: media.coverImage?.extraLarge || media.coverImage?.large || null,
           description: media.description ? media.description.replace(/<[^>]*>?/gm, '').trim() : null,
-          status: media.status === 'FINISHED' ? 'Completed' : 'Ongoing'
+          status: media.status === 'FINISHED' ? 'Completed' : 'Ongoing',
         };
       }
     } catch {
@@ -129,9 +127,9 @@ async function fetchMangaDexMetadata(candidates) {
 
       const mangaId = manga.id;
       const attributes = manga.attributes || {};
-      const description = attributes.description?.en || Object.values(attributes.description || {})[0] || null;
+      const description =
+        attributes.description?.en || Object.values(attributes.description || {})[0] || null;
 
-      // Extract cover relationship
       let coverUrl = null;
       const coverRel = manga.relationships?.find((r) => r.type === 'cover_art');
       if (coverRel && coverRel.attributes?.fileName) {
@@ -142,7 +140,7 @@ async function fetchMangaDexMetadata(candidates) {
         return {
           coverUrl,
           description: description ? description.replace(/<[^>]*>?/gm, '').trim() : null,
-          status: attributes.status === 'completed' ? 'Completed' : 'Ongoing'
+          status: attributes.status === 'completed' ? 'Completed' : 'Ongoing',
         };
       }
     } catch {
@@ -173,33 +171,48 @@ async function runNormalizationAndRecovery() {
     let needsUpdate = false;
     const updatePayload = {};
 
-    // 1. Normalize Title format and Slugs
+    // 1. Safe Slug Normalization (Prevents series_slug_key unique violation crashes)
     const expectedSlug = generateSlug(s.title);
-    if (s.slug !== expectedSlug) {
-      updatePayload.slug = expectedSlug;
-      needsUpdate = true;
+    if (expectedSlug && s.slug !== expectedSlug) {
+      const { data: existingSlug } = await supabase
+        .from('series')
+        .select('id')
+        .eq('slug', expectedSlug)
+        .neq('id', s.id)
+        .maybeSingle();
+
+      if (!existingSlug) {
+        updatePayload.slug = expectedSlug;
+        needsUpdate = true;
+      }
     }
 
-    // 2. Identify missing metadata
+    // 2. Identify missing metadata & damaged covers
     const activeCover = s.cover_image_url || s.cover_url || '';
-    const hasMissingCover = !activeCover || activeCover.trim() === '' || activeCover.includes('MISSING') || activeCover.includes('placeholder');
+    const hasMissingCover =
+      !activeCover ||
+      activeCover.trim() === '' ||
+      activeCover.includes('MISSING') ||
+      activeCover.includes('placeholder') ||
+      activeCover.includes('undefined');
+
     const hasMissingBio = !s.description || s.description.trim() === '';
 
     if (hasMissingCover || hasMissingBio) {
       const candidates = extractSearchCandidates(s.title);
-      console.log(`[RECOVERING] "${candidates[0]}" (IDs to test: ${candidates.length})`);
+      console.log(`[RECOVERING] "${candidates[0] || s.title}" (Testing ${candidates.length} candidates)`);
 
       // Attempt AniList first
       let meta = await fetchAniListMetadata(candidates);
 
-      // Attempt MangaDex fallback if AniList did not provide all needed fields
+      // Attempt MangaDex fallback if AniList did not supply needed fields
       if (!meta || (hasMissingCover && !meta.coverUrl) || (hasMissingBio && !meta.description)) {
         const mdMeta = await fetchMangaDexMetadata(candidates);
         if (mdMeta) {
           meta = {
             coverUrl: meta?.coverUrl || mdMeta.coverUrl,
             description: meta?.description || mdMeta.description,
-            status: meta?.status || mdMeta.status
+            status: meta?.status || mdMeta.status,
           };
         }
       }
