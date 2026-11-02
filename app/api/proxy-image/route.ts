@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const targetUrl = searchParams.get('url');
+  const explicitRef = searchParams.get('ref');
 
   if (!targetUrl) {
     return new Response('Target URL is required', { status: 400 });
@@ -13,18 +14,25 @@ export async function GET(request: Request) {
     const parsedTarget = new URL(targetUrl);
     const host = parsedTarget.hostname.toLowerCase();
 
-    // Map exact Referer based on the upstream mirror CDN
-    let referer = '';
-    if (host.includes('mpcdn.top') || host.includes('mangapill.com')) {
-      referer = 'https://mangapill.com/';
-    } else if (host.includes('mangadex.org') || host.includes('uploads.mangadex.org')) {
-      referer = 'https://mangadex.org/';
-    } else if (host.includes('weebcentral.com')) {
-      referer = 'https://weebcentral.com/';
-    } else if (host.includes('comick.io') || host.includes('comick.fun')) {
-      referer = 'https://comick.io/';
-    } else if (host.includes('manganato') || host.includes('chapmanganato')) {
-      referer = 'https://chapmanganato.to/';
+    // Prioritize explicit ref from chapter route, otherwise fall back to host matching
+    let referer = explicitRef || '';
+
+    if (!referer) {
+      if (host.includes('mpcdn.top') || host.includes('mangapill.com')) {
+        referer = 'https://mangapill.com/';
+      } else if (host.includes('mangadex.org') || host.includes('uploads.mangadex.org')) {
+        referer = 'https://mangadex.org/';
+      } else if (host.includes('weebcentral.com')) {
+        referer = 'https://weebcentral.com/';
+      } else if (host.includes('comick.io') || host.includes('comick.fun')) {
+        referer = 'https://comick.io/';
+      } else if (host.includes('manganato') || host.includes('chapmanganato')) {
+        referer = 'https://chapmanganato.to/';
+      }
+    }
+
+    if (referer && !referer.endsWith('/')) {
+      referer += '/';
     }
 
     const headers: Record<string, string> = {
@@ -46,8 +54,8 @@ export async function GET(request: Request) {
       signal: AbortSignal.timeout(12000),
     });
 
-    // Fallback: If strict referer failed, retry with neutral headers
     if (!upstreamRes.ok) {
+      // Retry with neutral headers if strict referer failed
       delete headers['Referer'];
       upstreamRes = await fetch(targetUrl, {
         headers,
@@ -69,7 +77,6 @@ export async function GET(request: Request) {
       headers: {
         'Content-Type': contentType,
         'Content-Length': buffer.byteLength.toString(),
-        // Cache images at edge for 30 days
         'Cache-Control': 'public, max-age=2592000, s-maxage=2592000, stale-while-revalidate=86400',
         'Access-Control-Allow-Origin': '*',
       },
