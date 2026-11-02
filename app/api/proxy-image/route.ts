@@ -1,5 +1,5 @@
 // app/api/proxy-image/route.ts
-export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -11,11 +11,10 @@ export async function GET(request: Request) {
 
   try {
     const parsedTarget = new URL(targetUrl);
-    
-    // Set the exact upstream Referer header required to bypass CDN hotlink protections
-    let referer = '';
     const host = parsedTarget.hostname.toLowerCase();
 
+    // Map exact Referer based on the upstream mirror CDN
+    let referer = '';
     if (host.includes('mpcdn.top') || host.includes('mangapill.com')) {
       referer = 'https://mangapill.com/';
     } else if (host.includes('mangadex.org') || host.includes('uploads.mangadex.org')) {
@@ -28,49 +27,49 @@ export async function GET(request: Request) {
       referer = 'https://chapmanganato.to/';
     }
 
-    const upstreamRes = await fetch(targetUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-        ...(referer ? { Referer: referer } : {}),
-        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-      },
+    const headers: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+      Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Sec-Fetch-Dest': 'image',
+      'Sec-Fetch-Mode': 'no-cors',
+      'Sec-Fetch-Site': 'cross-site',
+    };
+
+    if (referer) {
+      headers['Referer'] = referer;
+    }
+
+    let upstreamRes = await fetch(targetUrl, {
+      headers,
+      signal: AbortSignal.timeout(12000),
     });
 
+    // Fallback: If strict referer failed, retry with neutral headers
     if (!upstreamRes.ok) {
-      // Fallback: If strict referer failed, attempt direct fetch with neutral headers
-      const retryRes = await fetch(targetUrl, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-          Accept: 'image/avif,image/webp,image/*,*/*;q=0.8',
-        },
+      delete headers['Referer'];
+      upstreamRes = await fetch(targetUrl, {
+        headers,
+        signal: AbortSignal.timeout(12000),
       });
+    }
 
-      if (!retryRes.ok) {
-        return new Response(`Upstream mirror error: ${retryRes.status}`, {
-          status: retryRes.status,
-        });
-      }
-
-      const contentType = retryRes.headers.get('content-type') || 'image/jpeg';
-      return new Response(retryRes.body, {
-        status: 200,
-        headers: {
-          'Content-Type': contentType,
-          'Cache-Control': 'public, max-age=2592000, s-maxage=2592000, stale-while-revalidate=86400',
-          'Access-Control-Allow-Origin': '*',
-        },
+    if (!upstreamRes.ok) {
+      return new Response(`Upstream mirror error: ${upstreamRes.status}`, {
+        status: upstreamRes.status,
       });
     }
 
     const contentType = upstreamRes.headers.get('content-type') || 'image/jpeg';
+    const buffer = await upstreamRes.arrayBuffer();
 
-    return new Response(upstreamRes.body, {
+    return new Response(buffer, {
       status: 200,
       headers: {
         'Content-Type': contentType,
-        // Global edge caching: 30 days
+        'Content-Length': buffer.byteLength.toString(),
+        // Cache images at edge for 30 days
         'Cache-Control': 'public, max-age=2592000, s-maxage=2592000, stale-while-revalidate=86400',
         'Access-Control-Allow-Origin': '*',
       },
