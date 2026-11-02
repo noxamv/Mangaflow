@@ -319,29 +319,49 @@ export default function ReaderPage() {
 
       {/* Main Reading Canvas (Tap toggles header visibility) */}
       <main
-        className="flex-1 pt-14 pb-16 flex flex-col items-center justify-center cursor-pointer"
+        className="flex-1 pt-14 pb-16 flex flex-col items-center justify-center cursor-pointer min-h-screen"
         onClick={() => setHeaderVisible((prev) => !prev)}
       >
         {readingMode === 'webtoon' ? (
-          <div className="w-full max-w-3xl flex flex-col items-center">
+          <div className="w-full max-w-3xl flex flex-col items-center space-y-1">
             {chapter.pages.map((url, idx) => (
-              <img
-                key={idx}
-                src={url}
-                alt={`Page ${idx + 1}`}
-                referrerPolicy="no-referrer"
-                loading={idx < 3 ? 'eager' : 'lazy'}
-                className="w-full h-auto block select-none pointer-events-none"
-              />
+              <div key={idx} className="w-full relative min-h-[300px] flex items-center justify-center bg-neutral-950">
+                <img
+                  src={url}
+                  alt={`Page ${idx + 1}`}
+                  referrerPolicy="no-referrer"
+                  loading={idx < 4 ? 'eager' : 'lazy'}
+                  className="w-full h-auto block select-none"
+                  onError={(e) => {
+                    // Fallback to direct raw image URL if the proxy endpoint returns an error
+                    const target = e.currentTarget;
+                    if (target.src.includes('/api/proxy-image?url=')) {
+                      const rawUrl = decodeURIComponent(target.src.split('/api/proxy-image?url=')[1]);
+                      if (rawUrl && target.src !== rawUrl) {
+                        target.src = rawUrl;
+                      }
+                    }
+                  }}
+                />
+              </div>
             ))}
           </div>
         ) : (
-          <div className="w-full max-w-4xl flex items-center justify-center min-h-[80vh]">
+          <div className="w-full max-w-4xl flex items-center justify-center min-h-[85vh] bg-neutral-950">
             <img
               src={chapter.pages[currentPage]}
               alt={`Page ${currentPage + 1}`}
               referrerPolicy="no-referrer"
               className="max-h-[85vh] w-auto object-contain select-none shadow-2xl"
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (target.src.includes('/api/proxy-image?url=')) {
+                  const rawUrl = decodeURIComponent(target.src.split('/api/proxy-image?url=')[1]);
+                  if (rawUrl && target.src !== rawUrl) {
+                    target.src = rawUrl;
+                  }
+                }
+              }}
             />
           </div>
         )}
