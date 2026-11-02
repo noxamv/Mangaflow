@@ -120,7 +120,7 @@ export default function ReaderPage() {
         setPrevChapter(data.prevChapter);
         setNextChapter(data.nextChapter);
 
-        // 1. Instant Client-Side Local Storage Save (Always works, even for guests)
+        // 1. Instant Client-Side Local Storage Save
         if (data.series_id) {
           saveLocalProgress({
             seriesId: data.series_id,
@@ -329,6 +329,7 @@ export default function ReaderPage() {
                 key={idx}
                 src={url}
                 alt={`Page ${idx + 1}`}
+                referrerPolicy="no-referrer"
                 loading={idx < 3 ? 'eager' : 'lazy'}
                 className="w-full h-auto block select-none pointer-events-none"
               />
@@ -339,6 +340,7 @@ export default function ReaderPage() {
             <img
               src={chapter.pages[currentPage]}
               alt={`Page ${currentPage + 1}`}
+              referrerPolicy="no-referrer"
               className="max-h-[85vh] w-auto object-contain select-none shadow-2xl"
             />
           </div>
