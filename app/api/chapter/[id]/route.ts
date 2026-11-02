@@ -20,7 +20,6 @@ const HEADERS = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 
-// 1. Resolve MangaDex Direct Images via Official At-Home API
 async function resolveMangaDexImages(chapterUuid: string): Promise<string[]> {
   try {
     const cleanId = chapterUuid.replace('mangadex:', '').trim();
@@ -41,7 +40,6 @@ async function resolveMangaDexImages(chapterUuid: string): Promise<string[]> {
   }
 }
 
-// 2. Resolve Comick Direct Images via Public API
 async function resolveComickImages(hid: string): Promise<string[]> {
   try {
     const cleanHid = hid.replace('comick:', '').trim();
@@ -61,7 +59,6 @@ async function resolveComickImages(hid: string): Promise<string[]> {
   }
 }
 
-// 3. Resolve MangaPill, WeebCentral, and generic mirrors by parsing chapter HTML
 async function scrapeDirectImagesFromWebpage(pageUrl: string): Promise<string[]> {
   try {
     let referer = '';
@@ -77,7 +74,6 @@ async function scrapeDirectImagesFromWebpage(pageUrl: string): Promise<string[]>
     const $ = cheerio.load(html);
     const imageUrls: string[] = [];
 
-    // Check custom chapter image containers across standard manga mirrors
     $('picture img, div.container img, div.space-y-3 img, #chapter-container img, img').each((_, el) => {
       const src =
         $(el).attr('data-src') ||
@@ -110,10 +106,9 @@ async function scrapeDirectImagesFromWebpage(pageUrl: string): Promise<string[]>
 function isDirectImage(url: string): boolean {
   if (!url) return false;
   const testUrl = url.includes('/api/proxy-image?url=')
-    ? decodeURIComponent(url.split('/api/proxy-image?url=')[1])
+    ? decodeURIComponent(url.split('/api/proxy-image?url=')[1].split('&')[0])
     : url;
 
-  // Webpage reader links are NOT direct images
   if (
     testUrl.includes('mangadex.org/chapter/') ||
     testUrl.includes('mangapill.com/chapters/') ||
@@ -139,7 +134,6 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   }
 
   try {
-    // 1. Fetch chapter record from Supabase
     const { data: chapter, error: chError } = await supabase
       .from('chapters')
       .select('*')
@@ -160,28 +154,34 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     }
 
     let resolvedImages: string[] = [];
+    let detectedOrigin = '';
 
-    // Check if pages are already verified direct image URLs
+    const upstreamRef =
+      chapter.external_id ||
+      chapter.source_id ||
+      (rawPages.length > 0 ? rawPages[0] : '');
+
+    if (upstreamRef.startsWith('http')) {
+      try {
+        detectedOrigin = new URL(upstreamRef).origin;
+      } catch {}
+    }
+
     if (rawPages.length > 0 && isDirectImage(rawPages[0])) {
       resolvedImages = rawPages;
     } else {
-      // 2. Identify the upstream identifier (from external_id, source_id, or first page URL)
-      const upstreamRef =
-        chapter.external_id ||
-        chapter.source_id ||
-        (rawPages.length > 0 ? rawPages[0] : '');
-
       if (upstreamRef.includes('mangadex:') || upstreamRef.includes('mangadex.org/chapter/')) {
         const uuid = upstreamRef.replace('mangadex:', '').match(/([a-f0-9-]{36})/)?.[1] || upstreamRef.replace('mangadex:', '').trim();
         resolvedImages = await resolveMangaDexImages(uuid);
+        detectedOrigin = 'https://mangadex.org';
       } else if (upstreamRef.includes('comick:') || upstreamRef.includes('comick.io/chapter/')) {
         const hid = upstreamRef.replace('comick:', '').trim();
         resolvedImages = await resolveComickImages(hid);
+        detectedOrigin = 'https://comick.io';
       } else if (upstreamRef.startsWith('http://') || upstreamRef.startsWith('https://')) {
         resolvedImages = await scrapeDirectImagesFromWebpage(upstreamRef);
       }
 
-      // If resolved, asynchronously cache real direct images back to Supabase
       if (resolvedImages.length > 0) {
         supabase
           .from('chapters')
@@ -191,7 +191,6 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       }
     }
 
-    // 3. Fallback: If still empty, return graceful 404
     if (!resolvedImages || resolvedImages.length === 0) {
       return NextResponse.json(
         { error: 'Chapter images are currently unavailable from upstream providers.' },
@@ -199,14 +198,13 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       );
     }
 
-    // Wrap with edge proxy
-    const finalPages = resolvedImages.map((img) =>
-      img.startsWith('/api/proxy-image') || img.startsWith('data:')
-        ? img
-        : `/api/proxy-image?url=${encodeURIComponent(img)}`
-    );
+    // Pass the exact upstream origin as `&ref=` so the proxy never gets 403 Forbidden
+    const finalPages = resolvedImages.map((img) => {
+      if (img.startsWith('/api/proxy-image') || img.startsWith('data:')) return img;
+      const refParam = detectedOrigin ? `&ref=${encodeURIComponent(detectedOrigin)}` : '';
+      return `/api/proxy-image?url=${encodeURIComponent(img)}${refParam}`;
+    });
 
-    // 4. Fetch Series Metadata & Adjacent Chapters for Reader Navigation
     const [seriesRes, allChaptersRes] = await Promise.all([
       supabase
         .from('series')
